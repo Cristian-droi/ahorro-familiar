@@ -1,0 +1,166 @@
+@import "tailwindcss";
+
+/* ──────────────────────────────────────────────────────────────────
+   Design tokens — Rediseño Abril 2026
+   Fuente única de verdad: verde bosque + neutros cálidos.
+   Dos modos: claro (default) y oscuro (clase .dark en <html>).
+   ────────────────────────────────────────────────────────────────── */
+
+/*
+  Tailwind v4 usa por defecto `@media (prefers-color-scheme: dark)` para el
+  variant `dark:`. Nosotros hacemos toggle por clase (`.dark` en <html>,
+  persistida en localStorage), así que redefinimos el variant para que se
+  alinee con las variables CSS que también dependen de `.dark`. Sin esto,
+  si el SO del usuario está en modo oscuro y la app en modo claro, las
+  variables CSS se quedan en claro pero Tailwind aplica overrides `dark:`,
+  rompiendo contrastes (ej: botones con texto verde sobre fondo verde).
+*/
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  /* Tipografía */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Colores nuevos — valores por defecto (tema claro). Se sobrescriben en .dark */
+  --color-bg:              #F7F8F5;
+  --color-surface:         #FFFFFF;
+  --color-surface-alt:     #F0F2ED;
+  --color-surface-sunken:  #ECEEE8;
+  --color-border:          #E3E6DE;
+  --color-border-strong:   #D1D5C9;
+  --color-text:            #121511;
+  --color-text-muted:      #5B6257;
+  --color-text-subtle:     #878E82;
+
+  --color-brand:           #0A6B3B;
+  --color-brand-soft:      #E6F1EA;
+  --color-brand-ink:       #053F22;
+
+  --color-success:         #0A6B3B;
+  --color-success-soft:    #E6F1EA;
+  --color-warn:            #8A5A00;
+  --color-warn-soft:       #FBF0D9;
+  --color-danger:          #A8201A;
+  --color-danger-soft:     #FBEAE7;
+  --color-info:            #1F5BA8;
+  --color-info-soft:       #E6ECF5;
+
+  /* Ring de foco (color-mix equivalente al del diseño original) */
+  --color-ring:            rgba(10, 107, 59, 0.18);
+
+  /* Aliases de compatibilidad con el codigo actual (se irán retirando) */
+  --color-primary:                      var(--color-brand);
+  --color-on-surface:                   var(--color-text);
+  --color-on-surface-variant:           var(--color-text-muted);
+  --color-outline:                      var(--color-text-subtle);
+  --color-outline-variant:              var(--color-border);
+  --color-surface-lowest:               var(--color-surface);
+  --color-surface-low:                  var(--color-surface-alt);
+  --color-surface-variant:              var(--color-surface-sunken);
+  --color-primary-container:            var(--color-brand-soft);
+  --color-on-primary-container:         var(--color-brand);
+  --color-on-primary-fixed:             var(--color-brand-ink);
+  --color-secondary-container:          var(--color-brand-soft);
+  --color-on-secondary-container:       var(--color-brand);
+  --color-surface-container-low:        var(--color-surface-alt);
+  --color-surface-container-lowest:     var(--color-surface);
+  --color-error:                        var(--color-danger);
+  --color-error-container:              var(--color-danger-soft);
+  --color-on-error-container:           var(--color-danger);
+  --color-tertiary:                     var(--color-info);
+  --color-tertiary-container:           var(--color-info-soft);
+  --color-on-tertiary-container:        var(--color-info);
+}
+
+/* Tema oscuro: activado por la clase .dark sobre <html> (persistida en localStorage) */
+.dark {
+  --color-bg:              #0B0F0C;
+  --color-surface:         #141A16;
+  --color-surface-alt:     #1B2320;
+  --color-surface-sunken:  #0F1411;
+  --color-border:          #232B27;
+  --color-border-strong:   #2F3833;
+  --color-text:            #EFF2ED;
+  --color-text-muted:      #9AA39B;
+  --color-text-subtle:     #6E766F;
+
+  --color-brand:           #4ADE80;
+  --color-brand-soft:      #15291E;
+  --color-brand-ink:       #E6F9EC;
+
+  --color-success:         #4ADE80;
+  --color-success-soft:    #15291E;
+  --color-warn:            #F5C15B;
+  --color-warn-soft:       #2A2112;
+  --color-danger:          #F27C72;
+  --color-danger-soft:     #2A1614;
+  --color-info:            #7AA7E5;
+  --color-info-soft:       #161F2B;
+
+  --color-ring:            rgba(74, 222, 128, 0.22);
+}
+
+@layer base {
+  html, body {
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11", "ss01", "ss03";
+  }
+  body {
+    background-color: var(--color-bg);
+    color: var(--color-text);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Tabular numbers para balances y tablas financieras */
+  .tabular,
+  table td,
+  table th {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer utilities {
+  /* Sombras del nuevo sistema */
+  .shadow-sm-soft {
+    box-shadow: 0 1px 2px rgba(18, 21, 17, 0.04), 0 1px 3px rgba(18, 21, 17, 0.03);
+  }
+  .shadow-md-soft {
+    box-shadow: 0 1px 2px rgba(18, 21, 17, 0.04), 0 8px 24px rgba(18, 21, 17, 0.06);
+  }
+  .shadow-lg-soft {
+    box-shadow: 0 2px 4px rgba(18, 21, 17, 0.04), 0 24px 48px rgba(18, 21, 17, 0.08);
+  }
+  .dark .shadow-sm-soft {
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  }
+  .dark .shadow-md-soft {
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
+  }
+  .dark .shadow-lg-soft {
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5), 0 24px 48px rgba(0, 0, 0, 0.45);
+  }
+
+  /* Alias para el código legacy */
+  .shadow-ambient {
+    box-shadow: 0 1px 2px rgba(18, 21, 17, 0.04), 0 8px 24px rgba(18, 21, 17, 0.06);
+  }
+  .dark .shadow-ambient {
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
+  }
+
+  .glass-nav {
+    background-color: color-mix(in oklab, var(--color-bg) 80%, transparent);
+    backdrop-filter: blur(20px);
+  }
+
+  .gradient-brand {
+    background: linear-gradient(135deg, var(--color-brand) 0%, color-mix(in oklab, var(--color-brand) 80%, black) 100%);
+  }
+
+  /* Ring de foco compartido */
+  .ring-brand {
+    --tw-ring-color: color-mix(in oklab, var(--color-brand) 22%, transparent);
+  }
+}
