@@ -78,3 +78,75 @@ export interface Receipt {
 export interface ReceiptWithItems extends Receipt {
   items: ReceiptItem[];
 }
+
+// ============================================================
+// Loans
+// ============================================================
+
+export type LoanStatus =
+  | 'draft'
+  | 'pending_review'
+  | 'pending_shareholder_vote'
+  | 'pending_disbursement'
+  | 'active'
+  | 'paid'
+  | 'rejected_by_admin'
+  | 'rejected_by_shareholders';
+
+export type LoanVoteValue = 'approved' | 'rejected';
+
+export type PlanReviewStatus = 'approved' | 'rejected';
+
+export interface Loan {
+  id: string;
+  user_id: string;
+  requested_amount: number;
+  interest_rate: number;
+  loan_shares_count: number;
+  loan_shares_amount: number;
+  loan_shares_paid_upfront: boolean;
+  four_per_thousand: number;
+  disbursed_amount: number | null;
+  disbursed_at: string | null;
+  outstanding_balance: number;
+  last_interest_payment_date: string | null;
+  status: LoanStatus;
+  payment_plan_months: number | null;
+  plan_status: PlanReviewStatus | null;
+  plan_rejection_reason: string | null;
+  admin_notes: string | null;
+  rejection_reason: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LoanPaymentPlanItem {
+  id: string;
+  loan_id: string;
+  month_number: number;
+  due_date: string;
+  capital_amount: number;
+  estimated_interest: number;
+  estimated_balance_after: number;
+  created_at: string;
+}
+
+export interface LoanVote {
+  id: string;
+  loan_id: string;
+  voter_id: string;
+  vote: LoanVoteValue;
+  comment: string | null;
+  voted_at: string;
+  created_at: string;
+}
+
+export interface LoanWithDetails extends Loan {
+  payment_plan: LoanPaymentPlanItem[];
+  votes: LoanVote[];
+  borrower: Pick<Profile, 'id' | 'first_name' | 'last_name' | 'identity_document' | 'selected_share_value'> | null;
+  total_active_shareholders: number;
+  approved_votes: number;
+  rejected_votes: number;
+  has_upfront_shares_receipt: boolean;
+}

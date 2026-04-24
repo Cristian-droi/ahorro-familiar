@@ -18,6 +18,7 @@ import {
   Receipt,
   BookOpen,
   ClipboardList,
+  Landmark,
 } from 'lucide-react';
 import { ToastContainer } from '@/components/ui/Toast';
 import { TopNav } from '@/components/ui/TopNav';
@@ -106,6 +107,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       badge: pendingCount > 0 ? pendingCount : undefined,
     },
     { key: 'miembros', label: 'Accionistas', href: '/dashboard/miembros', icon: Users },
+    { key: 'prestamos', label: 'Préstamos', href: '/dashboard/admin/prestamos', icon: Landmark },
     { key: 'libro', label: 'Libro de caja', href: '/dashboard/libro-caja', icon: BookOpen },
     { key: 'ajustes', label: 'Ajustes', href: '/dashboard/ajustes', icon: Settings },
   ];
@@ -113,6 +115,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const accionistaNav: NavItem[] = [
     { key: 'home', label: 'Mi capital', href: '/dashboard/accionista', icon: Wallet },
     { key: 'compras', label: 'Comprar', href: '/dashboard/compras', icon: ShoppingCart },
+    { key: 'prestamos', label: 'Préstamos', href: '/dashboard/prestamos', icon: Landmark },
     { key: 'historial', label: 'Historial', href: '/dashboard/historial', icon: Receipt },
     { key: 'extracto', label: 'Extracto', href: '/dashboard/extracto', icon: ClipboardList },
     { key: 'ajustes', label: 'Ajustes', href: '/dashboard/ajustes', icon: Settings },
