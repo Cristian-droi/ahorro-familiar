@@ -8,10 +8,11 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { showToast } from '@/components/ui/Toast';
-import { ThumbsUp, ThumbsDown, ChevronRight, CheckCircle2 } from 'lucide-react';
-import { getLoansForVoting } from '@/lib/data/loans';
+import { ThumbsUp, ThumbsDown, ChevronRight, CheckCircle2, Clock } from 'lucide-react';
+import { getLoansForVoting, getMyVotingHistory, type VoteHistoryItem } from '@/lib/data/loans';
 import type { Loan } from '@/types/entities';
 import { cop } from '@/lib/format';
+import { LOAN_STATUS_LABELS, LOAN_STATUS_TONE } from '@/lib/loans';
 
 type VotingLoan = Loan & { has_voted: boolean; borrower_name: string };
 
@@ -19,13 +20,18 @@ export default function VotarPage() {
   const router = useRouter();
   const [userId, setUserId] = useState<string | null>(null);
   const [loans, setLoans] = useState<VotingLoan[]>([]);
+  const [history, setHistory] = useState<VoteHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [voting, setVoting] = useState<Record<string, 'approved' | 'rejected' | null>>({});
   const [submitting, setSubmitting] = useState<string | null>(null);
 
   const reload = async (uid: string) => {
-    const data = await getLoansForVoting(supabase, uid);
+    const [data, hist] = await Promise.all([
+      getLoansForVoting(supabase, uid),
+      getMyVotingHistory(supabase, uid),
+    ]);
     setLoans(data);
+    setHistory(hist);
   };
 
   useEffect(() => {
@@ -68,7 +74,11 @@ export default function VotarPage() {
   }
 
   const pendingToVote = loans.filter((l) => !l.has_voted && l.user_id !== userId);
-  const alreadyVoted = loans.filter((l) => l.has_voted || l.user_id === userId);
+  const alreadyVoted = loans.filter((l) => (l.has_voted || l.user_id === userId));
+
+  // Filtrar del historial los préstamos que ya están en la lista activa
+  const activeIds = new Set(loans.map((l) => l.id));
+  const closedHistory = history.filter((h) => !activeIds.has(h.loan.id));
 
   return (
     <div className="flex flex-col gap-7 animate-in fade-in duration-300">
@@ -86,7 +96,7 @@ export default function VotarPage() {
         </Link>
       </header>
 
-      {pendingToVote.length === 0 && alreadyVoted.length === 0 && (
+      {pendingToVote.length === 0 && alreadyVoted.length === 0 && closedHistory.length === 0 && (
         <Card padding="lg" className="text-center">
           <div className="text-[var(--color-text-muted)] text-sm">
             No hay préstamos en votación en este momento.
@@ -96,9 +106,7 @@ export default function VotarPage() {
 
       {pendingToVote.length > 0 && (
         <div className="flex flex-col gap-4">
-          <div className="text-[11px] font-semibold text-[var(--color-text-subtle)] tracking-[0.12em] uppercase px-1">
-            Esperando tu voto
-          </div>
+          <SectionLabel>Esperando tu voto</SectionLabel>
           {pendingToVote.map((loan) => (
             <VotingCard
               key={loan.id}
@@ -117,30 +125,99 @@ export default function VotarPage() {
 
       {alreadyVoted.length > 0 && (
         <div className="flex flex-col gap-3">
-          <div className="text-[11px] font-semibold text-[var(--color-text-subtle)] tracking-[0.12em] uppercase px-1">
-            Ya votados
-          </div>
+          <SectionLabel>En curso — ya votados</SectionLabel>
           {alreadyVoted.map((loan) => (
-            <div
-              key={loan.id}
-              className="flex items-center gap-4 px-5 py-4 rounded-[12px] border border-[var(--color-border)] bg-[var(--color-surface-alt)]/50"
-            >
-              <CheckCircle2 size={18} strokeWidth={1.75} className="text-[var(--color-success)] shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="text-[13px] font-semibold">
-                  {loan.borrower_name} — {cop(Number(loan.requested_amount))}
-                </div>
-                <div className="text-[11px] text-[var(--color-text-subtle)] mt-0.5">
-                  {loan.payment_plan_months} meses
-                </div>
-              </div>
-              <Link href={`/dashboard/prestamos/${loan.id}`}>
-                <ChevronRight size={16} strokeWidth={1.75} className="text-[var(--color-text-subtle)]" />
-              </Link>
-            </div>
+            <ActiveVotedRow key={loan.id} loan={loan} userId={userId} />
           ))}
         </div>
       )}
+
+      {closedHistory.length > 0 && (
+        <div className="flex flex-col gap-3">
+          <SectionLabel>Historial de votaciones</SectionLabel>
+          {closedHistory.map((item) => (
+            <HistoryRow key={item.vote.id} item={item} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="text-[11px] font-semibold text-[var(--color-text-subtle)] tracking-[0.12em] uppercase px-1">
+      {children}
+    </div>
+  );
+}
+
+function ActiveVotedRow({ loan, userId }: { loan: VotingLoan; userId: string | null }) {
+  const isOwn = loan.user_id === userId;
+  return (
+    <div className="flex items-center gap-4 px-5 py-4 rounded-[12px] border border-[var(--color-border)] bg-[var(--color-surface-alt)]/50">
+      <CheckCircle2 size={18} strokeWidth={1.75} className="text-[var(--color-success)] shrink-0" />
+      <div className="flex-1 min-w-0">
+        <div className="text-[13px] font-semibold">
+          {loan.borrower_name} — {cop(Number(loan.requested_amount))}
+        </div>
+        <div className="text-[11px] text-[var(--color-text-subtle)] mt-0.5">
+          {loan.payment_plan_months} meses · {isOwn ? 'Tu préstamo' : 'Ya votaste'}
+        </div>
+      </div>
+      <Link href={`/dashboard/prestamos/${loan.id}`}>
+        <ChevronRight size={16} strokeWidth={1.75} className="text-[var(--color-text-subtle)]" />
+      </Link>
+    </div>
+  );
+}
+
+function HistoryRow({ item }: { item: VoteHistoryItem }) {
+  const { loan, vote } = item;
+  const statusTone = LOAN_STATUS_TONE[loan.status] as Parameters<typeof Badge>[0]['tone'];
+  const votedFor = vote.vote === 'approved';
+
+  const outcomeSettled = ['active', 'paid', 'rejected_by_shareholders', 'rejected_by_admin'].includes(loan.status);
+
+  return (
+    <div className="flex items-center gap-4 px-5 py-4 rounded-[12px] border border-[var(--color-border)] bg-[var(--color-surface)]">
+      <div
+        className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
+          votedFor ? 'bg-[var(--color-success-soft)]' : 'bg-[var(--color-danger-soft)]'
+        }`}
+      >
+        {votedFor ? (
+          <ThumbsUp size={14} strokeWidth={1.75} className="text-[var(--color-success)]" />
+        ) : (
+          <ThumbsDown size={14} strokeWidth={1.75} className="text-[var(--color-danger)]" />
+        )}
+      </div>
+
+      <div className="flex-1 min-w-0">
+        <div className="text-[13px] font-semibold">
+          {loan.borrower_name} — {cop(Number(loan.requested_amount))}
+        </div>
+        <div className="flex items-center gap-2 mt-1 flex-wrap">
+          <span className="text-[11px] text-[var(--color-text-subtle)]">
+            Voté <b>{votedFor ? 'a favor' : 'en contra'}</b>
+          </span>
+          <span className="text-[var(--color-border)]">·</span>
+          {outcomeSettled ? (
+            <Badge tone={statusTone} className="text-[10px]">
+              {LOAN_STATUS_LABELS[loan.status]}
+            </Badge>
+          ) : (
+            <span className="flex items-center gap-1 text-[11px] text-[var(--color-text-subtle)]">
+              <Clock size={11} strokeWidth={1.75} />
+              {LOAN_STATUS_LABELS[loan.status]}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <Link href={`/dashboard/prestamos/${loan.id}`}>
+        <ChevronRight size={16} strokeWidth={1.75} className="text-[var(--color-text-subtle)]" />
+      </Link>
     </div>
   );
 }

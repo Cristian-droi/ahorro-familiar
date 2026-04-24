@@ -12,9 +12,13 @@ export const updatePaymentPlanSchema = z.object({
 });
 
 export const reviewPlanSchema = z.object({
-  action: z.enum(['approve', 'reject']),
+  action: z.enum(['approve', 'reject', 'request_revision']),
   rejection_reason: z.string().min(1).optional(),
   admin_notes: z.string().optional(),
+});
+
+export const disburseSchema = z.object({
+  disbursement_proof_path: z.string().min(1),
 });
 
 export const voteSchema = z.object({

@@ -6,7 +6,6 @@ import { supabase } from '@/lib/supabase';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
-import { Input } from '@/components/ui/Input';
 import { showToast } from '@/components/ui/Toast';
 import {
   Info,
@@ -17,6 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import { getProfile } from '@/lib/data/profiles';
+import { getCashBalance } from '@/lib/data/loans';
 import { cop } from '@/lib/format';
 import {
   calcLoanShares,
@@ -31,15 +31,14 @@ export default function NuevaSolicitudPage() {
 
   const [shareValue, setShareValue] = useState<number | null>(null);
   const [interestRate, setInterestRate] = useState(0.02);
+  const [cashBalance, setCashBalance] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
-  // Campos del formulario
   const [amountInput, setAmountInput] = useState('');
   const [months, setMonths] = useState(12);
   const [paidUpfront, setPaidUpfront] = useState(false);
 
-  // Edición de cuotas
   const [capitalOverrides, setCapitalOverrides] = useState<Record<number, number>>({});
   const [editingMonth, setEditingMonth] = useState<number | null>(null);
   const [editingValue, setEditingValue] = useState('');
@@ -50,14 +49,16 @@ export default function NuevaSolicitudPage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.replace('/login'); return; }
 
-      const [profile, rateSetting] = await Promise.all([
+      const [profile, rateSetting, balance] = await Promise.all([
         getProfile(supabase, user.id),
         supabase.from('system_settings').select('value').eq('key', 'loan_interest_rate').maybeSingle(),
+        getCashBalance(supabase).catch(() => null),
       ]);
 
       if (cancelled) return;
       setShareValue(profile.selected_share_value ?? null);
       if (rateSetting.data?.value) setInterestRate(Number(rateSetting.data.value));
+      setCashBalance(balance);
       setLoading(false);
     })();
     return () => { cancelled = true; };
@@ -90,6 +91,8 @@ export default function NuevaSolicitudPage() {
       capitalOverrides,
     });
   }, [requestedAmount, months, interestRate, capitalOverrides]);
+
+  const exceedsCashBalance = cashBalance !== null && requestedAmount > cashBalance && requestedAmount > 0;
 
   const validationError = useMemo(() => {
     if (requestedAmount < 500_000) return 'El monto mínimo es $500.000';
@@ -134,7 +137,6 @@ export default function NuevaSolicitudPage() {
         return;
       }
 
-      // Si el plan tiene overrides, guardarlos
       if (Object.keys(capitalOverrides).length > 0) {
         await fetch(`/api/prestamos/${json.loan.id}`, {
           method: 'PUT',
@@ -143,7 +145,6 @@ export default function NuevaSolicitudPage() {
         });
       }
 
-      // Enviar a revisión del admin
       await fetch(`/api/prestamos/${json.loan.id}/submit`, { method: 'POST' });
 
       showToast('success', 'Solicitud enviada. El administrador la revisará pronto.');
@@ -215,6 +216,17 @@ export default function NuevaSolicitudPage() {
               </div>
             </div>
 
+            {/* Advertencia: supera saldo en caja */}
+            {exceedsCashBalance && (
+              <div className="mt-4 flex items-start gap-2.5 p-3.5 rounded-[10px] bg-[var(--color-warn-soft)] border border-[var(--color-warn)]/30">
+                <AlertTriangle size={14} strokeWidth={2} className="text-[var(--color-warn)] mt-px shrink-0" />
+                <div className="text-[12px]">
+                  <span className="font-semibold text-[var(--color-warn)]">El monto supera el saldo disponible en caja</span>
+                  <span className="text-[var(--color-text-muted)]"> ({cop(cashBalance!)} disponibles). Podés igualmente enviar la solicitud — el administrador evaluará la disponibilidad.</span>
+                </div>
+              </div>
+            )}
+
             {/* Opción pagar acciones por adelantado */}
             {sharesCount > 0 && (
               <div
@@ -254,7 +266,7 @@ export default function NuevaSolicitudPage() {
                 <div>
                   <h2 className="text-[15px] font-semibold tracking-tight">Plan de pagos</h2>
                   <p className="text-[12px] text-[var(--color-text-muted)] mt-0.5">
-                    Informativo. Podés editar el capital de cada cuota haciendo clic en el ícono.
+                    Podés editar el capital de cada cuota. Las cuotas sin asignación se ajustan a cero.
                   </p>
                 </div>
                 <Badge tone="info">{interestRate * 100}% mensual</Badge>
@@ -265,7 +277,7 @@ export default function NuevaSolicitudPage() {
                   <thead>
                     <tr className="border-t border-[var(--color-border)] bg-[var(--color-surface-alt)]">
                       <th className="text-left px-4 py-2.5 text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase">Cuota</th>
-                      <th className="text-left px-4 py-2.5 text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase">Vencimiento</th>
+                      <th className="text-left px-4 py-2.5 text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase">Mes</th>
                       <th className="text-right px-4 py-2.5 text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase">Capital</th>
                       <th className="text-right px-4 py-2.5 text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase">Intereses</th>
                       <th className="text-right px-4 py-2.5 text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase">Saldo</th>
@@ -292,7 +304,10 @@ export default function NuevaSolicitudPage() {
                                 inputMode="numeric"
                                 value={editingValue}
                                 onChange={(e) => setEditingValue(e.target.value.replace(/[^\d]/g, ''))}
-                                onKeyDown={(e) => { if (e.key === 'Enter') commitEdit(row.month_number); if (e.key === 'Escape') setEditingMonth(null); }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') commitEdit(row.month_number);
+                                  if (e.key === 'Escape') setEditingMonth(null);
+                                }}
                                 className="w-28 h-7 rounded-[6px] bg-[var(--color-surface)] border border-[var(--color-brand)] px-2 text-right text-[13px] font-semibold focus:outline-none tabular"
                                 autoFocus
                               />
@@ -300,7 +315,9 @@ export default function NuevaSolicitudPage() {
                               <button onClick={() => setEditingMonth(null)} className="text-[var(--color-text-subtle)] hover:opacity-70"><X size={13} /></button>
                             </div>
                           ) : (
-                            cop(row.capital_amount)
+                            <span className={row.capital_amount === 0 && row.month_number !== plan.length ? 'text-[var(--color-text-subtle)]' : ''}>
+                              {cop(row.capital_amount)}
+                            </span>
                           )}
                         </td>
                         <td className="px-4 py-3 text-right text-[var(--color-text-muted)] tabular">
@@ -310,7 +327,7 @@ export default function NuevaSolicitudPage() {
                           {cop(row.estimated_balance_after)}
                         </td>
                         <td className="px-2 py-3 text-right">
-                          {editingMonth !== row.month_number && (
+                          {editingMonth !== row.month_number && row.month_number !== plan.length && (
                             <button
                               onClick={() => startEdit(row)}
                               className="text-[var(--color-text-subtle)] hover:text-[var(--color-brand)] transition-colors"
@@ -325,6 +342,17 @@ export default function NuevaSolicitudPage() {
                   </tbody>
                 </table>
               </div>
+
+              {Object.keys(capitalOverrides).length > 0 && (
+                <div className="px-[22px] py-3 border-t border-[var(--color-border)]">
+                  <button
+                    onClick={() => setCapitalOverrides({})}
+                    className="text-[12px] text-[var(--color-text-subtle)] hover:text-[var(--color-danger)] transition-colors"
+                  >
+                    Restablecer distribución uniforme
+                  </button>
+                </div>
+              )}
             </Card>
           )}
 
@@ -339,9 +367,22 @@ export default function NuevaSolicitudPage() {
         {/* Resumen lateral */}
         <aside className="lg:sticky lg:top-4">
           <Card padding="lg">
-            <h2 className="text-[15px] font-semibold tracking-tight mb-4">Resumen del préstamo</h2>
+            <h2 className="text-[15px] font-semibold tracking-tight mb-4">Resumen</h2>
 
             <div className="flex flex-col gap-2.5 text-[13px]">
+              {shareValue != null && (
+                <Row label="Valor de tu acción" value={cop(shareValue)} />
+              )}
+              {cashBalance !== null && (
+                <Row
+                  label="Saldo en caja"
+                  value={cop(cashBalance)}
+                  tone={exceedsCashBalance ? 'danger' : undefined}
+                />
+              )}
+              {(shareValue != null || cashBalance !== null) && (
+                <div className="h-px bg-[var(--color-border)] my-0.5" />
+              )}
               <Row label="Monto solicitado" value={cop(requestedAmount)} />
               <Row
                 label={`Acciones por préstamo (${sharesCount})`}
@@ -359,7 +400,7 @@ export default function NuevaSolicitudPage() {
                 </span>
               </div>
               <p className="text-[11px] text-[var(--color-text-subtle)] leading-snug">
-                Los intereses se cobran sobre el monto solicitado ({cop(requestedAmount)}) al {interestRate * 100}% mensual.
+                Intereses al {interestRate * 100}% mensual sobre {cop(requestedAmount)}.
               </p>
             </div>
 

@@ -39,25 +39,47 @@ export function buildPaymentPlan(params: {
   const { requestedAmount, months, rate, disbursedAt, capitalOverrides = {} } = params;
   const baseCapital = Math.floor(requestedAmount / months);
   const disbursedDay = disbursedAt.getDate();
+  const hasOverrides = Object.keys(capitalOverrides).length > 0;
   const rows: PlanRow[] = [];
   let balance = requestedAmount;
 
   for (let i = 1; i <= months; i++) {
-    if (balance <= 0) break;
+    if (balance <= 0 && i !== months) {
+      // Balance already 0 from earlier overrides — remaining months get 0 capital.
+      const due = new Date(disbursedAt);
+      due.setMonth(due.getMonth() + (i - 1));
+      due.setDate(1);
+      rows.push({
+        month_number: i,
+        due_date: due.toISOString().split('T')[0],
+        capital_amount: 0,
+        estimated_interest: 0,
+        estimated_balance_after: 0,
+      });
+      continue;
+    }
 
     const isFirst = i === 1;
     const effectiveRate = isFirst && disbursedDay > 15 ? rate / 2 : rate;
     const interest = Math.round(balance * effectiveRate);
 
-    const capital =
+    // Last month always absorbs remaining balance.
+    // For other months: use override if set, else 0 when any overrides exist, else equal split.
+    const rawCapital =
       i === months
         ? balance
-        : Math.max(0, Math.min(capitalOverrides[i] ?? baseCapital, balance));
+        : capitalOverrides[i] !== undefined
+          ? capitalOverrides[i]
+          : hasOverrides
+            ? 0
+            : baseCapital;
 
+    const capital = Math.max(0, Math.min(rawCapital, balance));
     const balanceAfter = Math.max(0, balance - capital);
 
+    // Month 1 = current month, month 2 = next month, etc.
     const due = new Date(disbursedAt);
-    due.setMonth(due.getMonth() + i);
+    due.setMonth(due.getMonth() + (i - 1));
     due.setDate(1);
 
     rows.push({

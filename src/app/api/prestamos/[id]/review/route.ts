@@ -50,14 +50,22 @@ export async function POST(
             admin_notes: admin_notes ?? null,
             updated_at: new Date().toISOString(),
           }
-        : {
-            plan_status: 'rejected',
-            plan_rejection_reason: rejection_reason,
-            admin_notes: admin_notes ?? null,
-            status: 'rejected_by_admin',
-            rejection_reason,
-            updated_at: new Date().toISOString(),
-          };
+        : action === 'request_revision'
+          ? {
+              status: 'draft',
+              plan_status: null,
+              plan_rejection_reason: null,
+              admin_notes: admin_notes ?? null,
+              updated_at: new Date().toISOString(),
+            }
+          : {
+              plan_status: 'rejected',
+              plan_rejection_reason: rejection_reason,
+              admin_notes: admin_notes ?? null,
+              status: 'rejected_by_admin',
+              rejection_reason,
+              updated_at: new Date().toISOString(),
+            };
 
     const { error: updateError } = await admin
       .from('loans')

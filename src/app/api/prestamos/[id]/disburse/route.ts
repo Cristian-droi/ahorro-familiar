@@ -2,18 +2,21 @@ import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { calcDisbursedAmount, buildPaymentPlan } from '@/lib/loans';
+import { disburseSchema } from '@/lib/schemas/loan';
 
 // POST /api/prestamos/[id]/disburse — admin realiza el desembolso del préstamo.
 // Requisitos:
 //   - Préstamo en pending_disbursement
+//   - disbursement_proof_path: comprobante de transferencia (requerido)
 //   - Si loan_shares_paid_upfront=true: debe existir un recibo aprobado de acciones_prestamo para este préstamo
 // Al desembolsar:
 //   - Se calcula el monto real desembolsado
 //   - Se actualiza outstanding_balance = requested_amount
 //   - Se recalcula el plan de pagos con la fecha real de desembolso
+//   - El trigger assigns CE- number automáticamente
 //   - El préstamo queda active
 export async function POST(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
@@ -22,6 +25,16 @@ export async function POST(
     if ('error' in authCheck) {
       return NextResponse.json({ error: authCheck.error }, { status: authCheck.status });
     }
+
+    const body = await request.json().catch(() => ({}));
+    const parsed = disburseSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: 'Se requiere el comprobante de transferencia (disbursement_proof_path)' },
+        { status: 400 },
+      );
+    }
+    const { disbursement_proof_path } = parsed.data;
 
     const admin = createSupabaseAdminClient();
 
@@ -87,7 +100,7 @@ export async function POST(
       capitalOverrides,
     });
 
-    // Actualizar préstamo
+    // Actualizar préstamo (el trigger assign_disbursement_number asigna CE- automáticamente)
     const { error: updateError } = await admin
       .from('loans')
       .update({
@@ -95,6 +108,7 @@ export async function POST(
         disbursed_amount: disbursedAmount,
         disbursed_at: disbursedAt.toISOString(),
         outstanding_balance: loan.requested_amount,
+        disbursement_proof_path,
         updated_at: disbursedAt.toISOString(),
       })
       .eq('id', id);

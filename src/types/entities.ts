@@ -116,6 +116,8 @@ export interface Loan {
   plan_rejection_reason: string | null;
   admin_notes: string | null;
   rejection_reason: string | null;
+  disbursement_proof_path: string | null;
+  disbursement_number: string | null;
   created_at: string;
   updated_at: string;
 }

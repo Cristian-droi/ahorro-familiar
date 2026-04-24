@@ -8,7 +8,7 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { showToast } from '@/components/ui/Toast';
-import { ChevronLeft, ThumbsUp, ThumbsDown, Users, AlertTriangle } from 'lucide-react';
+import { ChevronLeft, ThumbsUp, ThumbsDown, Users, AlertTriangle, RotateCcw, Send } from 'lucide-react';
 import { getLoanWithDetails } from '@/lib/data/loans';
 import type { LoanWithDetails } from '@/types/entities';
 import { cop } from '@/lib/format';
@@ -27,6 +27,7 @@ export default function LoanDetailPage() {
   const [loading, setLoading] = useState(true);
   const [voting, setVoting] = useState<'approved' | 'rejected' | null>(null);
   const [submittingVote, setSubmittingVote] = useState(false);
+  const [resubmitting, setResubmitting] = useState(false);
 
   const load = async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -68,6 +69,24 @@ export default function LoanDetailPage() {
   const isOwner = currentUserId === loan.user_id;
   const myVote = loan.votes.find((v) => v.voter_id === currentUserId);
   const canVote = loan.status === 'pending_shareholder_vote' && !isOwner && !myVote;
+
+  const handleResubmit = async () => {
+    setResubmitting(true);
+    try {
+      const res = await fetch(`/api/prestamos/${id}/submit`, { method: 'POST' });
+      const json = await res.json();
+      if (!res.ok) {
+        showToast('error', json?.error ?? 'No se pudo reenviar la solicitud');
+      } else {
+        showToast('success', 'Solicitud reenviada al administrador.');
+        await load();
+      }
+    } catch {
+      showToast('error', 'Error al reenviar');
+    } finally {
+      setResubmitting(false);
+    }
+  };
   const needed = requiredVotes(loan.total_active_shareholders);
   const tone = LOAN_STATUS_TONE[loan.status] as Parameters<typeof Badge>[0]['tone'];
 
@@ -103,6 +122,24 @@ export default function LoanDetailPage() {
           </div>
         </div>
       </header>
+
+      {/* Banner: devuelto para revisión */}
+      {isOwner && loan.status === 'draft' && loan.admin_notes && (
+        <div className="flex items-start gap-3 p-4 rounded-[12px] bg-[var(--color-warn-soft)] border border-[var(--color-warn)]/30">
+          <RotateCcw size={16} strokeWidth={2} className="text-[var(--color-warn)] mt-px shrink-0" />
+          <div className="flex-1">
+            <div className="text-[13px] font-semibold text-[var(--color-warn)]">El administrador solicitó una revisión</div>
+            <div className="text-[12px] text-[var(--color-text-muted)] mt-0.5">{loan.admin_notes}</div>
+            <p className="text-[11px] text-[var(--color-text-subtle)] mt-1.5">
+              Editá tu plan de pagos desde <Link href={`/dashboard/prestamos/nueva`} className="text-[var(--color-brand)] underline">Nueva solicitud</Link> o reenviá esta solicitud sin cambios.
+            </p>
+          </div>
+          <Button size="sm" disabled={resubmitting} onClick={handleResubmit}>
+            <Send size={13} strokeWidth={1.75} />
+            {resubmitting ? 'Enviando…' : 'Reenviar'}
+          </Button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-6 items-start">
         <div className="flex flex-col gap-5">

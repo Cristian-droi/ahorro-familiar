@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from '@/types/database';
-import type { Loan, LoanWithDetails } from '@/types/entities';
+import type { Loan, LoanVote, LoanWithDetails } from '@/types/entities';
 
 type SB = SupabaseClient<Database>;
 
@@ -126,6 +126,60 @@ export async function getActiveLoansForUser(supabase: SB, userId: string): Promi
     .select('*')
     .eq('user_id', userId)
     .eq('status', 'active');
+  if (error) throw error;
+  return (data ?? []) as Loan[];
+}
+
+export async function getCashBalance(supabase: SB): Promise<number> {
+  const { data, error } = await supabase.rpc('get_cash_balance');
+  if (error) throw error;
+  return Number(data ?? 0);
+}
+
+export type VoteHistoryItem = {
+  loan: Loan & { borrower_name: string };
+  vote: LoanVote;
+};
+
+export async function getMyVotingHistory(
+  supabase: SB,
+  voterId: string,
+): Promise<VoteHistoryItem[]> {
+  const { data, error } = await supabase
+    .from('loan_votes')
+    .select(`
+      *,
+      loan:loans(
+        id, status, requested_amount, payment_plan_months, user_id, created_at,
+        borrower:profiles!loans_user_id_fkey(first_name, last_name)
+      )
+    `)
+    .eq('voter_id', voterId)
+    .order('voted_at', { ascending: false });
+
+  if (error) throw error;
+  if (!data || data.length === 0) return [];
+
+  return data.map((row) => {
+    const loan = row.loan as Record<string, unknown> | null;
+    const borrower = loan?.borrower as Record<string, string> | null;
+    return {
+      loan: {
+        ...(loan as unknown as Loan),
+        borrower_name: borrower ? `${borrower.first_name} ${borrower.last_name}` : 'Accionista',
+      },
+      vote: row as unknown as LoanVote,
+    };
+  });
+}
+
+export async function getLoansWithDisbursement(supabase: SB): Promise<Loan[]> {
+  const { data, error } = await supabase
+    .from('loans')
+    .select(`*, borrower:profiles!loans_user_id_fkey(first_name, last_name)`)
+    .in('status', ['active', 'paid'])
+    .not('disbursement_number', 'is', null)
+    .order('disbursed_at', { ascending: false });
   if (error) throw error;
   return (data ?? []) as Loan[];
 }

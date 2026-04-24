@@ -31,10 +31,15 @@ import {
   X,
   FileSpreadsheet,
   FileDown,
+  ArrowUpRight,
+  ArrowDownLeft,
+  Landmark,
 } from 'lucide-react';
 import { exportToExcel, exportToPdf, type ExportSection } from '@/lib/exports';
 import { getProfileRole, listProfilesWithNames } from '@/lib/data/profiles';
 import { listAllReceiptsWithItems } from '@/lib/data/receipts';
+import { getCashBalance, getLoansWithDisbursement } from '@/lib/data/loans';
+import type { Loan } from '@/types/entities';
 import {
   cop,
   conceptLabel,
@@ -91,6 +96,8 @@ export default function LibroCajaPage() {
   const [loading, setLoading] = useState(true);
   const [receipts, setReceipts] = useState<ReceiptRow[]>([]);
   const [profiles, setProfiles] = useState<ProfileLite[]>([]);
+  const [cashBalance, setCashBalance] = useState<number | null>(null);
+  const [disbursements, setDisbursements] = useState<Loan[]>([]);
 
   // Filtros
   const [status, setStatus] = useState<StatusFilter>('pending');
@@ -118,9 +125,11 @@ export default function LibroCajaPage() {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [rawReceipts, rawProfiles] = await Promise.all([
+      const [rawReceipts, rawProfiles, balance, disbList] = await Promise.all([
         listAllReceiptsWithItems(supabase),
         listProfilesWithNames(supabase),
+        getCashBalance(supabase).catch(() => null),
+        getLoansWithDisbursement(supabase).catch(() => [] as Loan[]),
       ]);
 
       const byId = new Map(rawProfiles.map((p) => [p.id, p]));
@@ -132,6 +141,8 @@ export default function LibroCajaPage() {
 
       setReceipts(rows);
       setProfiles(rawProfiles);
+      setCashBalance(balance);
+      setDisbursements(disbList);
     } catch (err) {
       console.error('Error cargando libro de caja:', err);
       showToast('error', 'No se pudo cargar el Libro de caja.');
@@ -458,6 +469,12 @@ export default function LibroCajaPage() {
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          {cashBalance !== null && (
+            <div className="flex items-center gap-1.5 h-8 px-3 rounded-full bg-[var(--color-success-soft)] text-[var(--color-success)] text-[12px] font-semibold">
+              <Landmark size={13} strokeWidth={1.75} />
+              Saldo en caja: {cop(cashBalance)}
+            </div>
+          )}
           {counts.pending > 0 && (
             <Badge tone="warn" dot>
               {counts.pending} pendiente{counts.pending === 1 ? '' : 's'}
@@ -807,6 +824,54 @@ export default function LibroCajaPage() {
               </Card>
             );
           })}
+        </div>
+      )}
+
+      {/* Sección de desembolsos (salidas de caja CE-XXXXX) */}
+      {disbursements.length > 0 && (
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-[8px] bg-[var(--color-danger-soft)] text-[var(--color-danger)] flex items-center justify-center">
+              <ArrowDownLeft size={14} strokeWidth={1.75} />
+            </div>
+            <div>
+              <div className="text-[14px] font-semibold tracking-tight">Desembolsos de préstamos</div>
+              <div className="text-[11px] text-[var(--color-text-subtle)]">Salidas de caja — consecutivo CE-</div>
+            </div>
+            <div className="ml-auto text-[13px] font-semibold text-[var(--color-danger)] tabular">
+              − {cop(disbursements.reduce((s, d) => s + Number(d.disbursed_amount ?? 0), 0))}
+            </div>
+          </div>
+          <div className="flex flex-col gap-2">
+            {disbursements.map((d) => {
+              const borrower = (d as Record<string, unknown>).borrower as Record<string, string> | null;
+              const borrowerName = borrower ? `${borrower.first_name} ${borrower.last_name}` : 'Accionista';
+              return (
+                <div
+                  key={d.id}
+                  className="flex items-center gap-4 px-5 py-3.5 rounded-[12px] border border-[var(--color-border)] bg-[var(--color-surface)]"
+                >
+                  <div className="w-8 h-8 rounded-full bg-[var(--color-danger-soft)] flex items-center justify-center shrink-0">
+                    <ArrowUpRight size={14} strokeWidth={1.75} className="text-[var(--color-danger)]" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[13px] font-semibold">{borrowerName}</div>
+                    <div className="text-[11px] text-[var(--color-text-subtle)] mt-0.5">
+                      {d.disbursement_number} · {d.disbursed_at ? new Date(d.disbursed_at).toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[14px] font-semibold tabular text-[var(--color-danger)]">
+                      − {cop(Number(d.disbursed_amount ?? 0))}
+                    </div>
+                    <div className="text-[11px] text-[var(--color-text-subtle)]">
+                      {d.status === 'paid' ? 'Pagado' : 'Activo'}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
