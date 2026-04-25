@@ -19,6 +19,7 @@ import {
   BookOpen,
   ClipboardList,
   Landmark,
+  BookUser,
 } from 'lucide-react';
 import { ToastContainer } from '@/components/ui/Toast';
 import { TopNav } from '@/components/ui/TopNav';
@@ -109,6 +110,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     { key: 'miembros', label: 'Accionistas', href: '/dashboard/miembros', icon: Users },
     { key: 'prestamos', label: 'Préstamos', href: '/dashboard/admin/prestamos', icon: Landmark },
     { key: 'libro', label: 'Libro de caja', href: '/dashboard/libro-caja', icon: BookOpen },
+    {
+      key: 'libro-accionista',
+      label: 'Libro de accionista',
+      href: '/dashboard/admin/libro-accionista',
+      icon: BookUser,
+    },
     { key: 'ajustes', label: 'Ajustes', href: '/dashboard/ajustes', icon: Settings },
   ];
 

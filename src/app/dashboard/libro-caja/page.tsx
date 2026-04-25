@@ -17,7 +17,6 @@ import { supabase } from '@/lib/supabase';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
-import { Avatar } from '@/components/ui/Avatar';
 import { showToast } from '@/components/ui/Toast';
 import {
   BookOpen,
@@ -68,6 +67,13 @@ type ReceiptRow = Receipt & {
 };
 
 type StatusFilter = 'all' | ReceiptStatus;
+
+// Fila unificada del libro: recibo entrante o desembolso saliente.
+// Sirven juntos en un solo feed cronológico, con ícono direccional para
+// distinguir el tipo de movimiento.
+type Movement =
+  | { kind: 'receipt'; id: string; dateIso: string; receipt: ReceiptRow }
+  | { kind: 'disbursement'; id: string; dateIso: string; loan: Loan };
 
 const STATUS_CHIPS: { value: StatusFilter; label: string }[] = [
   { value: 'pending', label: 'Pendientes' },
@@ -197,30 +203,79 @@ export default function LibroCajaPage() {
 
   // ===== Filtros =====
 
-  const filtered = useMemo(() => {
-    return receipts.filter((r) => {
-      if (status !== 'all' && r.status !== status) return false;
-      if (userFilter !== 'all' && r.user_id !== userFilter) return false;
-      if (conceptFilter !== 'all') {
-        if (!r.items.some((it) => it.concept === conceptFilter)) return false;
+  // Feed unificado: recibos (entradas) + desembolsos (salidas).
+  const movements: Movement[] = useMemo(() => {
+    const recMoves: Movement[] = receipts.map((r) => ({
+      kind: 'receipt',
+      id: `r-${r.id}`,
+      dateIso: r.submitted_at ?? r.created_at ?? new Date(0).toISOString(),
+      receipt: r,
+    }));
+    const disbMoves: Movement[] = disbursements.map((d) => ({
+      kind: 'disbursement',
+      id: `d-${d.id}`,
+      dateIso: d.disbursed_at ?? new Date(0).toISOString(),
+      loan: d,
+    }));
+    return [...recMoves, ...disbMoves].sort((a, b) =>
+      b.dateIso.localeCompare(a.dateIso),
+    );
+  }, [receipts, disbursements]);
+
+  const filteredMovements: Movement[] = useMemo(() => {
+    return movements.filter((m) => {
+      if (m.kind === 'receipt') {
+        const r = m.receipt;
+        if (status !== 'all' && r.status !== status) return false;
+        if (userFilter !== 'all' && r.user_id !== userFilter) return false;
+        if (conceptFilter !== 'all') {
+          if (conceptFilter === 'desembolso') return false;
+          if (!r.items.some((it) => it.concept === conceptFilter)) return false;
+        }
+        if (monthFilter !== 'all') {
+          if (!r.items.some((it) => it.target_month === monthFilter)) return false;
+        }
+        if (search.trim()) {
+          const q = search.trim().toLowerCase();
+          const name = r.user
+            ? `${r.user.first_name} ${r.user.last_name}`.toLowerCase()
+            : '';
+          const doc = r.user?.identity_document ?? '';
+          const num = (r.receipt_number ?? '').toLowerCase();
+          if (!name.includes(q) && !doc.includes(q) && !num.includes(q)) {
+            return false;
+          }
+        }
+        return true;
       }
+      // kind === 'disbursement' — se comporta como salida ya aprobada.
+      const d = m.loan;
+      if (status !== 'all' && status !== 'approved') return false;
+      if (userFilter !== 'all' && d.user_id !== userFilter) return false;
+      if (conceptFilter !== 'all' && conceptFilter !== 'desembolso') return false;
       if (monthFilter !== 'all') {
-        if (!r.items.some((it) => it.target_month === monthFilter)) return false;
+        const monthStr = d.disbursed_at ? d.disbursed_at.slice(0, 7) : '';
+        if (monthStr !== monthFilter) return false;
       }
       if (search.trim()) {
         const q = search.trim().toLowerCase();
-        const name = r.user
-          ? `${r.user.first_name} ${r.user.last_name}`.toLowerCase()
-          : '';
-        const doc = r.user?.identity_document ?? '';
-        const num = (r.receipt_number ?? '').toLowerCase();
-        if (!name.includes(q) && !doc.includes(q) && !num.includes(q)) {
-          return false;
-        }
+        const borrower = (d as Record<string, unknown>).borrower as Record<string, string> | null;
+        const name = borrower ? `${borrower.first_name} ${borrower.last_name}`.toLowerCase() : '';
+        const num = (d.disbursement_number ?? '').toLowerCase();
+        if (!name.includes(q) && !num.includes(q)) return false;
       }
       return true;
     });
-  }, [receipts, status, userFilter, conceptFilter, monthFilter, search]);
+  }, [movements, status, userFilter, conceptFilter, monthFilter, search]);
+
+  // Subconjunto de recibos visibles — lo usa el export (que es específico de recibos).
+  const filteredReceipts = useMemo(
+    () =>
+      filteredMovements
+        .filter((m): m is Extract<Movement, { kind: 'receipt' }> => m.kind === 'receipt')
+        .map((m) => m.receipt),
+    [filteredMovements],
+  );
 
   const counts = useMemo(() => {
     return {
@@ -230,17 +285,6 @@ export default function LibroCajaPage() {
       all: receipts.length,
     };
   }, [receipts]);
-
-  const totals = useMemo(() => {
-    return filtered.reduce(
-      (acc, r) => {
-        acc.count += 1;
-        acc.amount += Number(r.total_amount ?? 0);
-        return acc;
-      },
-      { count: 0, amount: 0 },
-    );
-  }, [filtered]);
 
   // ===== Acciones =====
 
@@ -329,7 +373,7 @@ export default function LibroCajaPage() {
   // ===== Export =====
 
   const handleExport = async (format: 'xlsx' | 'pdf') => {
-    if (filtered.length === 0) return;
+    if (filteredReceipts.length === 0) return;
     setExporting(true);
     try {
       const receiptsSection: ExportSection = {
@@ -346,7 +390,7 @@ export default function LibroCajaPage() {
           { header: 'Total', key: 'total', width: 16, align: 'right' },
           { header: 'Motivo rechazo', key: 'reason', width: 28 },
         ],
-        rows: filtered.map((r) => ({
+        rows: filteredReceipts.map((r) => ({
           number: r.receipt_number ?? '—',
           name: r.user
             ? `${r.user.first_name} ${r.user.last_name}`.trim()
@@ -367,7 +411,7 @@ export default function LibroCajaPage() {
           label: 'Total',
           values: {
             total: cop(
-              filtered.reduce((s, r) => s + Number(r.total_amount ?? 0), 0),
+              filteredReceipts.reduce((s, r) => s + Number(r.total_amount ?? 0), 0),
             ),
           },
         },
@@ -387,7 +431,7 @@ export default function LibroCajaPage() {
           { header: 'Monto', key: 'amount', width: 16, align: 'right' },
           { header: 'Auto', key: 'auto', width: 8, align: 'center' },
         ],
-        rows: filtered.flatMap((r) =>
+        rows: filteredReceipts.flatMap((r) =>
           r.items.map((it) => ({
             number: r.receipt_number ?? '—',
             name: r.user
@@ -462,31 +506,22 @@ export default function LibroCajaPage() {
                 Libro de caja
               </h1>
               <p className="text-sm text-[var(--color-text-muted)] mt-0.5 max-w-xl">
-                Revisa y aprueba los recibos enviados por los accionistas.
+                Entradas (recibos) y salidas (desembolsos) de todos los accionistas.
               </p>
             </div>
           </div>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          {cashBalance !== null && (
-            <div className="flex items-center gap-1.5 h-8 px-3 rounded-full bg-[var(--color-success-soft)] text-[var(--color-success)] text-[12px] font-semibold">
-              <Landmark size={13} strokeWidth={1.75} />
-              Saldo en caja: {cop(cashBalance)}
-            </div>
-          )}
           {counts.pending > 0 && (
             <Badge tone="warn" dot>
               {counts.pending} pendiente{counts.pending === 1 ? '' : 's'}
             </Badge>
           )}
-          <Badge tone="neutral">
-            {totals.count} recibos · {cop(totals.amount)}
-          </Badge>
           <Button
             variant="secondary"
             size="sm"
-            disabled={filtered.length === 0 || exporting}
+            disabled={filteredReceipts.length === 0 || exporting}
             onClick={() => handleExport('xlsx')}
             title="Exportar resultados a Excel"
           >
@@ -496,7 +531,7 @@ export default function LibroCajaPage() {
           <Button
             variant="secondary"
             size="sm"
-            disabled={filtered.length === 0 || exporting}
+            disabled={filteredReceipts.length === 0 || exporting}
             onClick={() => handleExport('pdf')}
             title="Exportar resultados a PDF"
           >
@@ -505,6 +540,28 @@ export default function LibroCajaPage() {
           </Button>
         </div>
       </header>
+
+      {/* Saldo en caja — tarjeta prominente */}
+      {cashBalance !== null && (
+        <Card padding="lg" className="bg-[var(--color-success-soft)] border-[var(--color-success)]/25">
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 rounded-[14px] bg-[var(--color-success)]/15 text-[var(--color-success)] flex items-center justify-center shrink-0">
+              <Landmark size={26} strokeWidth={1.75} />
+            </div>
+            <div className="flex flex-col min-w-0 flex-1">
+              <span className="text-[11px] font-semibold text-[var(--color-success)] uppercase tracking-[0.14em]">
+                Saldo en caja
+              </span>
+              <span className="text-[32px] md:text-[36px] font-semibold tracking-[-0.02em] text-[var(--color-success)] tabular leading-[1.1]">
+                {cop(cashBalance)}
+              </span>
+              <span className="text-[12px] text-[var(--color-text-muted)] mt-1">
+                Disponible tras recibos aprobados y desembolsos.
+              </span>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* Filtros */}
       <Card padding="md">
@@ -580,6 +637,7 @@ export default function LibroCajaPage() {
               <option value="acciones">Acciones</option>
               <option value="capitalizacion">Capitalización</option>
               <option value="multa_acciones">Multa por mora</option>
+              <option value="desembolso">Desembolso de préstamo</option>
             </select>
 
             <select
@@ -599,13 +657,13 @@ export default function LibroCajaPage() {
       </Card>
 
       {/* Lista */}
-      {filtered.length === 0 ? (
+      {filteredMovements.length === 0 ? (
         <Card padding="lg" className="text-center py-10">
           <div className="mx-auto w-12 h-12 rounded-full bg-[var(--color-surface-alt)] flex items-center justify-center text-[var(--color-text-subtle)] mb-3">
             <BookOpen size={20} strokeWidth={1.5} />
           </div>
           <h2 className="text-[15px] font-semibold tracking-tight">
-            No hay recibos con esos filtros
+            No hay movimientos con esos filtros
           </h2>
           <p className="text-[13px] text-[var(--color-text-muted)] mt-1">
             Ajusta los filtros para ver más.
@@ -613,22 +671,89 @@ export default function LibroCajaPage() {
         </Card>
       ) : (
         <div className="flex flex-col gap-3">
-          {filtered.map((r) => {
+          {filteredMovements.map((m) => {
+            // ==== Fila de desembolso (salida de caja) ====
+            if (m.kind === 'disbursement') {
+              const d = m.loan;
+              const borrower = (d as Record<string, unknown>).borrower as Record<string, string> | null;
+              const borrowerName = borrower
+                ? `${borrower.first_name} ${borrower.last_name}`.trim()
+                : 'Accionista';
+              const dateLabel = d.disbursed_at
+                ? new Date(d.disbursed_at).toLocaleDateString('es-CO', {
+                    day: 'numeric',
+                    month: 'short',
+                    year: 'numeric',
+                  })
+                : '—';
+              return (
+                <Card key={m.id} padding="none" className="overflow-hidden">
+                  <div className="flex items-center gap-4 px-5 py-4">
+                    <div className="flex-1 flex items-center gap-3 min-w-0">
+                      <div
+                        className="w-9 h-9 rounded-full bg-[var(--color-danger-soft)] text-[var(--color-danger)] flex items-center justify-center shrink-0"
+                        title="Salida de caja — desembolso"
+                      >
+                        <ArrowUpRight size={16} strokeWidth={2} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-[14px] font-semibold tracking-tight truncate">
+                            {borrowerName}
+                          </span>
+                          <Badge tone="danger" dot>
+                            Desembolso
+                          </Badge>
+                          {d.status === 'paid' && (
+                            <Badge tone="success">Pagado</Badge>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-[var(--color-text-subtle)] mt-0.5 truncate">
+                          {d.disbursement_number ?? '—'} · {dateLabel}
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-[15px] font-semibold tabular text-[var(--color-danger)]">
+                          − {cop(Number(d.disbursed_amount ?? 0))}
+                        </div>
+                        <div className="text-[11px] text-[var(--color-text-subtle)]">
+                          Salida de caja
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+              );
+            }
+
+            // ==== Fila de recibo (entrada de caja) ====
+            const r = m.receipt;
             const isExpanded = expanded.has(r.id);
             const tone = statusTone(r.status);
             const fullName = r.user
               ? `${r.user.first_name} ${r.user.last_name}`.trim()
               : 'Sin perfil';
+            // El ícono de entrada solo es "verde" cuando el recibo está aprobado;
+            // pendientes y rechazados se pintan neutros para no mentir.
+            const inIconTone =
+              r.status === 'approved'
+                ? 'bg-[var(--color-success-soft)] text-[var(--color-success)]'
+                : 'bg-[var(--color-surface-alt)] text-[var(--color-text-subtle)]';
 
             return (
-              <Card key={r.id} padding="none" className="overflow-hidden">
+              <Card key={m.id} padding="none" className="overflow-hidden">
                 <div className="flex items-center gap-4 px-5 py-4">
                   <button
                     type="button"
                     onClick={() => toggleExpand(r.id)}
                     className="flex-1 flex items-center gap-3 text-left min-w-0 cursor-pointer"
                   >
-                    <Avatar name={r.user?.first_name || '?'} size={36} />
+                    <div
+                      className={`w-9 h-9 rounded-full ${inIconTone} flex items-center justify-center shrink-0`}
+                      title="Entrada de caja — recibo"
+                    >
+                      <ArrowDownLeft size={16} strokeWidth={2} />
+                    </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-[14px] font-semibold tracking-tight truncate">
@@ -824,54 +949,6 @@ export default function LibroCajaPage() {
               </Card>
             );
           })}
-        </div>
-      )}
-
-      {/* Sección de desembolsos (salidas de caja CE-XXXXX) */}
-      {disbursements.length > 0 && (
-        <div className="flex flex-col gap-3">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-[8px] bg-[var(--color-danger-soft)] text-[var(--color-danger)] flex items-center justify-center">
-              <ArrowDownLeft size={14} strokeWidth={1.75} />
-            </div>
-            <div>
-              <div className="text-[14px] font-semibold tracking-tight">Desembolsos de préstamos</div>
-              <div className="text-[11px] text-[var(--color-text-subtle)]">Salidas de caja — consecutivo CE-</div>
-            </div>
-            <div className="ml-auto text-[13px] font-semibold text-[var(--color-danger)] tabular">
-              − {cop(disbursements.reduce((s, d) => s + Number(d.disbursed_amount ?? 0), 0))}
-            </div>
-          </div>
-          <div className="flex flex-col gap-2">
-            {disbursements.map((d) => {
-              const borrower = (d as Record<string, unknown>).borrower as Record<string, string> | null;
-              const borrowerName = borrower ? `${borrower.first_name} ${borrower.last_name}` : 'Accionista';
-              return (
-                <div
-                  key={d.id}
-                  className="flex items-center gap-4 px-5 py-3.5 rounded-[12px] border border-[var(--color-border)] bg-[var(--color-surface)]"
-                >
-                  <div className="w-8 h-8 rounded-full bg-[var(--color-danger-soft)] flex items-center justify-center shrink-0">
-                    <ArrowUpRight size={14} strokeWidth={1.75} className="text-[var(--color-danger)]" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[13px] font-semibold">{borrowerName}</div>
-                    <div className="text-[11px] text-[var(--color-text-subtle)] mt-0.5">
-                      {d.disbursement_number} · {d.disbursed_at ? new Date(d.disbursed_at).toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-[14px] font-semibold tabular text-[var(--color-danger)]">
-                      − {cop(Number(d.disbursed_amount ?? 0))}
-                    </div>
-                    <div className="text-[11px] text-[var(--color-text-subtle)]">
-                      {d.status === 'paid' ? 'Pagado' : 'Activo'}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
         </div>
       )}
 

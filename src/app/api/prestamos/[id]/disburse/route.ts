@@ -3,6 +3,7 @@ import { requireAdmin } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { calcDisbursedAmount, buildPaymentPlan } from '@/lib/loans';
 import { disburseSchema } from '@/lib/schemas/loan';
+import { getCashBalance } from '@/lib/data/loans';
 
 // POST /api/prestamos/[id]/disburse — admin realiza el desembolso del préstamo.
 // Requisitos:
@@ -51,6 +52,35 @@ export async function POST(
       return NextResponse.json({ error: `El préstamo no está listo para desembolso (estado: ${loan.status})` }, { status: 409 });
     }
 
+    // Validación de saldo en caja: bloqueamos el desembolso si la caja no
+    // alcanza a cubrir el monto neto que vamos a entregar (requested_amount
+    // menos acciones pagadas upfront y 4x1000 si corresponde). Usamos el
+    // mismo get_cash_balance() que pinta el Libro de caja — así admin y
+    // sistema hablan del mismo número.
+    const netAmount = calcDisbursedAmount(
+      Number(loan.requested_amount),
+      Number(loan.loan_shares_amount),
+      Boolean(loan.loan_shares_paid_upfront),
+      Number(loan.four_per_thousand),
+    );
+
+    const cashBalance = await getCashBalance(admin).catch((err) => {
+      console.error('disburse: fallo al leer cash balance', err);
+      return null;
+    });
+    if (cashBalance !== null && netAmount > cashBalance) {
+      return NextResponse.json(
+        {
+          error: 'El saldo en caja no alcanza para desembolsar este préstamo.',
+          details: `Caja actual: ${cashBalance}. Monto a desembolsar: ${netAmount}.`,
+          cash_balance: cashBalance,
+          required_amount: netAmount,
+          code: 'insufficient_cash_balance',
+        },
+        { status: 422 },
+      );
+    }
+
     // Si el accionista eligió pagar acciones por adelantado, verificar que lo hizo
     if (loan.loan_shares_paid_upfront) {
       const { data: upfrontItems } = await admin
@@ -72,13 +102,7 @@ export async function POST(
     }
 
     const disbursedAt = new Date();
-
-    const disbursedAmount = calcDisbursedAmount(
-      Number(loan.requested_amount),
-      Number(loan.loan_shares_amount),
-      Boolean(loan.loan_shares_paid_upfront),
-      Number(loan.four_per_thousand),
-    );
+    const disbursedAmount = netAmount;
 
     // Recalcular plan de pagos con la fecha real de desembolso
     const { data: planItems } = await admin

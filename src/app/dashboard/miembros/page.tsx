@@ -15,6 +15,7 @@ import {
   Copy,
   Lock,
   Unlock,
+  Search,
 } from 'lucide-react';
 import { listMembershipRequests } from '@/lib/data/membership-requests';
 import { listProfiles } from '@/lib/data/profiles';
@@ -42,6 +43,7 @@ const cop = (n: number) => '$ ' + new Intl.NumberFormat('es-CO').format(n);
 export default function MiembrosPage() {
   const [members, setMembers] = useState<MemberData[]>([]);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
   // Marca qué profile está en vuelo para deshabilitar su botón y evitar
   // doble-click mientras la API responde.
   const [togglingId, setTogglingId] = useState<string | null>(null);
@@ -162,6 +164,25 @@ export default function MiembrosPage() {
     };
   }, [members]);
 
+  // Filtra por nombre, documento, email o teléfono. Los stats arriba siguen
+  // contando el total — solo la tabla se filtra para no esconder métricas.
+  const filteredMembers = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return members;
+    return members.filter((m) => {
+      const name = `${m.first_name} ${m.last_name}`.toLowerCase();
+      const doc = (m.identity_document ?? '').toLowerCase();
+      const email = (m.email ?? '').toLowerCase();
+      const phone = (m.phone ?? '').toLowerCase();
+      return (
+        name.includes(q) ||
+        doc.includes(q) ||
+        email.includes(q) ||
+        phone.includes(q)
+      );
+    });
+  }, [members, search]);
+
   return (
     <div className="flex flex-col gap-7 animate-in fade-in duration-300">
       {/* Page header */}
@@ -192,6 +213,31 @@ export default function MiembrosPage() {
         </div>
       </div>
 
+      {/* Barra de búsqueda */}
+      <div className="flex items-center h-10 px-3 rounded-[10px] bg-[var(--color-surface-alt)] border border-[var(--color-border)]">
+        <Search
+          size={15}
+          strokeWidth={1.75}
+          className="text-[var(--color-text-subtle)] mr-2 shrink-0"
+        />
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Buscar por nombre, documento, email o teléfono…"
+          className="flex-1 bg-transparent text-[13px] focus:outline-none text-[var(--color-text)] placeholder:text-[var(--color-text-subtle)]"
+        />
+        {search && (
+          <button
+            type="button"
+            onClick={() => setSearch('')}
+            className="text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] cursor-pointer"
+          >
+            Limpiar
+          </button>
+        )}
+      </div>
+
       <Card padding="none" className="overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
@@ -217,7 +263,7 @@ export default function MiembrosPage() {
                     Cargando directorio...
                   </td>
                 </tr>
-              ) : members.length === 0 ? (
+              ) : filteredMembers.length === 0 ? (
                 <tr>
                   <td
                     colSpan={6}
@@ -229,12 +275,14 @@ export default function MiembrosPage() {
                         strokeWidth={1.5}
                         className="opacity-30"
                       />
-                      No hay miembros aprobados por el momento.
+                      {search.trim()
+                        ? `Ningún accionista coincide con "${search.trim()}".`
+                        : 'No hay miembros aprobados por el momento.'}
                     </div>
                   </td>
                 </tr>
               ) : (
-                members.map((member) => (
+                filteredMembers.map((member) => (
                   <tr
                     key={member.request_id}
                     className="border-t border-[var(--color-border)]"

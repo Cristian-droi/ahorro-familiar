@@ -36,10 +36,13 @@ import {
   FileSpreadsheet,
   FileDown,
 } from 'lucide-react';
+import { Landmark } from 'lucide-react';
 import { exportToExcel, exportToPdf, type ExportSection } from '@/lib/exports';
 import { getProfile } from '@/lib/data/profiles';
 import { listReceiptItemsByYear } from '@/lib/data/receipts';
-import { cop, receiptStatusLabel } from '@/lib/format';
+import { getLibroAccionistaData } from '@/lib/data/loans';
+import { computeLoanBook, LOAN_STATUS_LABELS } from '@/lib/loans';
+import { cop, monthLabel, receiptStatusLabel } from '@/lib/format';
 import {
   computeFineForMonth,
   DEFAULT_PURCHASE_RULES,
@@ -92,6 +95,27 @@ type MonthSummary = {
   }>;
 };
 
+type LoanSummaryData = {
+  count: number;
+  total_requested: number;
+  total_paid_capital: number;
+  total_paid_interest: number;
+  total_interest_debt: number;
+  current_capital_balance: number;
+  next_installment_amount: number | null;
+  next_installment_month: string | null;
+  loans: Array<{
+    disbursement_number: string | null;
+    status: string;
+    disbursed_at: string | null;
+    requested_amount: number;
+    interest_rate: number;
+    payment_plan_months: number | null;
+    current_capital_balance: number;
+    total_interest_debt: number;
+  }>;
+};
+
 function statusTone(status: ReceiptStatus): 'warn' | 'success' | 'danger' {
   if (status === 'pending') return 'warn';
   if (status === 'approved') return 'success';
@@ -113,6 +137,7 @@ export default function ExtractoPage() {
   const [shareValue, setShareValue] = useState<number | null>(null);
   const [rules, setRules] = useState<PurchaseRules>(DEFAULT_PURCHASE_RULES);
   const [items, setItems] = useState<ItemRow[]>([]);
+  const [loanSummary, setLoanSummary] = useState<LoanSummaryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
 
@@ -198,6 +223,83 @@ export default function ExtractoPage() {
       cancelled = true;
     };
   }, [userId, year]);
+
+  // Resumen de préstamos del accionista (no depende del año).
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const entries = await getLibroAccionistaData(supabase, userId);
+        if (cancelled) return;
+        if (entries.length === 0) {
+          setLoanSummary(null);
+          return;
+        }
+        const entry = entries[0];
+        const books = entry.loans.map((l) => ({
+          loan: l.loan,
+          book: computeLoanBook({
+            requestedAmount: Number(l.loan.requested_amount),
+            plan: l.plan,
+            payments: l.payments,
+          }),
+        }));
+        const agg = books.reduce(
+          (acc, b) => {
+            acc.total_requested += b.book.summary.requested_amount;
+            acc.total_paid_capital += b.book.summary.total_paid_capital;
+            acc.total_paid_interest += b.book.summary.total_paid_interest;
+            acc.total_interest_debt += b.book.summary.total_interest_debt;
+            acc.current_capital_balance += b.book.summary.current_capital_balance;
+            return acc;
+          },
+          {
+            total_requested: 0,
+            total_paid_capital: 0,
+            total_paid_interest: 0,
+            total_interest_debt: 0,
+            current_capital_balance: 0,
+          },
+        );
+        // Próxima cuota = la más cercana en el tiempo entre todos los préstamos.
+        const nextCandidates = books
+          .map((b) => b.book.summary)
+          .filter((s) => s.next_installment_month !== null)
+          .sort((a, b) =>
+            (a.next_installment_month as string).localeCompare(
+              b.next_installment_month as string,
+            ),
+          );
+        const nextSummary = nextCandidates[0] ?? null;
+
+        setLoanSummary({
+          count: books.length,
+          ...agg,
+          next_installment_amount: nextSummary?.next_installment_amount ?? null,
+          next_installment_month: nextSummary?.next_installment_month ?? null,
+          loans: books.map((b) => ({
+            disbursement_number: b.loan.disbursement_number,
+            status: b.loan.status,
+            disbursed_at: b.loan.disbursed_at,
+            requested_amount: Number(b.loan.requested_amount),
+            interest_rate: Number(b.loan.interest_rate),
+            payment_plan_months: b.loan.payment_plan_months,
+            current_capital_balance: b.book.summary.current_capital_balance,
+            total_interest_debt: b.book.summary.total_interest_debt,
+          })),
+        });
+      } catch (err) {
+        console.error('Error cargando resumen de préstamos:', err);
+        // Silencioso: la tabla mensual puede renderizar sin esto.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
 
   // ===== Agregaciones por mes =====
 
@@ -625,6 +727,116 @@ export default function ExtractoPage() {
         )}
       </Card>
 
+      {/* Resumen de préstamos del accionista */}
+      {loanSummary && loanSummary.count > 0 && (
+        <Card padding="none" className="overflow-hidden">
+          <div className="px-5 py-3.5 border-b border-[var(--color-border)] flex items-center gap-3">
+            <div className="w-9 h-9 rounded-[10px] bg-[var(--color-brand-soft)] text-[var(--color-brand)] flex items-center justify-center shrink-0">
+              <Landmark size={16} strokeWidth={1.75} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h2 className="text-[14px] font-semibold tracking-tight">
+                Resumen de préstamos
+              </h2>
+              <p className="text-[11px] text-[var(--color-text-subtle)] mt-0.5">
+                {loanSummary.count} préstamo{loanSummary.count === 1 ? '' : 's'}{' '}
+                · Total prestado {cop(loanSummary.total_requested)}
+              </p>
+            </div>
+            {loanSummary.next_installment_amount !== null && (
+              <div className="text-right shrink-0">
+                <div className="text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase">
+                  Próxima cuota
+                </div>
+                <div className="text-[14px] font-semibold tabular">
+                  {cop(loanSummary.next_installment_amount)}
+                </div>
+                {loanSummary.next_installment_month && (
+                  <div className="text-[10px] text-[var(--color-text-subtle)]">
+                    {monthLabel(
+                      loanSummary.next_installment_month.slice(0, 7),
+                      true,
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-5">
+            <LoanStat label="Capital pagado" value={cop(loanSummary.total_paid_capital)} tone="success" />
+            <LoanStat label="Intereses pagados" value={cop(loanSummary.total_paid_interest)} tone="success" />
+            <LoanStat
+              label="Intereses en mora"
+              value={cop(loanSummary.total_interest_debt)}
+              tone={loanSummary.total_interest_debt > 0 ? 'danger' : undefined}
+            />
+            <LoanStat
+              label="Saldo capital"
+              value={cop(loanSummary.current_capital_balance)}
+              tone="brand"
+            />
+          </div>
+
+          <div className="border-t border-[var(--color-border)] overflow-x-auto">
+            <table className="w-full text-[12px] tabular">
+              <thead className="bg-[var(--color-surface-alt)]/60 text-[10px] uppercase tracking-wider text-[var(--color-text-subtle)]">
+                <tr>
+                  <th className="text-left font-semibold px-4 py-2.5">Préstamo</th>
+                  <th className="text-left font-semibold px-4 py-2.5">Estado</th>
+                  <th className="text-right font-semibold px-4 py-2.5">Monto</th>
+                  <th className="text-right font-semibold px-4 py-2.5">Plazo</th>
+                  <th className="text-right font-semibold px-4 py-2.5">Saldo capital</th>
+                  <th className="text-right font-semibold px-4 py-2.5">Intereses en mora</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--color-border)]">
+                {loanSummary.loans.map((l, i) => (
+                  <tr key={i}>
+                    <td className="px-4 py-2.5 font-medium text-[var(--color-text)]">
+                      {l.disbursement_number ?? '—'}
+                      {l.disbursed_at && (
+                        <div className="text-[10px] text-[var(--color-text-subtle)] mt-0.5">
+                          {new Date(l.disbursed_at).toLocaleDateString('es-CO', {
+                            day: 'numeric',
+                            month: 'short',
+                            year: 'numeric',
+                          })}
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 text-[var(--color-text-muted)]">
+                      {LOAN_STATUS_LABELS[l.status] ?? l.status}
+                    </td>
+                    <td className="px-4 py-2.5 text-right text-[var(--color-text-muted)]">
+                      {cop(l.requested_amount)}
+                    </td>
+                    <td className="px-4 py-2.5 text-right text-[var(--color-text-muted)]">
+                      {l.payment_plan_months ?? '—'} meses ·{' '}
+                      {(l.interest_rate * 100).toFixed(2)}%
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-semibold">
+                      {cop(l.current_capital_balance)}
+                    </td>
+                    <td
+                      className={`px-4 py-2.5 text-right ${
+                        l.total_interest_debt > 0
+                          ? 'text-[var(--color-danger)] font-semibold'
+                          : 'text-[var(--color-text-subtle)]'
+                      }`}
+                    >
+                      {l.total_interest_debt > 0
+                        ? cop(l.total_interest_debt)
+                        : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
       <p className="text-[11px] text-[var(--color-text-subtle)] px-1">
         Solo los recibos aprobados cuentan para el saldo. Los pendientes
         aparecen marcados para que sepas qué está por revisarse y los
@@ -638,6 +850,35 @@ export default function ExtractoPage() {
         </button>
         .
       </p>
+    </div>
+  );
+}
+
+function LoanStat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: 'brand' | 'success' | 'danger';
+}) {
+  const toneClass =
+    tone === 'brand'
+      ? 'text-[var(--color-brand)]'
+      : tone === 'success'
+        ? 'text-[var(--color-success)]'
+        : tone === 'danger'
+          ? 'text-[var(--color-danger)]'
+          : 'text-[var(--color-text)]';
+  return (
+    <div className="flex flex-col">
+      <span className="text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase">
+        {label}
+      </span>
+      <span className={`text-[17px] font-semibold tabular mt-1 ${toneClass}`}>
+        {value}
+      </span>
     </div>
   );
 }

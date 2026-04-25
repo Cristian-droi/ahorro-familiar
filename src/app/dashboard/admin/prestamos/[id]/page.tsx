@@ -448,7 +448,17 @@ export default function AdminLoanDetailPage() {
           )}
 
           {/* Desembolso */}
-          {loan.status === 'pending_disbursement' && (
+          {loan.status === 'pending_disbursement' && (() => {
+            // Monto neto que va a salir de caja. Debe coincidir con lo que
+            // calcula el backend (calcDisbursedAmount) y lo que mostramos
+            // en "El accionista recibirá".
+            const netAmount =
+              loanAmount -
+              (loan.loan_shares_paid_upfront ? 0 : Number(loan.loan_shares_amount)) -
+              Number(loan.four_per_thousand);
+            const cashShort =
+              cashBalance !== null && netAmount > cashBalance;
+            return (
             <Card padding="lg" className="border-[var(--color-success)]/25">
               <div className="text-[14px] font-semibold tracking-tight mb-2">Listo para desembolso</div>
 
@@ -564,6 +574,35 @@ export default function AdminLoanDetailPage() {
                 )}
               </div>
 
+              {/* Saldo en caja vs monto a entregar */}
+              <div
+                className={`mb-3 p-3 rounded-[10px] text-[12px] flex items-start gap-2 ${
+                  cashShort
+                    ? 'bg-[var(--color-danger-soft)] text-[var(--color-danger)]'
+                    : 'bg-[var(--color-success-soft)] text-[var(--color-success)]'
+                }`}
+              >
+                {cashShort ? (
+                  <AlertTriangle size={14} strokeWidth={2} className="mt-px shrink-0" />
+                ) : (
+                  <CheckCircle2 size={14} strokeWidth={2} className="mt-px shrink-0" />
+                )}
+                <div className="leading-[1.45]">
+                  <div className="font-semibold">
+                    {cashShort
+                      ? 'Saldo en caja insuficiente'
+                      : 'Saldo en caja suficiente'}
+                  </div>
+                  <div className="opacity-90">
+                    Caja actual:{' '}
+                    <span className="tabular">
+                      {cashBalance !== null ? cop(cashBalance) : '—'}
+                    </span>{' '}
+                    · Requerido: <span className="tabular">{cop(netAmount)}</span>
+                  </div>
+                </div>
+              </div>
+
               <Button
                 size="md"
                 className="w-full"
@@ -571,7 +610,8 @@ export default function AdminLoanDetailPage() {
                   submitting ||
                   uploadingProof ||
                   !proofPath ||
-                  (loan.loan_shares_paid_upfront && !loan.has_upfront_shares_receipt)
+                  (loan.loan_shares_paid_upfront && !loan.has_upfront_shares_receipt) ||
+                  cashShort
                 }
                 onClick={disburse}
               >
@@ -584,8 +624,14 @@ export default function AdminLoanDetailPage() {
                   Subí el comprobante antes de confirmar.
                 </p>
               )}
+              {cashShort && (
+                <p className="mt-2 text-[11px] text-[var(--color-danger)] text-center">
+                  No podés desembolsar hasta que la caja cubra el monto requerido.
+                </p>
+              )}
             </Card>
-          )}
+            );
+          })()}
 
           {/* Estado informativo para otros estados */}
           {['active', 'paid', 'rejected_by_admin', 'rejected_by_shareholders', 'draft', 'pending_shareholder_vote'].includes(loan.status) && (
