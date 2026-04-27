@@ -37,8 +37,8 @@ import {
 import { getProfile } from '@/lib/data/profiles';
 import { listReceiptsForUser } from '@/lib/data/receipts';
 import {
-  getCapitalizationWindowState,
-  type CapitalizationWindowState,
+  getMyCapitalizationState,
+  type MyCapState,
 } from '@/lib/data/capitalization';
 import {
   computeFineForMonth,
@@ -103,11 +103,11 @@ export default function ComprasPage() {
     { uid: makeUid(), target_month: getBogotaCurrentMonth(), share_count: 1 },
   ]);
 
-  // Capitalización: estado de la ventana (desde RPC) + opt-in del accionista.
-  // Cuando `capEnabled` es true se agrega una línea adicional al recibo con
-  // concepto 'capitalizacion' y el monto libre del input.
-  const [capWindow, setCapWindow] =
-    useState<CapitalizationWindowState | null>(null);
+  // Capitalización: estado para ESTE accionista (resuelto en backend —
+  // si tiene ventana individual, esa anula la global; si solo hay global,
+  // se usa esa). Cuando `capEnabled` es true se agrega una línea
+  // adicional al recibo con concepto 'capitalizacion' y el monto libre.
+  const [capState, setCapState] = useState<MyCapState | null>(null);
   const [capEnabled, setCapEnabled] = useState(false);
   const [capAmountInput, setCapAmountInput] = useState<string>('');
 
@@ -235,11 +235,10 @@ export default function ComprasPage() {
         console.error('Error cargando multas previas:', err);
       }
 
-      // Estado de la ventana de capitalizaciones (no bloqueante: si falla,
-      // simplemente no se muestra la sección).
+      // Estado de capitalización para este accionista (no bloqueante).
       try {
-        const state = await getCapitalizationWindowState(supabase);
-        if (!cancelled) setCapWindow(state);
+        const state = await getMyCapitalizationState(supabase);
+        if (!cancelled) setCapState(state);
       } catch (err) {
         console.error('Error cargando capitalizaciones:', err);
       }
@@ -348,8 +347,17 @@ export default function ComprasPage() {
       if (capAmountParsed <= 0) {
         return 'Indica el monto a capitalizar.';
       }
-      if (!capWindow?.is_open) {
-        return 'La ventana de capitalizaciones está cerrada.';
+      if (!capState?.allowed) {
+        return 'La capitalización no está disponible.';
+      }
+      // Si tiene ventana individual con tope, no permitimos exceder el remaining.
+      if (
+        capState.allowed &&
+        capState.scope === 'user' &&
+        capState.remaining != null &&
+        capAmountParsed > capState.remaining
+      ) {
+        return `El monto excede tu cupo (${cop(capState.remaining)} disponibles).`;
       }
     }
     return null;
@@ -358,7 +366,7 @@ export default function ComprasPage() {
     accionesValidationError,
     capEnabled,
     capAmountParsed,
-    capWindow,
+    capState,
   ]);
 
   // ===== Handlers del carrito =====
@@ -778,7 +786,7 @@ export default function ComprasPage() {
 
           {/* Capitalización (opcional, solo si la ventana está abierta) */}
           <CapitalizationSection
-            window={capWindow}
+            state={capState}
             enabled={capEnabled}
             setEnabled={setCapEnabled}
             amountInput={capAmountInput}
@@ -993,7 +1001,7 @@ export default function ComprasPage() {
 //   3. Ventana cerrada               → card deshabilitada ("No disponible").
 // =============================================================================
 function CapitalizationSection({
-  window: capWindow,
+  state,
   enabled,
   setEnabled,
   amountInput,
@@ -1001,7 +1009,7 @@ function CapitalizationSection({
   amountParsed,
   currentMonth,
 }: {
-  window: CapitalizationWindowState | null;
+  state: MyCapState | null;
   enabled: boolean;
   setEnabled: (v: boolean) => void;
   amountInput: string;
@@ -1011,12 +1019,10 @@ function CapitalizationSection({
 }) {
   // Mientras no haya respuesta del RPC, no renderizamos nada (evita flash de
   // "no disponible" cuando en realidad sí está abierta).
-  if (!capWindow) return null;
+  if (!state) return null;
 
-  const isOpen = capWindow.is_open;
-
-  // Cerrada → card compacta deshabilitada (requerimiento E1: sin motivo).
-  if (!isOpen) {
+  // Cerrada → card compacta deshabilitada.
+  if (!state.allowed) {
     return (
       <Card padding="lg" className="opacity-70">
         <div className="flex items-center gap-3">
@@ -1036,12 +1042,13 @@ function CapitalizationSection({
     );
   }
 
-  // Abierta. Mostramos progreso de la ventana y el control.
-  const pct = Math.max(0, Math.min(100, Number(capWindow.percentage ?? 0)));
-  const remaining = Math.max(
-    0,
-    Number(capWindow.target_amount ?? 0) - Number(capWindow.recaudado ?? 0),
-  );
+  // Abierta. Mostramos info de la ventana — distinta según scope.
+  const isUserScope = state.scope === 'user';
+  const remaining = state.remaining ?? 0;
+  const max = state.max_amount ?? 0;
+  const pct = isUserScope && max > 0 ? Math.min(100, ((max - remaining) / max) * 100) : 0;
+  const exceeds =
+    isUserScope && state.remaining != null && amountParsed > state.remaining;
 
   return (
     <Card padding="lg">
@@ -1050,23 +1057,30 @@ function CapitalizationSection({
           <TrendingUp size={16} strokeWidth={1.75} />
         </div>
         <div className="flex-1 min-w-0">
-          <h2 className="text-[15px] font-semibold tracking-tight">
-            Capitalización
-          </h2>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-[15px] font-semibold tracking-tight">
+              Capitalización
+            </h2>
+            {isUserScope ? (
+              <span className="text-[10px] font-semibold text-[var(--color-brand)] bg-[var(--color-brand-soft)] px-1.5 py-0.5 rounded uppercase tracking-wider">
+                Personal
+              </span>
+            ) : null}
+          </div>
           <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
-            Aporte opcional, en monto libre. Se asocia a{' '}
-            {monthLabel(currentMonth, true)}.
+            {isUserScope
+              ? `Aporte opcional. Se asocia a ${monthLabel(currentMonth, true)}.`
+              : `Aporte opcional, en monto libre. Se asocia a ${monthLabel(currentMonth, true)}.`}
           </p>
         </div>
       </div>
 
-      {/* Progreso de la ventana */}
-      {capWindow.target_amount > 0 && (
+      {/* Info de la ventana individual: progreso del cupo */}
+      {isUserScope && (
         <div className="mb-4">
           <div className="flex items-center justify-between text-[11px] text-[var(--color-text-muted)] mb-1.5">
             <span>
-              Recaudado {cop(capWindow.recaudado)} de{' '}
-              {cop(capWindow.target_amount)}
+              Cupo usado {cop(state.used ?? 0)} de {cop(max)}
             </span>
             <span className="font-semibold tabular">
               {pct.toFixed(pct % 1 === 0 ? 0 : 1)} %
@@ -1078,12 +1092,20 @@ function CapitalizationSection({
               style={{ width: `${pct}%` }}
             />
           </div>
-          {capWindow.deadline && (
-            <div className="text-[11px] text-[var(--color-text-subtle)] mt-1.5">
-              Cierra el {capWindow.deadline} o al llegar al objetivo (faltan{' '}
-              {cop(remaining)}).
-            </div>
-          )}
+          <div className="text-[11px] text-[var(--color-text-subtle)] mt-1.5">
+            Cierra el {state.deadline}. Disponible para capitalizar:{' '}
+            <span className="font-semibold text-[var(--color-text)] tabular">
+              {cop(remaining)}
+            </span>
+            .
+          </div>
+        </div>
+      )}
+
+      {/* Info de la ventana global */}
+      {!isUserScope && (
+        <div className="mb-4 text-[11px] text-[var(--color-text-subtle)]">
+          Cierra el {state.deadline}. Sin tope individual.
         </div>
       )}
 
@@ -1150,6 +1172,12 @@ function CapitalizationSection({
             <div className="flex items-start gap-2 text-[11px] text-[var(--color-warn)]">
               <AlertTriangle size={12} strokeWidth={2} className="mt-px shrink-0" />
               Indica un monto mayor a cero o quita esta línea.
+            </div>
+          )}
+          {exceeds && (
+            <div className="flex items-start gap-2 text-[11px] text-[var(--color-danger)]">
+              <AlertTriangle size={12} strokeWidth={2} className="mt-px shrink-0" />
+              Excede tu cupo personal ({cop(state.remaining ?? 0)} disponibles).
             </div>
           )}
         </div>

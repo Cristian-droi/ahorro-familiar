@@ -27,6 +27,19 @@ import { Logo } from '@/components/ui/Logo';
 import { Avatar } from '@/components/ui/Avatar';
 import { getProfile, getProfileRole } from '@/lib/data/profiles';
 import { countPendingMembershipRequests } from '@/lib/data/membership-requests';
+import {
+  countPendingReceipts,
+  countRejectedReceiptsForUser,
+} from '@/lib/data/receipts';
+import {
+  countAdminPendingLoans,
+  countLoansActiveUnseenForUser,
+  countLoansAwaitingMyVote,
+  countLoansReadyForDisbursementForUser,
+  countLoansRequiringActionForUser,
+  type AdminPendingLoanCounts,
+} from '@/lib/data/loans';
+import type { TopNavNotificationItem } from '@/components/ui/TopNav';
 
 type DashboardUser = {
   first: string;
@@ -39,6 +52,37 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [role, setRole] = useState<'admin' | 'accionista' | null>(null);
   const [user, setUser] = useState<DashboardUser>({ first: '', last: '' });
   const [pendingCount, setPendingCount] = useState<number>(0);
+  const [pendingReceipts, setPendingReceipts] = useState<number>(0);
+  const [pendingLoans, setPendingLoans] = useState<AdminPendingLoanCounts>({
+    pendingReview: 0,
+    pendingDisbursement: 0,
+    total: 0,
+  });
+  // Conteos del accionista
+  const [pendingVotes, setPendingVotes] = useState<number>(0);
+  const [pendingRejected, setPendingRejected] = useState<number>(0);
+  const [pendingLoanAction, setPendingLoanAction] = useState<number>(0);
+  const [pendingLoanReady, setPendingLoanReady] = useState<number>(0);
+  const [pendingLoanActive, setPendingLoanActive] = useState<number>(0);
+
+  // Sidebar abrible/cerrable. En desktop arranca abierto; en mobile cerrado.
+  // Usamos un state único: sidebarOpen. El layout aplica clases distintas
+  // para overlay (mobile) o slot (desktop).
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
+  useEffect(() => {
+    // En el primer render del cliente decidimos según viewport.
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      setSidebarOpen(false);
+    }
+  }, []);
+
+  // En mobile, cerrar el sidebar al cambiar de página (UX clásica).
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      setSidebarOpen(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname]);
 
   useEffect(() => {
     let cancelled = false;
@@ -50,6 +94,24 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         if (!cancelled) setPendingCount(count);
       } catch (err) {
         console.error('Error contando solicitudes pendientes:', err);
+      }
+    };
+
+    const fetchPendingReceipts = async () => {
+      try {
+        const count = await countPendingReceipts(supabase);
+        if (!cancelled) setPendingReceipts(count);
+      } catch (err) {
+        console.error('Error contando recibos pendientes:', err);
+      }
+    };
+
+    const fetchPendingLoans = async () => {
+      try {
+        const counts = await countAdminPendingLoans(supabase);
+        if (!cancelled) setPendingLoans(counts);
+      } catch (err) {
+        console.error('Error contando préstamos pendientes:', err);
       }
     };
 
@@ -70,14 +132,101 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       });
 
       if (currentRole === 'admin') {
-        // Suscripción a solicitudes pendientes solo tiene sentido para admin.
+        // Suscripciones a contadores pendientes — un único canal con varios
+        // listeners para no abrir 3 websockets distintos.
         fetchPendingCount();
+        fetchPendingReceipts();
+        fetchPendingLoans();
         const channel = supabase
-          .channel('dashboard-pending-count')
+          .channel('dashboard-pending-counts')
           .on(
             'postgres_changes',
             { event: '*', schema: 'public', table: 'membership_requests' },
             () => fetchPendingCount(),
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'receipts' },
+            () => fetchPendingReceipts(),
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'loans' },
+            () => fetchPendingLoans(),
+          )
+          .subscribe();
+        cleanupRef.current = () => supabase.removeChannel(channel);
+      } else {
+        // Accionista: contadores de cosas que requieren su acción —
+        // préstamos esperando su voto y recibos rechazados (deben editar
+        // y reenviar). Suscribimos a loans, loan_votes y receipts.
+        const uid = data.user.id;
+        const fetchPendingVotes = async () => {
+          try {
+            const n = await countLoansAwaitingMyVote(supabase, uid);
+            if (!cancelled) setPendingVotes(n);
+          } catch (err) {
+            console.error('Error contando votos pendientes:', err);
+          }
+        };
+        const fetchPendingRejected = async () => {
+          try {
+            const n = await countRejectedReceiptsForUser(supabase, uid);
+            if (!cancelled) setPendingRejected(n);
+          } catch (err) {
+            console.error('Error contando recibos rechazados:', err);
+          }
+        };
+        const fetchPendingLoanAction = async () => {
+          try {
+            const n = await countLoansRequiringActionForUser(supabase, uid);
+            if (!cancelled) setPendingLoanAction(n);
+          } catch (err) {
+            console.error('Error contando préstamos por revisar:', err);
+          }
+        };
+        const fetchPendingLoanReady = async () => {
+          try {
+            const n = await countLoansReadyForDisbursementForUser(supabase, uid);
+            if (!cancelled) setPendingLoanReady(n);
+          } catch (err) {
+            console.error('Error contando préstamos listos para desembolso:', err);
+          }
+        };
+        const fetchPendingLoanActive = async () => {
+          try {
+            const n = await countLoansActiveUnseenForUser(supabase, uid);
+            if (!cancelled) setPendingLoanActive(n);
+          } catch (err) {
+            console.error('Error contando préstamos recién desembolsados:', err);
+          }
+        };
+        fetchPendingVotes();
+        fetchPendingRejected();
+        fetchPendingLoanAction();
+        fetchPendingLoanReady();
+        fetchPendingLoanActive();
+        const channel = supabase
+          .channel(`dashboard-shareholder-counts-${uid}`)
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'loans' },
+            () => {
+              fetchPendingVotes();
+              fetchPendingLoanAction();
+              fetchPendingLoanReady();
+              fetchPendingLoanActive();
+            },
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'loan_votes' },
+            () => fetchPendingVotes(),
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'receipts', filter: `user_id=eq.${uid}` },
+            () => fetchPendingRejected(),
           )
           .subscribe();
         cleanupRef.current = () => supabase.removeChannel(channel);
@@ -108,8 +257,20 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       badge: pendingCount > 0 ? pendingCount : undefined,
     },
     { key: 'miembros', label: 'Accionistas', href: '/dashboard/miembros', icon: Users },
-    { key: 'prestamos', label: 'Préstamos', href: '/dashboard/admin/prestamos', icon: Landmark },
-    { key: 'libro', label: 'Libro de caja', href: '/dashboard/libro-caja', icon: BookOpen },
+    {
+      key: 'prestamos',
+      label: 'Préstamos',
+      href: '/dashboard/admin/prestamos',
+      icon: Landmark,
+      badge: pendingLoans.total > 0 ? pendingLoans.total : undefined,
+    },
+    {
+      key: 'libro',
+      label: 'Libro de caja',
+      href: '/dashboard/libro-caja',
+      icon: BookOpen,
+      badge: pendingReceipts > 0 ? pendingReceipts : undefined,
+    },
     {
       key: 'libro-accionista',
       label: 'Libro de accionista',
@@ -122,8 +283,23 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const accionistaNav: NavItem[] = [
     { key: 'home', label: 'Mi capital', href: '/dashboard/accionista', icon: Wallet },
     { key: 'compras', label: 'Comprar', href: '/dashboard/compras', icon: ShoppingCart },
-    { key: 'prestamos', label: 'Préstamos', href: '/dashboard/prestamos', icon: Landmark },
-    { key: 'historial', label: 'Historial', href: '/dashboard/historial', icon: Receipt },
+    {
+      key: 'prestamos',
+      label: 'Préstamos',
+      href: '/dashboard/prestamos',
+      icon: Landmark,
+      badge:
+        pendingVotes + pendingLoanAction + pendingLoanReady + pendingLoanActive > 0
+          ? pendingVotes + pendingLoanAction + pendingLoanReady + pendingLoanActive
+          : undefined,
+    },
+    {
+      key: 'historial',
+      label: 'Historial',
+      href: '/dashboard/historial',
+      icon: Receipt,
+      badge: pendingRejected > 0 ? pendingRejected : undefined,
+    },
     { key: 'extracto', label: 'Extracto', href: '/dashboard/extracto', icon: ClipboardList },
     { key: 'ajustes', label: 'Ajustes', href: '/dashboard/ajustes', icon: Settings },
   ];
@@ -142,12 +318,106 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     router.push('/login');
   };
 
+  // Items del dropdown de notificaciones del header. Cambian según el role.
+  // El total y el filtrado por count > 0 lo hace TopNav.
+  const buildNotifications = (): TopNavNotificationItem[] => {
+    if (isAdmin) {
+      return [
+        {
+          key: 'membership',
+          label: 'Solicitudes de ingreso',
+          count: pendingCount,
+          href: '/dashboard/solicitudes',
+          icon: FileText,
+        },
+        {
+          key: 'receipts',
+          label: 'Recibos por aprobar',
+          count: pendingReceipts,
+          href: '/dashboard/libro-caja',
+          icon: Receipt,
+        },
+        {
+          key: 'loan-review',
+          label: 'Préstamos en revisión',
+          count: pendingLoans.pendingReview,
+          href: '/dashboard/admin/prestamos',
+          icon: Landmark,
+        },
+        {
+          key: 'loan-disb',
+          label: 'Préstamos por desembolsar',
+          count: pendingLoans.pendingDisbursement,
+          href: '/dashboard/admin/prestamos',
+          icon: Landmark,
+        },
+      ];
+    }
+    return [
+      {
+        key: 'votes',
+        label: 'Préstamos esperando tu voto',
+        count: pendingVotes,
+        href: '/dashboard/prestamos/votar',
+        icon: Landmark,
+      },
+      {
+        key: 'loan-action',
+        label: 'Préstamos por revisar o rechazados',
+        count: pendingLoanAction,
+        href: '/dashboard/prestamos',
+        icon: Landmark,
+      },
+      {
+        key: 'loan-ready',
+        label: 'Préstamos listos para desembolso',
+        count: pendingLoanReady,
+        href: '/dashboard/prestamos',
+        icon: Landmark,
+      },
+      {
+        key: 'loan-active',
+        label: 'Préstamos recién desembolsados',
+        count: pendingLoanActive,
+        href: '/dashboard/prestamos',
+        icon: Landmark,
+      },
+      {
+        key: 'rejected',
+        label: 'Recibos por reenviar',
+        count: pendingRejected,
+        href: '/dashboard/historial',
+        icon: Receipt,
+      },
+    ];
+  };
+
   return (
     <div className="min-h-screen h-screen bg-[var(--color-bg)] text-[var(--color-text)] flex">
       <ToastContainer />
 
-      {/* Sidebar */}
-      <aside className="w-[248px] shrink-0 h-screen bg-[var(--color-bg)] dark:bg-[var(--color-surface-sunken)] border-r border-[var(--color-border)] flex flex-col px-3.5 py-5">
+      {/* Backdrop mobile — solo cuando el sidebar está abierto y estamos
+          bajo md. En desktop el backdrop nunca aparece. */}
+      {sidebarOpen && (
+        <div
+          aria-hidden
+          onClick={() => setSidebarOpen(false)}
+          className="md:hidden fixed inset-0 z-30 bg-black/40 animate-in fade-in duration-150"
+        />
+      )}
+
+      {/* Sidebar — fixed en mobile (overlay), inline en desktop. Cuando
+          sidebarOpen es false se desliza fuera de pantalla. */}
+      <aside
+        className={`
+          fixed md:static z-40 h-screen w-[248px] shrink-0
+          bg-[var(--color-bg)] dark:bg-[var(--color-surface-sunken)]
+          border-r border-[var(--color-border)]
+          flex flex-col px-3.5 py-5
+          transition-transform duration-200 ease-out
+          ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:hidden'}
+        `}
+      >
         {/* Brand */}
         <div className="flex items-center gap-2.5 px-2.5 pt-1 pb-5">
           <div className="w-[34px] h-[34px] rounded-[9px] bg-[var(--color-brand)] flex items-center justify-center text-white dark:text-[var(--color-brand-ink)]">
@@ -239,9 +509,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
       {/* Main */}
       <main className="flex-1 flex flex-col min-w-0 h-screen overflow-hidden">
-        <TopNav />
+        <TopNav
+          notifications={role ? buildNotifications() : undefined}
+          onToggleSidebar={() => setSidebarOpen((v) => !v)}
+          sidebarOpen={sidebarOpen}
+        />
         <div className="flex-1 overflow-y-auto">
-          <div className="max-w-[1200px] mx-auto px-6 lg:px-9 py-7 lg:py-8">{children}</div>
+          <div className="max-w-[1200px] mx-auto px-4 md:px-6 lg:px-9 py-5 md:py-7 lg:py-8">
+            {children}
+          </div>
         </div>
       </main>
     </div>

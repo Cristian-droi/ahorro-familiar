@@ -1,97 +1,137 @@
-// Helpers para la ventana de capitalizaciones. El estado vive en
-// system_settings.capitalization_window y lo consulta el RPC
-// `get_capitalization_window_state`, que además cuenta el recaudo actual
-// (pending + approved desde opened_at). El RPC es security definer, así que
-// tanto admins como accionistas obtienen la misma foto.
+// Helpers para el modelo v2 de ventanas de capitalización (tabla
+// `capitalization_windows`). Hay dos scopes:
+//   - 'global': aplica a todos los accionistas que no tengan ventana
+//     individual. Sin tope.
+//   - 'user':   aplica solo a ese accionista. Tope max_amount. ANULA la
+//     global para él.
+//
+// Acceso vía RPCs SECURITY DEFINER:
+//   - get_my_capitalization_state         (accionista)
+//   - get_capitalization_windows_admin    (admin lista activas)
+//   - open_capitalization_window_v2       (admin)
+//   - close_capitalization_window_v2      (admin)
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from '@/types/database';
 
 type Client = SupabaseClient<Database>;
 
-// Motivos posibles de cierre. `null` cuando está abierta. `not_configured`
-// indica que la fila en system_settings aún no existe (caso teórico post-fresh
-// install si la migración no corrió).
-export type CapitalizationCloseReason =
-  | 'disabled'
-  | 'closed_manually'
-  | 'deadline_passed'
-  | 'target_reached'
-  | 'not_configured'
-  | null;
+// =============================================================================
+// Estado del accionista
+// =============================================================================
+export type MyCapState =
+  | { allowed: false; reason?: string }
+  | {
+      allowed: true;
+      scope: 'global' | 'user';
+      window_id: string;
+      max_amount: number | null;
+      used: number | null;
+      remaining: number | null;
+      deadline: string; // 'YYYY-MM-DD'
+    };
 
-export interface CapitalizationWindowState {
-  is_open: boolean;
-  close_reason: CapitalizationCloseReason;
-  enabled: boolean;
-  target_amount: number;
-  deadline: string | null; // 'YYYY-MM-DD'
-  opened_at: string | null; // ISO timestamp
-  closed_manually: boolean;
-  recaudado: number;
-  percentage: number; // 0-100
-}
-
-function toState(raw: unknown): CapitalizationWindowState {
+function parseMyState(raw: unknown): MyCapState {
   const v = (raw ?? {}) as Record<string, unknown>;
+  if (!v.allowed) {
+    return {
+      allowed: false,
+      reason: typeof v.reason === 'string' ? v.reason : undefined,
+    };
+  }
+  const scope = v.scope === 'user' ? 'user' : 'global';
   return {
-    is_open: Boolean(v.is_open),
-    close_reason: (v.close_reason as CapitalizationCloseReason) ?? null,
-    enabled: Boolean(v.enabled),
-    target_amount: Number(v.target_amount ?? 0),
-    deadline: (v.deadline as string | null) ?? null,
-    opened_at: (v.opened_at as string | null) ?? null,
-    closed_manually: Boolean(v.closed_manually),
-    recaudado: Number(v.recaudado ?? 0),
-    percentage: Number(v.percentage ?? 0),
+    allowed: true,
+    scope,
+    window_id: String(v.window_id ?? ''),
+    max_amount: v.max_amount == null ? null : Number(v.max_amount),
+    used: v.used == null ? null : Number(v.used),
+    remaining: v.remaining == null ? null : Number(v.remaining),
+    deadline: String(v.deadline ?? ''),
   };
 }
 
-// Lee el estado vigente — úsalo tanto en cliente como en server.
-export async function getCapitalizationWindowState(
-  client: Client,
-): Promise<CapitalizationWindowState> {
-  const { data, error } = await client.rpc('get_capitalization_window_state');
+export async function getMyCapitalizationState(client: Client): Promise<MyCapState> {
+  const { data, error } = await client.rpc('get_my_capitalization_state');
   if (error) throw error;
-  return toState(data);
+  return parseMyState(data);
 }
 
-// Solo admin. Abre la ventana con monto objetivo y fecha límite.
-export async function openCapitalizationWindow(
+// =============================================================================
+// Lista admin
+// =============================================================================
+export type AdminCapWindow = {
+  id: string;
+  scope: 'global' | 'user';
+  user_id: string | null;
+  user_name: string | null;
+  user_document: string | null;
+  max_amount: number | null;
+  used_amount: number;
+  remaining: number | null;
+  deadline: string;
+  opened_at: string;
+};
+
+export async function listAdminCapitalizationWindows(
   client: Client,
-  args: { targetAmount: number; deadline: string },
-): Promise<CapitalizationWindowState> {
-  const { data, error } = await client.rpc('open_capitalization_window', {
-    p_target_amount: args.targetAmount,
+): Promise<AdminCapWindow[]> {
+  const { data, error } = await client.rpc('get_capitalization_windows_admin');
+  if (error) throw error;
+  return (data ?? []).map((row) => ({
+    id: row.id,
+    scope: row.scope === 'user' ? 'user' : 'global',
+    user_id: row.user_id,
+    user_name: row.user_name,
+    user_document: row.user_document,
+    max_amount: row.max_amount == null ? null : Number(row.max_amount),
+    used_amount: Number(row.used_amount ?? 0),
+    remaining: row.remaining == null ? null : Number(row.remaining),
+    deadline: row.deadline,
+    opened_at: row.opened_at,
+  }));
+}
+
+// =============================================================================
+// Mutaciones admin
+// =============================================================================
+export async function openGlobalCapitalizationWindow(
+  client: Client,
+  args: { deadline: string },
+): Promise<string> {
+  // p_user_id y p_max_amount son NULL para scope='global'. Los types
+  // generados los marcan como string/number obligatorios; casteamos para
+  // evitar el chequeo (la función SQL acepta NULL en scope global).
+  const { data, error } = await client.rpc('open_capitalization_window_v2', {
+    p_scope: 'global',
+    p_user_id: null,
+    p_max_amount: null,
+    p_deadline: args.deadline,
+  } as never);
+  if (error) throw error;
+  return String(data);
+}
+
+export async function openUserCapitalizationWindow(
+  client: Client,
+  args: { userId: string; maxAmount: number; deadline: string },
+): Promise<string> {
+  const { data, error } = await client.rpc('open_capitalization_window_v2', {
+    p_scope: 'user',
+    p_user_id: args.userId,
+    p_max_amount: args.maxAmount,
     p_deadline: args.deadline,
   });
   if (error) throw error;
-  return toState(data);
+  return String(data);
 }
 
-// Solo admin. Marca la ventana como cerrada manualmente.
-export async function closeCapitalizationWindow(
+export async function closeCapitalizationWindowV2(
   client: Client,
-): Promise<CapitalizationWindowState> {
-  const { data, error } = await client.rpc('close_capitalization_window');
+  windowId: string,
+): Promise<void> {
+  const { error } = await client.rpc('close_capitalization_window_v2', {
+    p_window_id: windowId,
+  });
   if (error) throw error;
-  return toState(data);
-}
-
-// Etiqueta humana del motivo de cierre para la UI.
-export function closeReasonLabel(reason: CapitalizationCloseReason): string {
-  switch (reason) {
-    case 'disabled':
-      return 'No habilitada por el administrador';
-    case 'closed_manually':
-      return 'Cerrada por el administrador';
-    case 'deadline_passed':
-      return 'La fecha límite ya pasó';
-    case 'target_reached':
-      return 'Se alcanzó el monto objetivo';
-    case 'not_configured':
-      return 'Sin configurar';
-    default:
-      return '';
-  }
 }

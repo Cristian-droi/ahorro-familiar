@@ -4,8 +4,10 @@ import { useEffect, useState } from 'react';
 
 export type Theme = 'light' | 'dark';
 
-// Lee el tema actual sin romper SSR. Se usa como lazy initializer de useState.
-export function readInitialTheme(): Theme {
+// Lee el tema actual desde el DOM (que ya quedó pintado por el script
+// inline de RootLayout). Solo se usa en el cliente — en SSR siempre
+// devolvemos 'light' como placeholder neutro.
+function readThemeFromDom(): Theme {
   if (typeof document === 'undefined') return 'light';
   return document.documentElement.classList.contains('dark') ? 'dark' : 'light';
 }
@@ -24,11 +26,23 @@ export function applyTheme(theme: Theme) {
 }
 
 // Hook de conveniencia: expone el tema actual y un toggle que lo persiste.
+//
+// Importante: el state inicial es SIEMPRE 'light' en SSR/primer render del
+// cliente para evitar hydration mismatch. Después del mount sincronizamos
+// con el DOM (que ya tiene la clase correcta gracias al script inline de
+// RootLayout). `mounted` indica si ya se sincronizó — los componentes
+// pueden usarlo para renderizar el icono real solo después del mount y
+// evitar el flash Moon→Sun.
 export function useTheme() {
-  const [theme, setThemeState] = useState<Theme>(readInitialTheme);
+  const [theme, setThemeState] = useState<Theme>('light');
+  const [mounted, setMounted] = useState(false);
 
-  // Sincroniza con cambios externos (ej: otro tab escribe en localStorage).
   useEffect(() => {
+    // Sincronizamos el state con lo que el script inline ya aplicó al
+    // <html>. Si el user tenía dark guardado, esto baja 'dark' al state.
+    setThemeState(readThemeFromDom());
+    setMounted(true);
+
     const onStorage = (e: StorageEvent) => {
       if (e.key === 'theme' && (e.newValue === 'light' || e.newValue === 'dark')) {
         applyTheme(e.newValue);
@@ -46,5 +60,5 @@ export function useTheme() {
 
   const toggle = () => setTheme(theme === 'dark' ? 'light' : 'dark');
 
-  return { theme, setTheme, toggle };
+  return { theme, setTheme, toggle, mounted };
 }

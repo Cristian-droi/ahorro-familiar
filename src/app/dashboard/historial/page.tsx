@@ -226,6 +226,29 @@ export default function HistorialPage() {
     };
   }, [router, fetchReceipts]);
 
+  // Realtime: cualquier cambio en receipts o receipt_items refresca el
+  // historial sin que el accionista tenga que recargar (ej: el admin
+  // aprueba o rechaza su recibo). RLS asegura que solo recibe lo suyo.
+  useEffect(() => {
+    if (!userId) return;
+    const ch = supabase
+      .channel(`historial-live-${userId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'receipts', filter: `user_id=eq.${userId}` },
+        () => fetchReceipts(userId),
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'receipt_items' },
+        () => fetchReceipts(userId),
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, [userId, fetchReceipts]);
+
   const toggleExpanded = (id: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);

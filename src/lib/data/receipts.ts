@@ -14,6 +14,36 @@ export type { ReceiptRow, ReceiptItemRow };
 // permiten SELECT al dueño o al admin.
 // -----------------------------------------------------------------------------
 
+// Conteo rápido de recibos pendientes de aprobación. Sirve para el badge de
+// notificaciones del header (admin) — no traemos filas, solo el count.
+export async function countPendingReceipts(
+  client: TypedSupabaseClient,
+): Promise<number> {
+  const { count, error } = await client
+    .from('receipts')
+    .select('*', { count: 'exact', head: true })
+    .eq('status', 'pending');
+
+  if (error) throw error;
+  return count ?? 0;
+}
+
+// Recibos rechazados de un accionista — requieren su acción (editar +
+// reenviar). Lo usa el badge del nav "Historial" y el dropdown del header.
+export async function countRejectedReceiptsForUser(
+  client: TypedSupabaseClient,
+  userId: string,
+): Promise<number> {
+  const { count, error } = await client
+    .from('receipts')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .eq('status', 'rejected');
+
+  if (error) throw error;
+  return count ?? 0;
+}
+
 export async function listReceiptsForUser(
   client: TypedSupabaseClient,
   userId: string,

@@ -1,19 +1,24 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
-import { Plus, ChevronRight, Vote } from 'lucide-react';
+import { Plus, ChevronRight, Vote, ThumbsUp, ThumbsDown, Clock } from 'lucide-react';
 import { getLoansForUser, getLoansForVoting } from '@/lib/data/loans';
 import type { Loan } from '@/types/entities';
 import { cop } from '@/lib/format';
-import { LOAN_STATUS_LABELS, LOAN_STATUS_TONE } from '@/lib/loans';
+import { LOAN_STATUS_LABELS, LOAN_STATUS_TONE, requiredVotes } from '@/lib/loans';
 
 type VotingLoan = Loan & { has_voted: boolean; borrower_name: string };
+
+// Conteo de votos por loan — solo lo cargamos para los que están en
+// `pending_shareholder_vote`, así el accionista ve el progreso sin entrar
+// al detalle. `pending` es los que faltan para alcanzar el quorum.
+type VoteSummary = { approved: number; rejected: number };
 
 export default function PrestamosPage() {
   const router = useRouter();
@@ -21,6 +26,53 @@ export default function PrestamosPage() {
   const [votingLoans, setVotingLoans] = useState<VotingLoan[]>([]);
   const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Conteo de votos por loan_id — solo se llena para los préstamos en
+  // votación del propio user.
+  const [voteSummaries, setVoteSummaries] = useState<Map<string, VoteSummary>>(
+    new Map(),
+  );
+  const [totalShareholders, setTotalShareholders] = useState<number>(0);
+
+  // Refresca préstamos propios + préstamos en votación. Se llama en mount
+  // y cada vez que llega un evento realtime sobre la tabla loans.
+  const refresh = useCallback(async (uid: string) => {
+    try {
+      const [loans, voting, totalRes] = await Promise.all([
+        getLoansForUser(supabase, uid),
+        getLoansForVoting(supabase, uid),
+        supabase.rpc('count_active_shareholders'),
+      ]);
+      setMyLoans(loans);
+      setVotingLoans(voting);
+      setTotalShareholders(Number(totalRes.data ?? 0));
+
+      // Para cada préstamo propio en votación, traemos sus votos. La RLS
+      // permite SELECT sobre loan_votes a cualquier accionista, así que
+      // ver el conteo de su propio préstamo está OK.
+      const inVoting = loans.filter((l) => l.status === 'pending_shareholder_vote');
+      if (inVoting.length === 0) {
+        setVoteSummaries(new Map());
+        return;
+      }
+      const ids = inVoting.map((l) => l.id);
+      const { data: votes } = await supabase
+        .from('loan_votes')
+        .select('loan_id, vote')
+        .in('loan_id', ids);
+
+      const map = new Map<string, VoteSummary>();
+      for (const id of ids) map.set(id, { approved: 0, rejected: 0 });
+      for (const v of votes ?? []) {
+        const s = map.get(v.loan_id);
+        if (!s) continue;
+        if (v.vote === 'approve') s.approved += 1;
+        else if (v.vote === 'reject') s.rejected += 1;
+      }
+      setVoteSummaries(map);
+    } catch (err) {
+      console.error('Error cargando préstamos del accionista:', err);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -29,19 +81,47 @@ export default function PrestamosPage() {
       if (!user) { router.replace('/login'); return; }
       if (cancelled) return;
       setUserId(user.id);
+      await refresh(user.id);
+      if (!cancelled) setLoading(false);
 
-      const [loans, voting] = await Promise.all([
-        getLoansForUser(supabase, user.id),
-        getLoansForVoting(supabase, user.id),
-      ]);
-
-      if (cancelled) return;
-      setMyLoans(loans);
-      setVotingLoans(voting);
-      setLoading(false);
+      // Marca como "vistos" todos los préstamos del user que disparan
+      // notificación (rechazos, listos para desembolso, recién activos).
+      // El badge correspondiente desaparece a partir de ahora. El UPDATE
+      // dispara evento realtime sobre loans → el layout recalcula los
+      // conteos automáticamente.
+      try {
+        await supabase.rpc('mark_my_loans_status_seen');
+      } catch (err) {
+        console.warn('No se pudieron marcar préstamos como vistos:', err);
+      }
     })();
     return () => { cancelled = true; };
-  }, [router]);
+  }, [router, refresh]);
+
+  // Realtime: cualquier cambio en loans (nuevo préstamo, voto procesado,
+  // cambio de status, desembolso) refresca la vista, y también escuchamos
+  // loan_votes para que el resumen "X a favor / Y en contra" se actualice
+  // en vivo cuando otro accionista vota nuestro préstamo.
+  // RLS filtra qué préstamos / votos puede ver este accionista.
+  useEffect(() => {
+    if (!userId) return;
+    const ch = supabase
+      .channel(`accionista-prestamos-live-${userId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'loans' },
+        () => refresh(userId),
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'loan_votes' },
+        () => refresh(userId),
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, [userId, refresh]);
 
   if (loading) {
     return <div className="animate-pulse text-[var(--color-text-subtle)] text-sm">Cargando…</div>;
@@ -102,7 +182,12 @@ export default function PrestamosPage() {
             Mis solicitudes
           </div>
           {myLoans.map((loan) => (
-            <LoanRow key={loan.id} loan={loan} />
+            <LoanRow
+              key={loan.id}
+              loan={loan}
+              voteSummary={voteSummaries.get(loan.id)}
+              totalShareholders={totalShareholders}
+            />
           ))}
         </Card>
       )}
@@ -110,12 +195,31 @@ export default function PrestamosPage() {
   );
 }
 
-function LoanRow({ loan }: { loan: Loan }) {
+function LoanRow({
+  loan,
+  voteSummary,
+  totalShareholders,
+}: {
+  loan: Loan;
+  voteSummary?: VoteSummary;
+  totalShareholders: number;
+}) {
   const tone = LOAN_STATUS_TONE[loan.status] as 'success' | 'warn' | 'danger' | 'info' | 'brand' | 'neutral';
+  const inVoting = loan.status === 'pending_shareholder_vote';
+  // Total de votantes elegibles = accionistas activos - 1 (el solicitante
+  // no vota su propio préstamo). Si por algún motivo el RPC devolvió 0,
+  // mostramos solo lo recibido sin "de N".
+  const eligibleVoters = Math.max(totalShareholders - 1, 0);
+  const needed = requiredVotes(totalShareholders);
+  const approved = voteSummary?.approved ?? 0;
+  const rejected = voteSummary?.rejected ?? 0;
+  const cast = approved + rejected;
+  const pending = Math.max(eligibleVoters - cast, 0);
+
   return (
     <Link
       href={`/dashboard/prestamos/${loan.id}`}
-      className="flex items-center gap-4 px-5 py-4 border-t border-[var(--color-border)] hover:bg-[var(--color-surface-alt)]/50 transition-colors"
+      className="flex flex-col md:flex-row md:items-center gap-3 md:gap-4 px-5 py-4 border-t border-[var(--color-border)] hover:bg-[var(--color-surface-alt)]/50 transition-colors"
     >
       <div className="flex-1 min-w-0">
         <div className="text-[13px] font-semibold">
@@ -130,11 +234,45 @@ function LoanRow({ loan }: { loan: Loan }) {
             <> · Saldo: {cop(Number(loan.outstanding_balance))}</>
           )}
         </div>
+
+        {/* Resumen de votación — solo cuando el préstamo está esperando
+            que voten los accionistas. Mostramos a favor / en contra /
+            faltantes y cuántos votos hacen falta para aprobar. */}
+        {inVoting && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-[11px]">
+            <span className="inline-flex items-center gap-1 text-[var(--color-success)] font-semibold">
+              <ThumbsUp size={11} strokeWidth={2} />
+              {approved} a favor
+            </span>
+            <span className="inline-flex items-center gap-1 text-[var(--color-danger)] font-semibold">
+              <ThumbsDown size={11} strokeWidth={2} />
+              {rejected} en contra
+            </span>
+            {totalShareholders > 0 && (
+              <span className="inline-flex items-center gap-1 text-[var(--color-text-subtle)]">
+                <Clock size={11} strokeWidth={2} />
+                {pending} pendientes
+              </span>
+            )}
+            {totalShareholders > 0 && (
+              <span className="text-[var(--color-text-muted)]">
+                · necesita{' '}
+                <span className="font-semibold text-[var(--color-text)]">
+                  {needed}
+                </span>{' '}
+                para aprobar
+              </span>
+            )}
+          </div>
+        )}
       </div>
-      <Badge tone={tone as Parameters<typeof Badge>[0]['tone']}>
-        {LOAN_STATUS_LABELS[loan.status]}
-      </Badge>
-      <ChevronRight size={16} strokeWidth={1.75} className="text-[var(--color-text-subtle)] shrink-0" />
+
+      <div className="flex items-center gap-2 self-start md:self-auto shrink-0">
+        <Badge tone={tone as Parameters<typeof Badge>[0]['tone']}>
+          {LOAN_STATUS_LABELS[loan.status]}
+        </Badge>
+        <ChevronRight size={16} strokeWidth={1.75} className="text-[var(--color-text-subtle)]" />
+      </div>
     </Link>
   );
 }

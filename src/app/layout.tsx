@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -40,12 +41,18 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="es" suppressHydrationWarning>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
-      </head>
       <body
         className={`${inter.variable} ${jetbrainsMono.variable} font-sans antialiased text-[14px] min-h-full flex flex-col`}
       >
+        {/* Inyectado vía next/script con beforeInteractive — corre antes
+            del primer paint y NO se procesa como nodo React, así no
+            dispara el warning "Encountered a script tag while rendering
+            React component". */}
+        <Script
+          id="theme-init"
+          strategy="beforeInteractive"
+          dangerouslySetInnerHTML={{ __html: themeInitScript }}
+        />
         {children}
       </body>
     </html>

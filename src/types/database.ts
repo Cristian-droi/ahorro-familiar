@@ -12,33 +12,252 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.5"
   }
-  graphql_public: {
-    Tables: {
-      [_ in never]: never
-    }
-    Views: {
-      [_ in never]: never
-    }
-    Functions: {
-      graphql: {
-        Args: {
-          extensions?: Json
-          operationName?: string
-          query?: string
-          variables?: Json
-        }
-        Returns: Json
-      }
-    }
-    Enums: {
-      [_ in never]: never
-    }
-    CompositeTypes: {
-      [_ in never]: never
-    }
-  }
   public: {
     Tables: {
+      capitalization_windows: {
+        Row: {
+          closed_at: string | null
+          closed_reason: string | null
+          created_at: string
+          deadline: string
+          id: string
+          max_amount: number | null
+          opened_at: string
+          opened_by: string | null
+          scope: string
+          user_id: string | null
+        }
+        Insert: {
+          closed_at?: string | null
+          closed_reason?: string | null
+          created_at?: string
+          deadline: string
+          id?: string
+          max_amount?: number | null
+          opened_at?: string
+          opened_by?: string | null
+          scope: string
+          user_id?: string | null
+        }
+        Update: {
+          closed_at?: string | null
+          closed_reason?: string | null
+          created_at?: string
+          deadline?: string
+          id?: string
+          max_amount?: number | null
+          opened_at?: string
+          opened_by?: string | null
+          scope?: string
+          user_id?: string | null
+        }
+        Relationships: []
+      }
+      email_change_requests: {
+        Row: {
+          canceled_at: string | null
+          confirmed_at: string | null
+          created_at: string
+          expires_at: string
+          id: string
+          new_email: string
+          token: string
+          user_id: string
+        }
+        Insert: {
+          canceled_at?: string | null
+          confirmed_at?: string | null
+          created_at?: string
+          expires_at: string
+          id?: string
+          new_email: string
+          token: string
+          user_id: string
+        }
+        Update: {
+          canceled_at?: string | null
+          confirmed_at?: string | null
+          created_at?: string
+          expires_at?: string
+          id?: string
+          new_email?: string
+          token?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      loan_payment_plan_items: {
+        Row: {
+          capital_amount: number
+          created_at: string
+          due_date: string
+          estimated_balance_after: number
+          estimated_interest: number
+          id: string
+          loan_id: string
+          month_number: number
+        }
+        Insert: {
+          capital_amount?: number
+          created_at?: string
+          due_date: string
+          estimated_balance_after?: number
+          estimated_interest?: number
+          id?: string
+          loan_id: string
+          month_number: number
+        }
+        Update: {
+          capital_amount?: number
+          created_at?: string
+          due_date?: string
+          estimated_balance_after?: number
+          estimated_interest?: number
+          id?: string
+          loan_id?: string
+          month_number?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "loan_payment_plan_items_loan_id_fkey"
+            columns: ["loan_id"]
+            isOneToOne: false
+            referencedRelation: "loans"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      loan_votes: {
+        Row: {
+          comment: string | null
+          created_at: string
+          id: string
+          loan_id: string
+          vote: Database["public"]["Enums"]["loan_vote_value"]
+          voted_at: string
+          voter_id: string
+        }
+        Insert: {
+          comment?: string | null
+          created_at?: string
+          id?: string
+          loan_id: string
+          vote: Database["public"]["Enums"]["loan_vote_value"]
+          voted_at?: string
+          voter_id: string
+        }
+        Update: {
+          comment?: string | null
+          created_at?: string
+          id?: string
+          loan_id?: string
+          vote?: Database["public"]["Enums"]["loan_vote_value"]
+          voted_at?: string
+          voter_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "loan_votes_loan_id_fkey"
+            columns: ["loan_id"]
+            isOneToOne: false
+            referencedRelation: "loans"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loan_votes_voter_id_fkey"
+            columns: ["voter_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      loans: {
+        Row: {
+          admin_notes: string | null
+          borrower_seen_status_at: string | null
+          created_at: string
+          disbursed_amount: number | null
+          disbursed_at: string | null
+          disbursement_number: string | null
+          disbursement_proof_path: string | null
+          four_per_thousand: number
+          id: string
+          interest_rate: number
+          last_interest_payment_date: string | null
+          loan_shares_amount: number
+          loan_shares_count: number
+          loan_shares_paid_upfront: boolean
+          outstanding_balance: number
+          payment_plan_months: number | null
+          plan_rejection_reason: string | null
+          plan_status: string | null
+          rejection_reason: string | null
+          requested_amount: number
+          status: Database["public"]["Enums"]["loan_status"]
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          admin_notes?: string | null
+          borrower_seen_status_at?: string | null
+          created_at?: string
+          disbursed_amount?: number | null
+          disbursed_at?: string | null
+          disbursement_number?: string | null
+          disbursement_proof_path?: string | null
+          four_per_thousand?: number
+          id?: string
+          interest_rate?: number
+          last_interest_payment_date?: string | null
+          loan_shares_amount?: number
+          loan_shares_count?: number
+          loan_shares_paid_upfront?: boolean
+          outstanding_balance?: number
+          payment_plan_months?: number | null
+          plan_rejection_reason?: string | null
+          plan_status?: string | null
+          rejection_reason?: string | null
+          requested_amount: number
+          status?: Database["public"]["Enums"]["loan_status"]
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          admin_notes?: string | null
+          borrower_seen_status_at?: string | null
+          created_at?: string
+          disbursed_amount?: number | null
+          disbursed_at?: string | null
+          disbursement_number?: string | null
+          disbursement_proof_path?: string | null
+          four_per_thousand?: number
+          id?: string
+          interest_rate?: number
+          last_interest_payment_date?: string | null
+          loan_shares_amount?: number
+          loan_shares_count?: number
+          loan_shares_paid_upfront?: boolean
+          outstanding_balance?: number
+          payment_plan_months?: number | null
+          plan_rejection_reason?: string | null
+          plan_status?: string | null
+          rejection_reason?: string | null
+          requested_amount?: number
+          status?: Database["public"]["Enums"]["loan_status"]
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "loans_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       membership_requests: {
         Row: {
           address: string
@@ -144,39 +363,6 @@ export type Database = {
         }
         Relationships: []
       }
-      email_change_requests: {
-        Row: {
-          canceled_at: string | null
-          confirmed_at: string | null
-          created_at: string
-          expires_at: string
-          id: string
-          new_email: string
-          token: string
-          user_id: string
-        }
-        Insert: {
-          canceled_at?: string | null
-          confirmed_at?: string | null
-          created_at?: string
-          expires_at: string
-          id?: string
-          new_email: string
-          token: string
-          user_id: string
-        }
-        Update: {
-          canceled_at?: string | null
-          confirmed_at?: string | null
-          created_at?: string
-          expires_at?: string
-          id?: string
-          new_email?: string
-          token?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
       receipt_items: {
         Row: {
           amount: number
@@ -184,6 +370,7 @@ export type Database = {
           concept: Database["public"]["Enums"]["receipt_concept"]
           created_at: string
           id: string
+          loan_id: string | null
           receipt_id: string
           share_count: number | null
           target_month: string
@@ -195,6 +382,7 @@ export type Database = {
           concept: Database["public"]["Enums"]["receipt_concept"]
           created_at?: string
           id?: string
+          loan_id?: string | null
           receipt_id: string
           share_count?: number | null
           target_month: string
@@ -206,12 +394,20 @@ export type Database = {
           concept?: Database["public"]["Enums"]["receipt_concept"]
           created_at?: string
           id?: string
+          loan_id?: string | null
           receipt_id?: string
           share_count?: number | null
           target_month?: string
           unit_value?: number | null
         }
         Relationships: [
+          {
+            foreignKeyName: "receipt_items_loan_id_fkey"
+            columns: ["loan_id"]
+            isOneToOne: false
+            referencedRelation: "loans"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "receipt_items_receipt_id_fkey"
             columns: ["receipt_id"]
@@ -307,16 +503,58 @@ export type Database = {
           status: string
         }[]
       }
-      is_admin: { Args: never; Returns: boolean }
+      close_capitalization_window: { Args: never; Returns: Json }
+      close_capitalization_window_v2: {
+        Args: { p_window_id: string }
+        Returns: undefined
+      }
+      count_active_shareholders: { Args: never; Returns: number }
       get_capitalization_window_state: { Args: never; Returns: Json }
+      get_capitalization_windows_admin: {
+        Args: never
+        Returns: {
+          deadline: string
+          id: string
+          max_amount: number
+          opened_at: string
+          remaining: number
+          scope: string
+          used_amount: number
+          user_document: string
+          user_id: string
+          user_name: string
+        }[]
+      }
+      get_cash_balance: { Args: never; Returns: number }
+      get_my_capitalization_state: { Args: never; Returns: Json }
+      is_admin: { Args: never; Returns: boolean }
+      mark_my_loans_status_seen: { Args: never; Returns: number }
       open_capitalization_window: {
-        Args: { p_target_amount: number; p_deadline: string }
+        Args: { p_deadline: string; p_target_amount: number }
         Returns: Json
       }
-      close_capitalization_window: { Args: never; Returns: Json }
+      open_capitalization_window_v2: {
+        Args: {
+          p_deadline: string
+          p_max_amount: number
+          p_scope: string
+          p_user_id: string
+        }
+        Returns: string
+      }
     }
     Enums: {
       bank_account_type: "ahorros" | "corriente"
+      loan_status:
+        | "draft"
+        | "pending_review"
+        | "pending_shareholder_vote"
+        | "pending_disbursement"
+        | "active"
+        | "paid"
+        | "rejected_by_admin"
+        | "rejected_by_shareholders"
+      loan_vote_value: "approved" | "rejected"
       receipt_concept:
         | "acciones"
         | "acciones_prestamo"
@@ -454,12 +692,20 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
-  graphql_public: {
-    Enums: {},
-  },
   public: {
     Enums: {
       bank_account_type: ["ahorros", "corriente"],
+      loan_status: [
+        "draft",
+        "pending_review",
+        "pending_shareholder_vote",
+        "pending_disbursement",
+        "active",
+        "paid",
+        "rejected_by_admin",
+        "rejected_by_shareholders",
+      ],
+      loan_vote_value: ["approved", "rejected"],
       receipt_concept: [
         "acciones",
         "acciones_prestamo",

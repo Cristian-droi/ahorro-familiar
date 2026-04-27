@@ -32,7 +32,10 @@ import {
   FileDown,
   ArrowUpRight,
   ArrowDownLeft,
-  Landmark,
+  Wallet,
+  ArrowUp,
+  ArrowDown,
+  TrendingUp,
 } from 'lucide-react';
 import { exportToExcel, exportToPdf, type ExportSection } from '@/lib/exports';
 import { getProfileRole, listProfilesWithNames } from '@/lib/data/profiles';
@@ -106,7 +109,8 @@ export default function LibroCajaPage() {
   const [disbursements, setDisbursements] = useState<Loan[]>([]);
 
   // Filtros
-  const [status, setStatus] = useState<StatusFilter>('pending');
+  // Default: 'all' — el admin pidió ver todos los movimientos al entrar.
+  const [status, setStatus] = useState<StatusFilter>('all');
   const [userFilter, setUserFilter] = useState<string>('all');
   const [conceptFilter, setConceptFilter] = useState<string>('all');
   const [monthFilter, setMonthFilter] = useState<string>('all');
@@ -155,9 +159,12 @@ export default function LibroCajaPage() {
     }
   }, []);
 
+  // Auth + carga inicial. Lo separamos del setup de realtime para que el
+  // canal de Supabase NO se cancele/recree por identidad cambiante de
+  // router o fetchAll — si re-suscribimos seguido, perdemos eventos en el
+  // gap entre unsubscribe y subscribe.
   useEffect(() => {
     let cancelled = false;
-
     (async () => {
       const {
         data: { user },
@@ -179,27 +186,40 @@ export default function LibroCajaPage() {
       await fetchAll();
       if (!cancelled) setLoading(false);
     })();
+    return () => {
+      cancelled = true;
+    };
+  }, [router, fetchAll]);
 
-    // Realtime: cualquier cambio en receipts o items refresca.
+  // Realtime: cualquier cambio en receipts, items o loans (desembolsos)
+  // refresca el feed sin que el admin tenga que recargar la página. Deps
+  // vacías porque fetchAll es useCallback estable; un único canal vivo
+  // mientras el componente esté montado.
+  useEffect(() => {
     const ch = supabase
       .channel('libro-caja-live')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'receipts' },
-        () => !cancelled && fetchAll(),
+        () => fetchAll(),
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'receipt_items' },
-        () => !cancelled && fetchAll(),
+        () => fetchAll(),
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'loans' },
+        () => fetchAll(),
       )
       .subscribe();
 
     return () => {
-      cancelled = true;
       supabase.removeChannel(ch);
     };
-  }, [router, fetchAll]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ===== Filtros =====
 
@@ -285,6 +305,41 @@ export default function LibroCajaPage() {
       all: receipts.length,
     };
   }, [receipts]);
+
+  // Stats del mes corriente (zona Bogotá) para el bloque "Saldo en caja".
+  // Entradas = recibos aprobados del mes; Salidas = desembolsos del mes;
+  // Movimientos = cantidad total de movimientos del mes (recibos
+  // aprobados + desembolsos). Usamos solo aprobados/realizados para que
+  // el número refleje plata real, no proyecciones.
+  //
+  // OJO: getBogotaCurrentMonth() devuelve 'YYYY-MM-01' (con día), por eso
+  // comparamos sus primeros 7 chars contra los del timestamp.
+  const monthStats = useMemo(() => {
+    const ym = getBogotaCurrentMonth().slice(0, 7); // 'YYYY-MM'
+    let inflow = 0;
+    let outflow = 0;
+    let count = 0;
+    for (const r of receipts) {
+      if (r.status !== 'approved') continue;
+      const date = (r.reviewed_at ?? r.submitted_at ?? '').slice(0, 7);
+      if (date !== ym) continue;
+      inflow += Number(r.total_amount ?? 0);
+      count += 1;
+    }
+    for (const d of disbursements) {
+      const date = (d.disbursed_at ?? '').slice(0, 7);
+      if (date !== ym) continue;
+      outflow += Number(d.requested_amount ?? 0);
+      count += 1;
+    }
+    return { inflow, outflow, count };
+  }, [receipts, disbursements]);
+
+  // Etiqueta del mes corriente en español ("abril", "mayo", …).
+  const currentMonthLabel = useMemo(() => {
+    const ym = getBogotaCurrentMonth(); // ya viene como 'YYYY-MM-01'
+    return monthLabel(ym).split(' ')[0];
+  }, []);
 
   // ===== Acciones =====
 
@@ -541,23 +596,57 @@ export default function LibroCajaPage() {
         </div>
       </header>
 
-      {/* Saldo en caja — tarjeta prominente */}
+      {/* Saldo en caja — banner con stats del mes (entradas/salidas/movs).
+          En desktop va horizontal con divisores; en mobile se apila en
+          dos columnas (saldo arriba, stats abajo) para no romper la
+          legibilidad. */}
       {cashBalance !== null && (
-        <Card padding="lg" className="bg-[var(--color-success-soft)] border-[var(--color-success)]/25">
-          <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-[14px] bg-[var(--color-success)]/15 text-[var(--color-success)] flex items-center justify-center shrink-0">
-              <Landmark size={26} strokeWidth={1.75} />
+        <Card
+          padding="lg"
+          className="bg-[var(--color-success-soft)]/40 border-[var(--color-success)]/25"
+        >
+          <div className="flex flex-col md:flex-row md:items-center gap-5 md:gap-6">
+            {/* Saldo principal */}
+            <div className="flex items-start gap-4 md:flex-1 min-w-0">
+              <div className="w-12 h-12 md:w-14 md:h-14 rounded-[14px] bg-[var(--color-success)]/20 text-[var(--color-success)] flex items-center justify-center shrink-0">
+                <Wallet size={24} strokeWidth={1.75} />
+              </div>
+              <div className="flex flex-col min-w-0">
+                <span className="text-[10px] font-semibold text-[var(--color-success)] uppercase tracking-[0.14em]">
+                  Saldo en caja
+                </span>
+                <span className="text-[26px] md:text-[32px] font-semibold tracking-[-0.02em] text-[var(--color-success)] tabular leading-[1.1] mt-0.5">
+                  {cop(cashBalance)}
+                </span>
+                <span className="text-[11px] text-[var(--color-text-muted)] mt-1 max-w-[260px]">
+                  Disponible tras recibos aprobados y desembolsos.
+                </span>
+              </div>
             </div>
-            <div className="flex flex-col min-w-0 flex-1">
-              <span className="text-[11px] font-semibold text-[var(--color-success)] uppercase tracking-[0.14em]">
-                Saldo en caja
-              </span>
-              <span className="text-[32px] md:text-[36px] font-semibold tracking-[-0.02em] text-[var(--color-success)] tabular leading-[1.1]">
-                {cop(cashBalance)}
-              </span>
-              <span className="text-[12px] text-[var(--color-text-muted)] mt-1">
-                Disponible tras recibos aprobados y desembolsos.
-              </span>
+
+            {/* Stats del mes */}
+            <div className="grid grid-cols-3 md:flex md:items-center md:gap-6 gap-3 md:shrink-0">
+              <CashStat
+                icon={ArrowUp}
+                tone="success"
+                label="Entradas"
+                value={cop(monthStats.inflow)}
+                sub={currentMonthLabel}
+              />
+              <CashStat
+                icon={ArrowDown}
+                tone="danger"
+                label="Salidas"
+                value={cop(monthStats.outflow)}
+                sub={currentMonthLabel}
+              />
+              <CashStat
+                icon={TrendingUp}
+                tone="neutral"
+                label="Movimientos"
+                value={String(monthStats.count)}
+                sub="este mes"
+              />
             </div>
           </div>
         </Card>
@@ -686,42 +775,124 @@ export default function LibroCajaPage() {
                     year: 'numeric',
                   })
                 : '—';
+              // Desglose contable del CE: el "valor del crédito" es
+              // requested_amount; del lado del cash sale (requested - 4x1000 -
+              // acciones_prestamo si NO upfront). Las acciones_prestamo
+              // descontadas van al accionista como movimiento separado.
+              const requested = Number(d.requested_amount ?? 0);
+              const sharesAmount = Number(d.loan_shares_amount ?? 0);
+              const fpm = Number(d.four_per_thousand ?? 0);
+              const upfront = Boolean(d.loan_shares_paid_upfront);
+              const disbursedNet = Number(d.disbursed_amount ?? 0);
+              const isExpanded = expanded.has(m.id);
               return (
                 <Card key={m.id} padding="none" className="overflow-hidden">
-                  <div className="flex items-center gap-4 px-5 py-4">
-                    <div className="flex-1 flex items-center gap-3 min-w-0">
-                      <div
-                        className="w-9 h-9 rounded-full bg-[var(--color-danger-soft)] text-[var(--color-danger)] flex items-center justify-center shrink-0"
-                        title="Salida de caja — desembolso"
-                      >
-                        <ArrowUpRight size={16} strokeWidth={2} />
+                  <button
+                    type="button"
+                    onClick={() => toggleExpand(m.id)}
+                    className="w-full flex items-center gap-4 px-5 py-4 text-left cursor-pointer hover:bg-[var(--color-surface-alt)]/40 transition-colors"
+                  >
+                    <div
+                      className="w-9 h-9 rounded-full bg-[var(--color-danger-soft)] text-[var(--color-danger)] flex items-center justify-center shrink-0"
+                      title="Salida de caja — desembolso"
+                    >
+                      <ArrowUpRight size={16} strokeWidth={2} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-[14px] font-semibold tracking-tight truncate">
+                          {borrowerName}
+                        </span>
+                        <Badge tone="danger" dot>
+                          Desembolso
+                        </Badge>
+                        {d.status === 'paid' && (
+                          <Badge tone="success">Pagado</Badge>
+                        )}
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-[14px] font-semibold tracking-tight truncate">
-                            {borrowerName}
-                          </span>
-                          <Badge tone="danger" dot>
-                            Desembolso
-                          </Badge>
-                          {d.status === 'paid' && (
-                            <Badge tone="success">Pagado</Badge>
-                          )}
-                        </div>
-                        <div className="text-[11px] text-[var(--color-text-subtle)] mt-0.5 truncate">
-                          {d.disbursement_number ?? '—'} · {dateLabel}
-                        </div>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <div className="text-[15px] font-semibold tabular text-[var(--color-danger)]">
-                          − {cop(Number(d.disbursed_amount ?? 0))}
-                        </div>
-                        <div className="text-[11px] text-[var(--color-text-subtle)]">
-                          Salida de caja
-                        </div>
+                      <div className="text-[11px] text-[var(--color-text-subtle)] mt-0.5 truncate">
+                        {d.disbursement_number ?? '—'} · {dateLabel}
                       </div>
                     </div>
-                  </div>
+                    <div className="text-right shrink-0">
+                      <div className="text-[15px] font-semibold tabular text-[var(--color-danger)]">
+                        − {cop(requested)}
+                      </div>
+                      <div className="text-[11px] text-[var(--color-text-subtle)]">
+                        Crédito otorgado
+                      </div>
+                    </div>
+                    <div
+                      className="w-8 h-8 rounded-[8px] flex items-center justify-center text-[var(--color-text-subtle)] shrink-0"
+                      aria-label={isExpanded ? 'Contraer' : 'Expandir'}
+                    >
+                      {isExpanded ? (
+                        <ChevronUp size={18} strokeWidth={1.75} />
+                      ) : (
+                        <ChevronDown size={18} strokeWidth={1.75} />
+                      )}
+                    </div>
+                  </button>
+
+                  {isExpanded && (
+                    <div className="px-5 pb-5 border-t border-[var(--color-border)] bg-[var(--color-surface-alt)]/40">
+                      {/* Desglose */}
+                      <div className="mt-4">
+                        <div className="text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase mb-2">
+                          Desglose del desembolso
+                        </div>
+                        <div className="divide-y divide-[var(--color-border)] rounded-[10px] border border-[var(--color-border)] bg-[var(--color-surface)]">
+                          <DisbursementLine
+                            label="Crédito otorgado"
+                            sub="Valor total del préstamo"
+                            amount={requested}
+                          />
+                          {sharesAmount > 0 && (
+                            <DisbursementLine
+                              label="Acciones por préstamo"
+                              sub={
+                                upfront
+                                  ? 'Pagadas por adelantado (no se descuentan)'
+                                  : 'Descontadas del desembolso · van al accionista'
+                              }
+                              amount={sharesAmount}
+                              negative={!upfront}
+                            />
+                          )}
+                          {fpm > 0 && (
+                            <DisbursementLine
+                              label="Retención 4×1000"
+                              sub="Descontada al desembolso"
+                              amount={fpm}
+                              negative
+                            />
+                          )}
+                          <div className="flex items-center gap-3 px-3.5 py-3 text-[13px] bg-[var(--color-surface-alt)]">
+                            <span className="flex-1 font-semibold text-[var(--color-text)]">
+                              Neto entregado al accionista
+                            </span>
+                            <span className="font-semibold tabular text-[var(--color-danger)]">
+                              {cop(disbursedNet)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Comprobante */}
+                      {d.disbursement_proof_path && (
+                        <div className="mt-4 flex items-center gap-2 flex-wrap">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => openProof(d.disbursement_proof_path)}
+                          >
+                            <Download size={14} strokeWidth={1.75} />
+                            Ver comprobante de transferencia
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </Card>
               );
             }
@@ -770,7 +941,16 @@ export default function LibroCajaPage() {
                       </div>
                     </div>
                     <div className="text-right shrink-0">
-                      <div className="text-[15px] font-semibold tabular">
+                      <div
+                        className={`text-[15px] font-semibold tabular ${
+                          r.status === 'approved'
+                            ? 'text-[var(--color-success)]'
+                            : r.status === 'rejected'
+                              ? 'text-[var(--color-text-subtle)] line-through'
+                              : 'text-[var(--color-text)]'
+                        }`}
+                      >
+                        {'+ '}
                         {cop(Number(r.total_amount))}
                       </div>
                       <div className="text-[11px] text-[var(--color-text-subtle)]">
@@ -779,9 +959,11 @@ export default function LibroCajaPage() {
                     </div>
                   </button>
 
-                  {/* Acciones rápidas en estado pending */}
+                  {/* Acciones rápidas en estado pending — solo desktop. En
+                      mobile se accede expandiendo el recibo (los botones
+                      grandes ya viven dentro del panel expandido). */}
                   {r.status === 'pending' && (
-                    <div className="flex items-center gap-1.5 shrink-0">
+                    <div className="hidden md:flex items-center gap-1.5 shrink-0">
                       <Button
                         variant="success"
                         size="sm"
@@ -1043,6 +1225,85 @@ export default function LibroCajaPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// Stat compacto del mes para el banner de "Saldo en caja". Renderiza
+// icono coloreado + label + valor + subtítulo (mes o "este mes").
+function CashStat({
+  icon: Icon,
+  tone,
+  label,
+  value,
+  sub,
+}: {
+  icon: typeof ArrowUp;
+  tone: 'success' | 'danger' | 'neutral';
+  label: string;
+  value: string;
+  sub: string;
+}) {
+  const toneClass =
+    tone === 'success'
+      ? 'bg-[var(--color-success-soft)] text-[var(--color-success)]'
+      : tone === 'danger'
+        ? 'bg-[var(--color-danger-soft)] text-[var(--color-danger)]'
+        : 'bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]';
+  return (
+    <div className="flex items-center gap-2.5 min-w-0">
+      <div
+        className={`w-9 h-9 rounded-[10px] ${toneClass} flex items-center justify-center shrink-0`}
+      >
+        <Icon size={15} strokeWidth={2} />
+      </div>
+      <div className="flex flex-col min-w-0">
+        <span className="text-[10px] font-semibold text-[var(--color-text-subtle)] uppercase tracking-[0.12em]">
+          {label}
+        </span>
+        <span className="text-[14px] md:text-[15px] font-semibold tracking-tight tabular truncate">
+          {value}
+        </span>
+        <span className="text-[10.5px] text-[var(--color-text-subtle)] capitalize">
+          {sub}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// Línea de detalle del desembolso (CE expandido). Pinta el monto en rojo
+// cuando representa un descuento de caja, y en neutro cuando es el monto
+// bruto del crédito otorgado.
+function DisbursementLine({
+  label,
+  sub,
+  amount,
+  negative,
+}: {
+  label: string;
+  sub?: string;
+  amount: number;
+  negative?: boolean;
+}) {
+  return (
+    <div className="flex items-center gap-3 px-3.5 py-2.5 text-[13px]">
+      <div className="flex-1 min-w-0">
+        <div className="font-semibold text-[var(--color-text)]">{label}</div>
+        {sub && (
+          <div className="text-[11px] text-[var(--color-text-subtle)]">
+            {sub}
+          </div>
+        )}
+      </div>
+      <div
+        className={`text-right font-semibold tabular ${
+          negative ? 'text-[var(--color-danger)]' : ''
+        }`}
+      >
+        {negative ? '− ' : ''}
+        {cop(amount)}
+      </div>
     </div>
   );
 }

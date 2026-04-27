@@ -337,7 +337,11 @@ export default function ExtractoPage() {
           status,
         });
 
-        if (it.concept === 'acciones') {
+        if (it.concept === 'acciones' || it.concept === 'acciones_prestamo') {
+          // Las acciones por préstamo entran al mismo bucket que las
+          // ordinarias: contablemente son acciones del accionista (con
+          // share_count y unit_value poblados por el desembolso). Lo único
+          // distinto es su origen — se muestran en el mes del desembolso.
           const shares = it.share_count ?? 0;
           const amount = Number(it.amount);
           if (status === 'approved') {

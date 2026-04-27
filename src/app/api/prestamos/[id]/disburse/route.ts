@@ -16,6 +16,10 @@ import { getCashBalance } from '@/lib/data/loans';
 //   - Se recalcula el plan de pagos con la fecha real de desembolso
 //   - El trigger assigns CE- number automáticamente
 //   - El préstamo queda active
+//   - Si loan_shares_paid_upfront=false y loan_shares_amount>0:
+//       Se crea automáticamente un recibo aprobado con un item
+//       acciones_prestamo por el monto descontado, ligado al loan_id.
+//       Es contable (no entra cash); get_cash_balance() lo neutraliza.
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -147,6 +151,83 @@ export async function POST(
       await admin
         .from('loan_payment_plan_items')
         .insert(planRows.map((r) => ({ ...r, loan_id: id })));
+    }
+
+    // ====================================================================
+    // Acciones por préstamo descontadas — generar recibo automático.
+    //
+    // Cuando el accionista eligió "descuento al desembolso" (no upfront),
+    // las acciones por préstamo NO entraron al fondo como un recibo CI
+    // separado sino que se descuentan del monto que se le entrega ahora.
+    // Para que esas acciones queden registradas como movimiento del
+    // accionista (visibles en su extracto y como item del CE expandido),
+    // creamos automáticamente un recibo aprobado con un item
+    // 'acciones_prestamo' ligado a este loan.
+    //
+    // Importante: este recibo NO representa cash real entrante. La
+    // función get_cash_balance() lo neutraliza filtrando por
+    // loan_shares_paid_upfront = false + loan_id NOT NULL.
+    // ====================================================================
+    const loanSharesAmount = Number(loan.loan_shares_amount);
+    if (!loan.loan_shares_paid_upfront && loanSharesAmount > 0) {
+      // Traemos el valor de acción del socio para poblar share_count/unit_value.
+      // Si no está, dejamos amount sin desglose por acciones (es válido para
+      // este concepto: el constraint receipt_items_acciones_shape solo aplica
+      // a concept = 'acciones').
+      const { data: borrowerProfile } = await admin
+        .from('profiles')
+        .select('selected_share_value')
+        .eq('id', loan.user_id)
+        .maybeSingle();
+      const unitValue =
+        borrowerProfile?.selected_share_value != null
+          ? Number(borrowerProfile.selected_share_value)
+          : null;
+
+      // target_month = primer día del mes del desembolso (constraint del schema).
+      const yyyy = disbursedAt.getFullYear();
+      const mm = String(disbursedAt.getMonth() + 1).padStart(2, '0');
+      const targetMonth = `${yyyy}-${mm}-01`;
+
+      const { data: createdReceipt, error: receiptErr } = await admin
+        .from('receipts')
+        .insert({
+          user_id: loan.user_id,
+          status: 'approved',
+          submitted_at: disbursedAt.toISOString(),
+          reviewed_at: disbursedAt.toISOString(),
+          reviewed_by: authCheck.user.id,
+          total_amount: loanSharesAmount,
+        })
+        .select('id')
+        .single();
+
+      if (receiptErr || !createdReceipt) {
+        console.error('disburse: no se pudo crear el recibo de acciones_prestamo', receiptErr);
+        // No bloqueamos el desembolso: el préstamo ya quedó active. Lo logueamos
+        // para que el admin pueda crear el recibo manualmente si hace falta.
+      } else {
+        // share_count y unit_value son opcionales para 'acciones_prestamo'.
+        // El constraint del schema exige share_count > 0 si se pasa, así que
+        // mandamos null cuando no hay un valor positivo válido.
+        const sharesCount =
+          loan.loan_shares_count != null && Number(loan.loan_shares_count) > 0
+            ? Number(loan.loan_shares_count)
+            : null;
+        const { error: itemErr } = await admin.from('receipt_items').insert({
+          receipt_id: createdReceipt.id,
+          concept: 'acciones_prestamo',
+          target_month: targetMonth,
+          share_count: sharesCount,
+          unit_value: sharesCount != null ? unitValue : null,
+          amount: loanSharesAmount,
+          loan_id: id,
+          auto_generated: false,
+        });
+        if (itemErr) {
+          console.error('disburse: no se pudo crear el item de acciones_prestamo', itemErr);
+        }
+      }
     }
 
     return NextResponse.json({ success: true, disbursed_amount: disbursedAmount });

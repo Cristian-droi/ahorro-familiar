@@ -16,9 +16,21 @@ import {
   Lock,
   Unlock,
   Search,
+  TrendingUp,
+  X,
+  PauseCircle,
+  PlayCircle,
 } from 'lucide-react';
+import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
 import { listMembershipRequests } from '@/lib/data/membership-requests';
 import { listProfiles } from '@/lib/data/profiles';
+import {
+  closeCapitalizationWindowV2,
+  listAdminCapitalizationWindows,
+  openUserCapitalizationWindow,
+  type AdminCapWindow,
+} from '@/lib/data/capitalization';
 import { showToast } from '@/components/ui/Toast';
 
 type MemberData = {
@@ -47,6 +59,16 @@ export default function MiembrosPage() {
   // Marca qué profile está en vuelo para deshabilitar su botón y evitar
   // doble-click mientras la API responde.
   const [togglingId, setTogglingId] = useState<string | null>(null);
+
+  // Ventanas activas de capitalización — para mostrar estado por accionista.
+  // Solo cargamos las ACTIVAS (la global + las individuales abiertas).
+  const [capWindows, setCapWindows] = useState<AdminCapWindow[]>([]);
+
+  // Modal de capitalización individual.
+  const [capModalFor, setCapModalFor] = useState<MemberData | null>(null);
+  const [capModalAmount, setCapModalAmount] = useState('');
+  const [capModalDeadline, setCapModalDeadline] = useState('');
+  const [capModalLoading, setCapModalLoading] = useState(false);
 
   const fetchMembers = async () => {
     try {
@@ -84,11 +106,20 @@ export default function MiembrosPage() {
     }
   };
 
+  const fetchCapWindows = async () => {
+    try {
+      const list = await listAdminCapitalizationWindows(supabase);
+      setCapWindows(list);
+    } catch (err) {
+      console.error('Error cargando ventanas de capitalización:', err);
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
-      await fetchMembers();
+      await Promise.all([fetchMembers(), fetchCapWindows()]);
       if (!cancelled) setLoading(false);
     })();
 
@@ -108,6 +139,13 @@ export default function MiembrosPage() {
           if (!cancelled) fetchMembers();
         },
       )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'capitalization_windows' },
+        () => {
+          if (!cancelled) fetchCapWindows();
+        },
+      )
       .subscribe();
 
     return () => {
@@ -115,6 +153,83 @@ export default function MiembrosPage() {
       supabase.removeChannel(channel);
     };
   }, []);
+
+  // Mapa user_id → ventana individual activa, para pintar el badge en cada fila.
+  const userCapWindowByUserId = useMemo(() => {
+    const map = new Map<string, AdminCapWindow>();
+    for (const w of capWindows) {
+      if (w.scope === 'user' && w.user_id) map.set(w.user_id, w);
+    }
+    return map;
+  }, [capWindows]);
+
+  const openCapModal = (member: MemberData) => {
+    setCapModalFor(member);
+    setCapModalAmount('');
+    setCapModalDeadline('');
+  };
+
+  const closeCapModal = () => {
+    if (capModalLoading) return;
+    setCapModalFor(null);
+    setCapModalAmount('');
+    setCapModalDeadline('');
+  };
+
+  const submitCapModal = async () => {
+    if (!capModalFor?.profile_id) return;
+    const amount = Number(capModalAmount.replace(/[^\d]/g, ''));
+    if (!Number.isFinite(amount) || amount <= 0) {
+      showToast('error', 'Indica un monto válido.');
+      return;
+    }
+    if (!capModalDeadline) {
+      showToast('error', 'Indica una fecha límite.');
+      return;
+    }
+    setCapModalLoading(true);
+    try {
+      await openUserCapitalizationWindow(supabase, {
+        userId: capModalFor.profile_id,
+        maxAmount: amount,
+        deadline: capModalDeadline,
+      });
+      await fetchCapWindows();
+      showToast('success', 'Ventana de capitalización individual abierta.');
+      closeCapModal();
+    } catch (err: unknown) {
+      const e = err as { message?: string; hint?: string } | null;
+      const msg = e?.message ?? '';
+      const hint = e?.hint ?? '';
+      if (msg.includes('forbidden')) {
+        showToast('error', 'Solo el administrador puede abrir ventanas.');
+      } else if (msg.includes('invalid_deadline')) {
+        showToast('error', hint || 'La fecha no es válida.');
+      } else if (msg.includes('invalid_max_amount')) {
+        showToast('error', hint || 'El monto no es válido.');
+      } else {
+        console.error('Error abriendo ventana individual:', err);
+        showToast('error', 'No se pudo abrir la ventana.');
+      }
+    } finally {
+      setCapModalLoading(false);
+    }
+  };
+
+  const closeUserCapWindow = async (windowId: string) => {
+    setCapModalLoading(true);
+    try {
+      await closeCapitalizationWindowV2(supabase, windowId);
+      await fetchCapWindows();
+      showToast('success', 'Ventana cerrada.');
+      closeCapModal();
+    } catch (err) {
+      console.error('Error cerrando ventana:', err);
+      showToast('error', 'No se pudo cerrar la ventana.');
+    } finally {
+      setCapModalLoading(false);
+    }
+  };
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -237,6 +352,26 @@ export default function MiembrosPage() {
           </button>
         )}
       </div>
+
+      {/* Modal capitalización individual */}
+      {capModalFor && (
+        <CapitalizationUserModal
+          member={capModalFor}
+          existing={
+            capModalFor.profile_id
+              ? userCapWindowByUserId.get(capModalFor.profile_id) ?? null
+              : null
+          }
+          amount={capModalAmount}
+          setAmount={setCapModalAmount}
+          deadline={capModalDeadline}
+          setDeadline={setCapModalDeadline}
+          loading={capModalLoading}
+          onClose={closeCapModal}
+          onSubmit={submitCapModal}
+          onCloseExisting={closeUserCapWindow}
+        />
+      )}
 
       <Card padding="none" className="overflow-hidden">
         <div className="overflow-x-auto">
@@ -454,6 +589,32 @@ export default function MiembrosPage() {
                                 Permitir cambio
                               </button>
                             ))}
+
+                          {/* Capitalización individual */}
+                          {member.profile_id && (() => {
+                            const w = userCapWindowByUserId.get(member.profile_id);
+                            return w ? (
+                              <button
+                                type="button"
+                                onClick={() => openCapModal(member)}
+                                className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[var(--color-success)] hover:underline transition-colors"
+                                title={`Capitalización activa hasta ${w.deadline}`}
+                              >
+                                <TrendingUp size={11} strokeWidth={1.75} />
+                                Cap. activa · {cop(w.used_amount)} / {cop(w.max_amount ?? 0)}
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => openCapModal(member)}
+                                className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[var(--color-brand)] hover:underline transition-colors"
+                                title="Habilitar capitalización personal"
+                              >
+                                <TrendingUp size={11} strokeWidth={1.75} />
+                                Habilitar capitalización
+                              </button>
+                            );
+                          })()}
                         </div>
                       )}
                     </td>
@@ -464,6 +625,143 @@ export default function MiembrosPage() {
           </table>
         </div>
       </Card>
+    </div>
+  );
+}
+
+// Modal para abrir/cerrar la ventana de capitalización individual de un
+// accionista. Si ya hay una activa, mostramos info + opción de cerrar y de
+// reemplazar. Si no, formulario simple monto + fecha.
+function CapitalizationUserModal({
+  member,
+  existing,
+  amount,
+  setAmount,
+  deadline,
+  setDeadline,
+  loading,
+  onClose,
+  onSubmit,
+  onCloseExisting,
+}: {
+  member: MemberData;
+  existing: AdminCapWindow | null;
+  amount: string;
+  setAmount: (v: string) => void;
+  deadline: string;
+  setDeadline: (v: string) => void;
+  loading: boolean;
+  onClose: () => void;
+  onSubmit: () => void;
+  onCloseExisting: (windowId: string) => void;
+}) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 animate-in fade-in duration-150"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[14px] shadow-lg-soft p-6 animate-in zoom-in-95 duration-150"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3 mb-4">
+          <div className="min-w-0">
+            <h3 className="text-[16px] font-semibold tracking-tight flex items-center gap-2">
+              <TrendingUp size={16} strokeWidth={1.75} className="text-[var(--color-brand)]" />
+              Capitalización personal
+            </h3>
+            <p className="text-[12px] text-[var(--color-text-muted)] mt-0.5 truncate">
+              {member.first_name} {member.last_name} · CC {member.identity_document}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-8 h-8 rounded-[8px] flex items-center justify-center text-[var(--color-text-subtle)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-alt)] cursor-pointer"
+            aria-label="Cerrar"
+          >
+            <X size={16} strokeWidth={1.75} />
+          </button>
+        </div>
+
+        {existing ? (
+          <div className="flex flex-col gap-3 p-3 rounded-[10px] bg-[var(--color-success-soft)]/40 border border-[var(--color-success)]/30 mb-4">
+            <div className="text-[12px] text-[var(--color-text)]">
+              Hay una ventana activa hasta el{' '}
+              <strong>{existing.deadline}</strong>.
+            </div>
+            <div className="text-[12px] text-[var(--color-text-muted)]">
+              Cupo: <span className="font-semibold tabular text-[var(--color-text)]">{cop(existing.used_amount)}</span>{' '}
+              de <span className="font-semibold tabular text-[var(--color-text)]">{cop(existing.max_amount ?? 0)}</span>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={loading}
+              onClick={() => onCloseExisting(existing.id)}
+            >
+              <PauseCircle size={13} strokeWidth={1.75} />
+              {loading ? 'Cerrando…' : 'Cerrar ventana actual'}
+            </Button>
+          </div>
+        ) : null}
+
+        <div className="flex flex-col gap-3">
+          <div className="text-[12px] text-[var(--color-text-muted)]">
+            {existing
+              ? 'O reemplaza por una ventana nueva con estos parámetros:'
+              : 'Define el monto máximo que el accionista podrá capitalizar y la fecha límite.'}
+          </div>
+
+          <div>
+            <label className="text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase mb-1 block">
+              Monto máximo (COP)
+            </label>
+            <Input
+              type="text"
+              inputMode="numeric"
+              placeholder="Ej. 500000"
+              value={amount}
+              onChange={(e) => {
+                const digits = e.target.value.replace(/[^\d]/g, '');
+                setAmount(
+                  digits === ''
+                    ? ''
+                    : new Intl.NumberFormat('es-CO').format(Number(digits)),
+                );
+              }}
+            />
+          </div>
+
+          <div>
+            <label className="text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase mb-1 block">
+              Fecha límite
+            </label>
+            <Input
+              type="date"
+              value={deadline}
+              onChange={(e) => setDeadline(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div className="mt-5 flex items-center justify-end gap-2">
+          <Button variant="ghost" size="md" onClick={onClose} disabled={loading}>
+            Cancelar
+          </Button>
+          <Button
+            variant="primary"
+            size="md"
+            disabled={loading || !amount || !deadline}
+            onClick={onSubmit}
+          >
+            <PlayCircle size={15} strokeWidth={1.75} />
+            {loading ? 'Guardando…' : existing ? 'Reemplazar' : 'Habilitar'}
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

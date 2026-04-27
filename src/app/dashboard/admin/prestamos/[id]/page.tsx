@@ -24,6 +24,8 @@ import {
   TrendingUp,
   Upload,
   FileCheck,
+  Download,
+  FileText,
 } from 'lucide-react';
 import { getLoanWithDetails, getCashBalance } from '@/lib/data/loans';
 import type { LoanWithDetails } from '@/types/entities';
@@ -132,6 +134,21 @@ export default function AdminLoanDetailPage() {
     } finally {
       setUploadingProof(false);
     }
+  };
+
+  // Abre el comprobante de desembolso ya guardado en storage. Usa signed URL
+  // de 60s — alcanza para que el navegador descargue el archivo y los enlaces
+  // no quedan expuestos públicamente.
+  const openDisbursementProof = async (path: string | null) => {
+    if (!path) return;
+    const { data, error } = await supabase.storage
+      .from('payment-proofs')
+      .createSignedUrl(path, 60);
+    if (error || !data?.signedUrl) {
+      showToast('error', 'No se pudo abrir el comprobante.');
+      return;
+    }
+    window.open(data.signedUrl, '_blank', 'noopener');
   };
 
   const disburse = async () => {
@@ -329,6 +346,109 @@ export default function AdminLoanDetailPage() {
                   </tbody>
                 </table>
               </div>
+            </Card>
+          )}
+
+          {/* Información de desembolso (visible una vez desembolsado) */}
+          {loan.disbursed_at && (
+            <Card padding="lg">
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <div>
+                  <h2 className="text-[14px] font-semibold tracking-tight">
+                    Desembolso
+                  </h2>
+                  <div className="text-[12px] text-[var(--color-text-muted)] mt-0.5">
+                    {loan.disbursement_number && (
+                      <span className="font-semibold text-[var(--color-brand)]">
+                        {loan.disbursement_number}
+                      </span>
+                    )}
+                    {loan.disbursement_number && ' · '}
+                    {new Date(loan.disbursed_at).toLocaleDateString('es-CO', {
+                      day: 'numeric',
+                      month: 'long',
+                      year: 'numeric',
+                    })}
+                  </div>
+                </div>
+                {loan.disbursement_proof_path && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => openDisbursementProof(loan.disbursement_proof_path)}
+                  >
+                    <Download size={14} strokeWidth={1.75} />
+                    Ver comprobante
+                  </Button>
+                )}
+              </div>
+
+              {/* Desglose contable del CE */}
+              <div className="divide-y divide-[var(--color-border)] rounded-[10px] border border-[var(--color-border)] bg-[var(--color-surface)] text-[13px]">
+                <div className="flex items-center gap-3 px-3.5 py-2.5">
+                  <div className="flex-1">
+                    <div className="font-semibold">Crédito otorgado</div>
+                    <div className="text-[11px] text-[var(--color-text-subtle)]">
+                      Valor total del préstamo
+                    </div>
+                  </div>
+                  <div className="font-semibold tabular">
+                    {cop(loanAmount)}
+                  </div>
+                </div>
+                {Number(loan.loan_shares_amount) > 0 && (
+                  <div className="flex items-center gap-3 px-3.5 py-2.5">
+                    <div className="flex-1">
+                      <div className="font-semibold">
+                        Acciones por préstamo ({loan.loan_shares_count})
+                      </div>
+                      <div className="text-[11px] text-[var(--color-text-subtle)]">
+                        {loan.loan_shares_paid_upfront
+                          ? 'Pagadas por adelantado (no se descuentan)'
+                          : 'Descontadas del desembolso · van al accionista'}
+                      </div>
+                    </div>
+                    <div
+                      className={`font-semibold tabular ${
+                        loan.loan_shares_paid_upfront
+                          ? ''
+                          : 'text-[var(--color-danger)]'
+                      }`}
+                    >
+                      {loan.loan_shares_paid_upfront ? '' : '− '}
+                      {cop(Number(loan.loan_shares_amount))}
+                    </div>
+                  </div>
+                )}
+                {Number(loan.four_per_thousand) > 0 && (
+                  <div className="flex items-center gap-3 px-3.5 py-2.5">
+                    <div className="flex-1">
+                      <div className="font-semibold">Retención 4×1000</div>
+                      <div className="text-[11px] text-[var(--color-text-subtle)]">
+                        Descontada al desembolso
+                      </div>
+                    </div>
+                    <div className="font-semibold tabular text-[var(--color-danger)]">
+                      − {cop(Number(loan.four_per_thousand))}
+                    </div>
+                  </div>
+                )}
+                <div className="flex items-center gap-3 px-3.5 py-3 bg-[var(--color-surface-alt)]">
+                  <div className="flex-1 font-semibold">
+                    Neto entregado al accionista
+                  </div>
+                  <div className="font-semibold tabular text-[var(--color-success)]">
+                    {cop(Number(loan.disbursed_amount ?? 0))}
+                  </div>
+                </div>
+              </div>
+
+              {!loan.disbursement_proof_path && (
+                <div className="mt-3 flex items-start gap-2 text-[12px] text-[var(--color-warn)]">
+                  <FileText size={13} strokeWidth={1.75} className="mt-px shrink-0" />
+                  No hay comprobante adjunto para este desembolso.
+                </div>
+              )}
             </Card>
           )}
 

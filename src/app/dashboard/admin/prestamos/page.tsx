@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
@@ -38,20 +38,44 @@ export default function AdminPrestamosPage() {
   const [totalShareholders, setTotalShareholders] = useState(0);
   const [search, setSearch] = useState('');
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
+  // Refresca toda la data. Se llama en mount y cuando llega un evento
+  // realtime de la tabla loans.
+  const refresh = useCallback(async () => {
+    try {
       const [loansData, totalRes] = await Promise.all([
         getAllLoans(supabase),
         supabase.rpc('count_active_shareholders'),
       ]);
-      if (cancelled) return;
       setLoans(loansData);
       setTotalShareholders(Number(totalRes.data ?? 0));
-      setLoading(false);
-    })();
-    return () => { cancelled = true; };
+    } catch (err) {
+      console.error('Error cargando préstamos admin:', err);
+    }
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      await refresh();
+      if (!cancelled) setLoading(false);
+    })();
+
+    // Realtime: cualquier cambio en loans (nuevo préstamo, voto procesado,
+    // cambio de status, desembolso) refresca esta lista sin recargar.
+    const ch = supabase
+      .channel('admin-prestamos-live')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'loans' },
+        () => !cancelled && refresh(),
+      )
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(ch);
+    };
+  }, [refresh]);
 
   // Filtra por nombre del accionista o documento. Si no hay query, devuelve todo.
   const filteredLoans = useMemo(() => {

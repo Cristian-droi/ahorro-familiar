@@ -4,6 +4,137 @@ import type { Loan, LoanVote, LoanWithDetails } from '@/types/entities';
 
 type SB = SupabaseClient<Database>;
 
+// Conteo de préstamos que requieren acción del admin: los que están en
+// revisión inicial y los aprobados que esperan el desembolso. Se usa para
+// el badge del item "Préstamos" del nav admin y para el dropdown de
+// notificaciones del header.
+export type AdminPendingLoanCounts = {
+  pendingReview: number;
+  pendingDisbursement: number;
+  total: number;
+};
+
+export async function countAdminPendingLoans(
+  supabase: SB,
+): Promise<AdminPendingLoanCounts> {
+  const [reviewRes, disbRes] = await Promise.all([
+    supabase
+      .from('loans')
+      .select('*', { count: 'exact', head: true })
+      .eq('status', 'pending_review'),
+    supabase
+      .from('loans')
+      .select('*', { count: 'exact', head: true })
+      .eq('status', 'pending_disbursement'),
+  ]);
+
+  if (reviewRes.error) throw reviewRes.error;
+  if (disbRes.error) throw disbRes.error;
+
+  const pendingReview = reviewRes.count ?? 0;
+  const pendingDisbursement = disbRes.count ?? 0;
+  return {
+    pendingReview,
+    pendingDisbursement,
+    total: pendingReview + pendingDisbursement,
+  };
+}
+
+// Préstamos del accionista que ya pasaron la votación y están a la espera
+// del desembolso por parte del admin. Se notifica una vez (hasta que el
+// accionista entra a /dashboard/prestamos y dispara mark_my_loans_status_seen).
+export async function countLoansReadyForDisbursementForUser(
+  supabase: SB,
+  userId: string,
+): Promise<number> {
+  const { count, error } = await supabase
+    .from('loans')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .eq('status', 'pending_disbursement')
+    .is('borrower_seen_status_at', null);
+  if (error) throw error;
+  return count ?? 0;
+}
+
+// Préstamos del accionista recién pasados a active (desembolsados) que aún
+// no fueron vistos. El trigger `reset_borrower_seen_on_status_change`
+// pone el seen en NULL al cambiar de status, así que esto naturalmente
+// muestra solo los recién desembolsados.
+export async function countLoansActiveUnseenForUser(
+  supabase: SB,
+  userId: string,
+): Promise<number> {
+  const { count, error } = await supabase
+    .from('loans')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .is('borrower_seen_status_at', null);
+  if (error) throw error;
+  return count ?? 0;
+}
+
+// Préstamos del accionista que requieren su atención: devueltos a draft
+// para corregir, o rechazados por el admin / por la votación que aún no
+// fueron vistos por el accionista. Lo usa el dropdown del header y el
+// badge del item "Préstamos".
+//
+// Los rechazados se "marcan como vistos" (borrower_seen_status_at) la
+// primera vez que el user entra a /dashboard/prestamos vía la RPC
+// mark_my_loans_status_seen. A partir de ahí dejan de contar.
+export async function countLoansRequiringActionForUser(
+  supabase: SB,
+  userId: string,
+): Promise<number> {
+  const [draftRes, rejectedRes] = await Promise.all([
+    supabase
+      .from('loans')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .eq('status', 'draft'),
+    supabase
+      .from('loans')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .in('status', ['rejected_by_admin', 'rejected_by_shareholders'])
+      .is('borrower_seen_status_at', null),
+  ]);
+
+  if (draftRes.error) throw draftRes.error;
+  if (rejectedRes.error) throw rejectedRes.error;
+  return (draftRes.count ?? 0) + (rejectedRes.count ?? 0);
+}
+
+// Cuántos préstamos están esperando el voto de este accionista. Excluye
+// los propios y los que ya votó. Lo usa el badge del nav y el dropdown
+// del header del accionista.
+export async function countLoansAwaitingMyVote(
+  supabase: SB,
+  voterId: string,
+): Promise<number> {
+  const { data: loans, error } = await supabase
+    .from('loans')
+    .select('id, user_id')
+    .eq('status', 'pending_shareholder_vote');
+  if (error) throw error;
+  if (!loans || loans.length === 0) return 0;
+
+  const others = loans.filter((l) => l.user_id !== voterId);
+  if (others.length === 0) return 0;
+
+  const ids = others.map((l) => l.id);
+  const { data: myVotes, error: votesErr } = await supabase
+    .from('loan_votes')
+    .select('loan_id')
+    .eq('voter_id', voterId)
+    .in('loan_id', ids);
+  if (votesErr) throw votesErr;
+
+  const voted = new Set((myVotes ?? []).map((v) => v.loan_id));
+  return others.filter((l) => !voted.has(l.id)).length;
+}
+
 export async function getLoan(supabase: SB, id: string): Promise<Loan | null> {
   const { data, error } = await supabase
     .from('loans')

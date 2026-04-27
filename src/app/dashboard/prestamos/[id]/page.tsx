@@ -177,19 +177,22 @@ export default function LoanDetailPage() {
               </div>
             )}
 
-            {loan.rejection_reason && (
+            {/* Banner de rechazo — uno solo. Si el préstamo fue rechazado
+                mostramos su motivo (es el "ganador"); si solo el plan fue
+                rechazado y no el préstamo entero, mostramos el del plan.
+                Antes había dos banners y, cuando el motivo coincidía, se
+                veía repetido. */}
+            {loan.rejection_reason ? (
               <div className="mt-4 flex items-start gap-2 p-3 rounded-[10px] bg-[var(--color-danger-soft)] text-[var(--color-danger)] text-[12px]">
                 <AlertTriangle size={14} strokeWidth={2} className="mt-px shrink-0" />
                 <span>Motivo de rechazo: {loan.rejection_reason}</span>
               </div>
-            )}
-
-            {loan.plan_status === 'rejected' && loan.plan_rejection_reason && (
+            ) : loan.plan_status === 'rejected' && loan.plan_rejection_reason ? (
               <div className="mt-4 flex items-start gap-2 p-3 rounded-[10px] bg-[var(--color-danger-soft)] text-[var(--color-danger)] text-[12px]">
                 <AlertTriangle size={14} strokeWidth={2} className="mt-px shrink-0" />
                 <span>El plan de pagos fue rechazado: {loan.plan_rejection_reason}</span>
               </div>
-            )}
+            ) : null}
           </Card>
 
           {/* Plan de pagos */}

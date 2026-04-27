@@ -21,7 +21,6 @@ import {
   CalendarClock,
   PlayCircle,
   PauseCircle,
-  Target,
   UserCog,
   Mail,
   Phone,
@@ -35,11 +34,10 @@ import {
   updateProfile,
 } from '@/lib/data/profiles';
 import {
-  closeCapitalizationWindow,
-  closeReasonLabel,
-  getCapitalizationWindowState,
-  openCapitalizationWindow,
-  type CapitalizationWindowState,
+  closeCapitalizationWindowV2,
+  listAdminCapitalizationWindows,
+  openGlobalCapitalizationWindow,
+  type AdminCapWindow,
 } from '@/lib/data/capitalization';
 import { showToast } from '@/components/ui/Toast';
 
@@ -113,15 +111,15 @@ export default function AjustesPage() {
     expiresAt: string;
   } | null>(null);
 
-  // Capitalizaciones (solo admin ve/edita). Se carga al iniciar y se refresca
-  // luego de cada acción.
-  const [capState, setCapState] =
-    useState<CapitalizationWindowState | null>(null);
+  // Capitalizaciones (solo admin ve/edita). En el modelo v2 puede haber
+  // múltiples ventanas activas: una global y N individuales (por accionista).
+  // Acá solo gestionamos la GLOBAL — las individuales se manejan desde
+  // /dashboard/miembros.
+  const [capWindows, setCapWindows] = useState<AdminCapWindow[] | null>(null);
   const [capFormOpen, setCapFormOpen] = useState(false);
-  const [capTargetInput, setCapTargetInput] = useState('');
   const [capDeadlineInput, setCapDeadlineInput] = useState('');
   const [capLoading, setCapLoading] =
-    useState<'opening' | 'closing' | null>(null);
+    useState<'opening' | 'closing' | string | null>(null);
 
   const refreshShareChangeStats = useCallback(async () => {
     const [totalRes, enabledRes] = await Promise.all([
@@ -149,12 +147,12 @@ export default function AjustesPage() {
     });
   }, []);
 
-  const refreshCapState = useCallback(async () => {
+  const refreshCapWindows = useCallback(async () => {
     try {
-      const s = await getCapitalizationWindowState(supabase);
-      setCapState(s);
+      const list = await listAdminCapitalizationWindows(supabase);
+      setCapWindows(list);
     } catch (err) {
-      console.error('Error cargando estado de capitalizaciones:', err);
+      console.error('Error cargando ventanas de capitalización:', err);
     }
   }, []);
 
@@ -226,9 +224,27 @@ export default function AjustesPage() {
           }
 
           // Si es admin, cargamos el estado global del flag de cambio
-          // para todos los accionistas (habilitados vs total).
+          // para todos los accionistas (habilitados vs total) y la lista
+          // de ventanas activas de capitalización.
           if (userRole === 'admin') {
             refreshShareChangeStats();
+            try {
+              const list = await listAdminCapitalizationWindows(supabase);
+              if (!cancelled) setCapWindows(list);
+            } catch (err) {
+              const e = err as {
+                message?: string;
+                details?: string;
+                hint?: string;
+                code?: string;
+              };
+              console.error('Error cargando ventanas de capitalización:', {
+                message: e.message,
+                details: e.details,
+                hint: e.hint,
+                code: e.code,
+              });
+            }
           }
 
           // Al admin no le cargamos valor de acción: no aplica.
@@ -302,28 +318,6 @@ export default function AjustesPage() {
         setAllowedShares(settings.value as number[]);
       }
 
-      // Estado de la ventana de capitalizaciones (solo el admin lo usa para
-      // pintar la card, pero al accionista no le estorba cargarlo si algún
-      // día queremos leerlo aquí).
-      try {
-        const cap = await getCapitalizationWindowState(supabase);
-        if (!cancelled) setCapState(cap);
-      } catch (err) {
-        // PostgrestError no serializa bien con console.error; lo desarmamos
-        // para que los campos message/hint/code queden visibles en DevTools.
-        const e = err as {
-          message?: string;
-          details?: string;
-          hint?: string;
-          code?: string;
-        };
-        console.error('Error cargando estado capitalizaciones:', {
-          message: e.message,
-          details: e.details,
-          hint: e.hint,
-          code: e.code,
-        });
-      }
 
       if (!cancelled) setLoading(false);
     };
@@ -619,27 +613,20 @@ export default function AjustesPage() {
     }
   };
 
-  const handleOpenCapWindow = async () => {
-    const target = Number(capTargetInput.replace(/[^\d]/g, ''));
-    if (!Number.isFinite(target) || target <= 0) {
-      showToast('error', 'Indica un monto objetivo válido.');
-      return;
-    }
+  const handleOpenGlobalCapWindow = async () => {
     if (!capDeadlineInput) {
       showToast('error', 'Indica una fecha límite.');
       return;
     }
     setCapLoading('opening');
     try {
-      const next = await openCapitalizationWindow(supabase, {
-        targetAmount: target,
+      await openGlobalCapitalizationWindow(supabase, {
         deadline: capDeadlineInput,
       });
-      setCapState(next);
+      await refreshCapWindows();
       setCapFormOpen(false);
-      setCapTargetInput('');
       setCapDeadlineInput('');
-      showToast('success', 'Ventana de capitalizaciones abierta.');
+      showToast('success', 'Ventana global de capitalizaciones abierta.');
     } catch (err: unknown) {
       const e = err as { message?: string; hint?: string } | null;
       const hint = e?.hint ?? '';
@@ -648,8 +635,6 @@ export default function AjustesPage() {
         showToast('error', 'Solo el administrador puede abrir la ventana.');
       } else if (msg.includes('invalid_deadline')) {
         showToast('error', hint || 'La fecha no es válida.');
-      } else if (msg.includes('invalid_target_amount')) {
-        showToast('error', hint || 'El monto objetivo no es válido.');
       } else {
         console.error('Error abriendo ventana:', err);
         showToast('error', 'No se pudo abrir la ventana.');
@@ -659,12 +644,12 @@ export default function AjustesPage() {
     }
   };
 
-  const handleCloseCapWindow = async () => {
-    setCapLoading('closing');
+  const handleCloseCapWindow = async (windowId: string) => {
+    setCapLoading(windowId);
     try {
-      const next = await closeCapitalizationWindow(supabase);
-      setCapState(next);
-      showToast('success', 'Ventana de capitalizaciones cerrada.');
+      await closeCapitalizationWindowV2(supabase, windowId);
+      await refreshCapWindows();
+      showToast('success', 'Ventana cerrada.');
     } catch (err) {
       console.error('Error cerrando ventana:', err);
       showToast('error', 'No se pudo cerrar la ventana.');
@@ -1008,21 +993,17 @@ export default function AjustesPage() {
               </div>
             </Card>
 
-            {/* Capitalizaciones (solo admin). Ocupa el ancho completo por la
-                cantidad de controles + progreso. */}
+            {/* Capitalizaciones (solo admin). Ocupa el ancho completo. */}
             <div className="md:col-span-2">
               <CapitalizationAdminCard
-                state={capState}
+                windows={capWindows}
                 formOpen={capFormOpen}
                 setFormOpen={setCapFormOpen}
-                targetInput={capTargetInput}
-                setTargetInput={setCapTargetInput}
                 deadlineInput={capDeadlineInput}
                 setDeadlineInput={setCapDeadlineInput}
                 loading={capLoading}
-                onOpen={handleOpenCapWindow}
+                onOpenGlobal={handleOpenGlobalCapWindow}
                 onClose={handleCloseCapWindow}
-                onRefresh={refreshCapState}
               />
             </div>
           </>
@@ -1033,39 +1014,38 @@ export default function AjustesPage() {
 }
 
 // =============================================================================
-// Card de capitalizaciones (admin)
+// Card de capitalizaciones (admin) — modelo v2
 //
-// Estados posibles:
-//   - Nunca abierta    → botón "Abrir ventana".
-//   - Abierta          → barra de progreso + "Cerrar ahora".
-//   - Cerrada (por motivo) → banner explicativo + "Abrir nueva ventana".
+// Acá solo gestionamos la ventana GLOBAL (la que aplica a todos los que
+// no tengan ventana individual). Las ventanas individuales se manejan
+// desde /dashboard/miembros (botón por accionista).
+//
+// Renderiza:
+//   - El estado actual de la global (abierta / no abierta).
+//   - Form para abrir nueva global (solo deadline; sin monto).
+//   - Lista de ventanas individuales activas (informativa, con botón
+//     cerrar para que el admin pueda revocar desde acá si quiere).
 // =============================================================================
 function CapitalizationAdminCard({
-  state,
+  windows,
   formOpen,
   setFormOpen,
-  targetInput,
-  setTargetInput,
   deadlineInput,
   setDeadlineInput,
   loading,
-  onOpen,
+  onOpenGlobal,
   onClose,
-  onRefresh,
 }: {
-  state: CapitalizationWindowState | null;
+  windows: AdminCapWindow[] | null;
   formOpen: boolean;
   setFormOpen: (b: boolean) => void;
-  targetInput: string;
-  setTargetInput: (v: string) => void;
   deadlineInput: string;
   setDeadlineInput: (v: string) => void;
-  loading: 'opening' | 'closing' | null;
-  onOpen: () => void;
-  onClose: () => void;
-  onRefresh: () => void;
+  loading: 'opening' | 'closing' | string | null;
+  onOpenGlobal: () => void;
+  onClose: (windowId: string) => void;
 }) {
-  if (!state) {
+  if (windows === null) {
     return (
       <Card padding="lg">
         <span className="text-sm text-[var(--color-text-muted)]">
@@ -1075,9 +1055,9 @@ function CapitalizationAdminCard({
     );
   }
 
-  const isOpen = state.is_open;
-  const hasHistory = state.opened_at != null;
-  const pct = Math.max(0, Math.min(100, Number(state.percentage ?? 0)));
+  const globalWindow = windows.find((w) => w.scope === 'global') ?? null;
+  const userWindows = windows.filter((w) => w.scope === 'user');
+  const isGlobalOpen = globalWindow !== null;
 
   return (
     <Card padding="none" className="overflow-hidden">
@@ -1085,7 +1065,7 @@ function CapitalizationAdminCard({
         <div className="flex items-start gap-3">
           <div
             className={`w-10 h-10 rounded-[10px] flex items-center justify-center ${
-              isOpen
+              isGlobalOpen
                 ? 'bg-[var(--color-success-soft)] text-[var(--color-success)]'
                 : 'bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]'
             }`}
@@ -1095,123 +1075,68 @@ function CapitalizationAdminCard({
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <h2 className="text-[15px] font-semibold tracking-tight">
-                Capitalizaciones
+                Capitalización global
               </h2>
-              {isOpen ? (
+              {isGlobalOpen ? (
                 <Badge tone="success">
                   <PlayCircle size={11} strokeWidth={1.75} />
-                  Ventana abierta
+                  Abierta
                 </Badge>
-              ) : hasHistory ? (
+              ) : (
                 <Badge tone="neutral">
                   <PauseCircle size={11} strokeWidth={1.75} />
                   Cerrada
                 </Badge>
-              ) : (
-                <Badge tone="neutral">No configurada</Badge>
               )}
             </div>
             <p className="text-[var(--color-text-muted)] text-[13px] leading-[1.55] mt-1">
-              Permite que los accionistas capitalicen un monto libre en COP
-              durante la ventana. Se cierra automáticamente al llegar al
-              objetivo o a la fecha límite.
+              Aplica a todos los accionistas que NO tengan una ventana
+              individual abierta. Se cierra automáticamente al pasar la fecha
+              límite. Sin tope de monto.
             </p>
           </div>
         </div>
 
-        {hasHistory && (
-          <div className="flex flex-col gap-3">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <InfoTile
-                icon={Target}
-                label="Objetivo"
-                value={state.target_amount > 0 ? cop(state.target_amount) : '—'}
-              />
-              <InfoTile
-                icon={TrendingUp}
-                label="Recaudado"
-                value={cop(state.recaudado)}
-              />
-              <InfoTile
-                icon={CalendarClock}
-                label="Fecha límite"
-                value={state.deadline ? formatDateIso(state.deadline) : '—'}
-              />
-              <InfoTile
-                icon={CheckCircle2}
-                label="Progreso"
-                value={`${pct.toFixed(pct % 1 === 0 ? 0 : 1)} %`}
-              />
-            </div>
-
-            {/* Barra de progreso */}
-            <div>
-              <div className="h-2 rounded-full bg-[var(--color-surface-alt)] overflow-hidden">
-                <div
-                  className={`h-full transition-all ${
-                    isOpen
-                      ? 'bg-[var(--color-success)]'
-                      : 'bg-[var(--color-text-subtle)]'
-                  }`}
-                  style={{ width: `${pct}%` }}
-                />
-              </div>
-            </div>
-
-            {!isOpen && state.close_reason && (
-              <div className="flex items-start gap-2 text-[12px] text-[var(--color-text-muted)] px-3 py-2 rounded-[10px] bg-[var(--color-surface-alt)]">
-                <PauseCircle
-                  size={13}
-                  strokeWidth={1.75}
-                  className="mt-0.5 shrink-0"
-                />
-                <span>
-                  <strong>Motivo del cierre:</strong>{' '}
-                  {closeReasonLabel(state.close_reason)}
-                </span>
-              </div>
-            )}
+        {/* Estado global actual */}
+        {globalWindow && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <InfoTile
+              icon={CalendarClock}
+              label="Fecha límite"
+              value={formatDateIso(globalWindow.deadline)}
+            />
+            <InfoTile
+              icon={PlayCircle}
+              label="Abierta desde"
+              value={formatIsoInstant(globalWindow.opened_at)}
+            />
           </div>
         )}
 
-        {/* Formulario de apertura */}
+        {/* Formulario de apertura — solo deadline */}
         {formOpen && (
           <div className="flex flex-col gap-3 p-4 rounded-[12px] border border-dashed border-[var(--color-border)] bg-[var(--color-surface-alt)]/50">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div>
-                <label className="text-[11px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase mb-1 block">
-                  Monto objetivo (COP)
-                </label>
-                <Input
-                  type="number"
-                  placeholder="Ej. 1000000"
-                  value={targetInput}
-                  onChange={(e) => setTargetInput(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="text-[11px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase mb-1 block">
-                  Fecha límite
-                </label>
-                <Input
-                  type="date"
-                  value={deadlineInput}
-                  onChange={(e) => setDeadlineInput(e.target.value)}
-                />
-              </div>
+            <div>
+              <label className="text-[11px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase mb-1 block">
+                Fecha límite
+              </label>
+              <Input
+                type="date"
+                value={deadlineInput}
+                onChange={(e) => setDeadlineInput(e.target.value)}
+              />
+              <p className="text-[11px] text-[var(--color-text-subtle)] mt-1.5">
+                Si ya hay una global abierta, se reemplaza por esta nueva.
+              </p>
             </div>
             <div className="flex items-center gap-2">
               <Button
                 size="md"
-                onClick={onOpen}
+                onClick={onOpenGlobal}
                 disabled={loading !== null}
               >
                 <PlayCircle size={15} strokeWidth={1.75} />
-                {loading === 'opening'
-                  ? 'Abriendo...'
-                  : hasHistory
-                    ? 'Abrir nueva ventana'
-                    : 'Abrir ventana'}
+                {loading === 'opening' ? 'Abriendo...' : 'Abrir global'}
               </Button>
               <Button
                 size="md"
@@ -1224,43 +1149,77 @@ function CapitalizationAdminCard({
             </div>
           </div>
         )}
+
+        {/* Lista de ventanas individuales activas */}
+        {userWindows.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <div className="text-[11px] font-semibold text-[var(--color-text-subtle)] tracking-[0.12em] uppercase mb-1">
+              Ventanas individuales activas ({userWindows.length})
+            </div>
+            <div className="flex flex-col divide-y divide-[var(--color-border)] rounded-[10px] border border-[var(--color-border)] overflow-hidden">
+              {userWindows.map((w) => {
+                const closing = loading === w.id;
+                return (
+                  <div
+                    key={w.id}
+                    className="flex items-center gap-3 px-3.5 py-2.5"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[13px] font-semibold tracking-tight truncate">
+                        {w.user_name ?? 'Accionista'}
+                        {w.user_document && (
+                          <span className="text-[var(--color-text-subtle)] font-normal ml-2">
+                            · CC {w.user_document}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-[var(--color-text-subtle)] mt-0.5">
+                        Cupo {cop(w.used_amount)} de {cop(w.max_amount ?? 0)} ·
+                        Cierra {formatDateIso(w.deadline)}
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => onClose(w.id)}
+                      disabled={loading !== null}
+                    >
+                      <PauseCircle size={13} strokeWidth={1.75} />
+                      {closing ? 'Cerrando…' : 'Cerrar'}
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="p-4 border-t border-[var(--color-border)] bg-[var(--color-surface-alt)] flex flex-col sm:flex-row gap-2">
-        {isOpen ? (
-          <>
-            <Button
-              className="w-full sm:w-auto"
-              variant="secondary"
-              onClick={onClose}
-              disabled={loading !== null}
-            >
-              <PauseCircle size={15} strokeWidth={1.75} />
-              {loading === 'closing' ? 'Cerrando...' : 'Cerrar ahora'}
-            </Button>
-            <Button
-              className="w-full sm:w-auto"
-              variant="outline"
-              onClick={onRefresh}
-              disabled={loading !== null}
-            >
-              Refrescar recaudo
-            </Button>
-          </>
-        ) : !formOpen ? (
+        {isGlobalOpen ? (
+          <Button
+            className="w-full sm:w-auto"
+            variant="secondary"
+            onClick={() => globalWindow && onClose(globalWindow.id)}
+            disabled={loading !== null || !globalWindow}
+          >
+            <PauseCircle size={15} strokeWidth={1.75} />
+            {loading === globalWindow?.id ? 'Cerrando...' : 'Cerrar global'}
+          </Button>
+        ) : null}
+        {!formOpen && (
           <Button
             className="w-full sm:w-auto"
             onClick={() => {
               setFormOpen(true);
-              setTargetInput('');
               setDeadlineInput('');
             }}
             disabled={loading !== null}
           >
             <PlayCircle size={15} strokeWidth={1.75} />
-            {hasHistory ? 'Abrir nueva ventana' : 'Abrir ventana'}
+            {isGlobalOpen ? 'Reemplazar global' : 'Abrir global'}
           </Button>
-        ) : null}
+        )}
       </div>
     </Card>
   );
