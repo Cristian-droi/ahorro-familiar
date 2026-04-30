@@ -40,6 +40,77 @@ export async function countAdminPendingLoans(
   };
 }
 
+// Préstamos del accionista en pending_disbursement con upfront=true que
+// todavía no tienen recibo (pending o approved) cubriendo las acciones
+// por préstamo. Se renderiza como una sección no editable en /compras.
+export type PendingLoanSharePurchase = {
+  loan_id: string;
+  loan_created_at: string;
+  requested_amount: number;
+  loan_shares_count: number | null;
+  loan_shares_amount: number;
+  unit_value: number | null;
+};
+
+export async function getMyPendingLoanSharePurchases(
+  supabase: SB,
+): Promise<PendingLoanSharePurchase[]> {
+  const { data, error } = await supabase.rpc(
+    'get_my_pending_loan_share_purchases',
+  );
+  if (error) throw error;
+  return (data ?? []).map((row) => ({
+    loan_id: row.loan_id,
+    loan_created_at: row.loan_created_at,
+    requested_amount: Number(row.requested_amount),
+    loan_shares_count:
+      row.loan_shares_count == null ? null : Number(row.loan_shares_count),
+    loan_shares_amount: Number(row.loan_shares_amount),
+    unit_value: row.unit_value == null ? null : Number(row.unit_value),
+  }));
+}
+
+export async function countMyPendingLoanSharePurchases(
+  supabase: SB,
+): Promise<number> {
+  const { data, error } = await supabase.rpc(
+    'count_my_pending_loan_share_purchases',
+  );
+  if (error) throw error;
+  return Number(data ?? 0);
+}
+
+// Resumen por préstamo activo del accionista actual: saldo de capital,
+// intereses adeudados (calculados a mes vencido sobre saldo histórico),
+// meses vencidos y target_month a usar para los receipt_items del pago.
+export type ActiveLoanDebt = {
+  loan_id: string;
+  disbursement_number: string | null;
+  requested_amount: number;
+  outstanding_capital: number;
+  interest_rate: number;
+  disbursed_at: string;
+  interest_owed: number;
+  months_overdue: number;
+  next_due_month: string; // 'YYYY-MM-DD'
+};
+
+export async function getMyActiveLoansDebt(supabase: SB): Promise<ActiveLoanDebt[]> {
+  const { data, error } = await supabase.rpc('get_user_active_loans_debt');
+  if (error) throw error;
+  return (data ?? []).map((row) => ({
+    loan_id: row.loan_id,
+    disbursement_number: row.disbursement_number,
+    requested_amount: Number(row.requested_amount),
+    outstanding_capital: Number(row.outstanding_capital),
+    interest_rate: Number(row.interest_rate),
+    disbursed_at: row.disbursed_at,
+    interest_owed: Number(row.interest_owed),
+    months_overdue: Number(row.months_overdue),
+    next_due_month: row.next_due_month,
+  }));
+}
+
 // Préstamos del accionista que ya pasaron la votación y están a la espera
 // del desembolso por parte del admin. Se notifica una vez (hasta que el
 // accionista entra a /dashboard/prestamos y dispara mark_my_loans_status_seen).

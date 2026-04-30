@@ -29,10 +29,6 @@ import {
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
-  CheckCircle2,
-  Clock,
-  XCircle,
-  ArrowRight,
   FileSpreadsheet,
   FileDown,
 } from 'lucide-react';
@@ -42,7 +38,7 @@ import { getProfile } from '@/lib/data/profiles';
 import { listReceiptItemsByYear } from '@/lib/data/receipts';
 import { getLibroAccionistaData } from '@/lib/data/loans';
 import { computeLoanBook, LOAN_STATUS_LABELS } from '@/lib/loans';
-import { cop, monthLabel, receiptStatusLabel } from '@/lib/format';
+import { cop, monthLabel } from '@/lib/format';
 import {
   computeFineForMonth,
   DEFAULT_PURCHASE_RULES,
@@ -77,22 +73,34 @@ type MonthSummary = {
   month: string; // 'YYYY-MM-01'
   monthIndex: number;
   label: string;
+  // === APORTES ===
+  // Acciones ordinarias (concept = 'acciones').
   approvedShares: number;
-  approvedAmount: number; // solo 'acciones' aprobadas
+  approvedAmount: number;
   pendingShares: number;
   pendingAmount: number;
   rejectedShares: number;
+  // Acciones por préstamo (concept = 'acciones_prestamo').
+  approvedLoanShares: number;
+  approvedLoanShareAmount: number;
+  pendingLoanShares: number;
+  pendingLoanShareAmount: number;
+  // Multas (concept = 'multa_acciones').
   approvedFines: number;
   pendingFines: number;
-  projectedFine: number; // multa en curso (si aplica y no existe aún)
-  approvedCapitalization: number; // capitalización aprobada (suma al patrimonio)
+  projectedFine: number;
+  // Capitalización (concept = 'capitalizacion').
+  approvedCapitalization: number;
   pendingCapitalization: number;
-  // Recibos que tocaron este mes (target_month = este mes)
-  receipts: Array<{
-    id: string;
-    number: string;
-    status: ReceiptStatus;
-  }>;
+
+  // === PRÉSTAMOS ===
+  // Monto desembolsado al accionista en este mes (suma de loans con
+  // disbursed_at en este mes calendario).
+  disbursedAmount: number;
+  // Pagos a capital y a intereses con target_month = este mes (de
+  // recibos aprobados).
+  paidCapital: number;
+  paidInterest: number;
 };
 
 type LoanSummaryData = {
@@ -113,20 +121,24 @@ type LoanSummaryData = {
     payment_plan_months: number | null;
     current_capital_balance: number;
     total_interest_debt: number;
+    total_paid_capital: number;
+    total_paid_interest: number;
   }>;
 };
 
-function statusTone(status: ReceiptStatus): 'warn' | 'success' | 'danger' {
-  if (status === 'pending') return 'warn';
-  if (status === 'approved') return 'success';
-  return 'danger';
-}
+// Movimientos mensuales asociados a préstamos: el accionista los ve en
+// el detalle del extracto (sección "Préstamos").
+type LoanMonthlyMap = {
+  // 'YYYY-MM' → monto desembolsado en ese mes (suma de loans con
+  // disbursed_at en ese mes).
+  disbursedByMonth: Map<string, number>;
+  // 'YYYY-MM' → suma de pagos a capital con target_month en ese mes,
+  // SOLO de recibos aprobados.
+  paidCapitalByMonth: Map<string, number>;
+  // Idem para pagos a intereses.
+  paidInterestByMonth: Map<string, number>;
+};
 
-function statusIcon(status: ReceiptStatus) {
-  if (status === 'approved') return CheckCircle2;
-  if (status === 'pending') return Clock;
-  return XCircle;
-}
 
 export default function ExtractoPage() {
   const router = useRouter();
@@ -138,6 +150,11 @@ export default function ExtractoPage() {
   const [rules, setRules] = useState<PurchaseRules>(DEFAULT_PURCHASE_RULES);
   const [items, setItems] = useState<ItemRow[]>([]);
   const [loanSummary, setLoanSummary] = useState<LoanSummaryData | null>(null);
+  const [loanMonthly, setLoanMonthly] = useState<LoanMonthlyMap>({
+    disbursedByMonth: new Map(),
+    paidCapitalByMonth: new Map(),
+    paidInterestByMonth: new Map(),
+  });
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
 
@@ -288,7 +305,43 @@ export default function ExtractoPage() {
             payment_plan_months: b.loan.payment_plan_months,
             current_capital_balance: b.book.summary.current_capital_balance,
             total_interest_debt: b.book.summary.total_interest_debt,
+            total_paid_capital: b.book.summary.total_paid_capital,
+            total_paid_interest: b.book.summary.total_paid_interest,
           })),
+        });
+
+        // Mapas mensuales para el detalle del extracto.
+        const disbursedByMonth = new Map<string, number>();
+        const paidCapitalByMonth = new Map<string, number>();
+        const paidInterestByMonth = new Map<string, number>();
+        for (const l of entry.loans) {
+          if (l.loan.disbursed_at) {
+            const key = l.loan.disbursed_at.slice(0, 7);
+            disbursedByMonth.set(
+              key,
+              (disbursedByMonth.get(key) ?? 0) +
+                Number(l.loan.requested_amount),
+            );
+          }
+          for (const p of l.payments) {
+            const key = p.target_month.slice(0, 7);
+            if (p.concept === 'pago_capital') {
+              paidCapitalByMonth.set(
+                key,
+                (paidCapitalByMonth.get(key) ?? 0) + Number(p.amount),
+              );
+            } else if (p.concept === 'pago_intereses') {
+              paidInterestByMonth.set(
+                key,
+                (paidInterestByMonth.get(key) ?? 0) + Number(p.amount),
+              );
+            }
+          }
+        }
+        setLoanMonthly({
+          disbursedByMonth,
+          paidCapitalByMonth,
+          paidInterestByMonth,
         });
       } catch (err) {
         console.error('Error cargando resumen de préstamos:', err);
@@ -311,37 +364,29 @@ export default function ExtractoPage() {
 
     return months.map((m) => {
       const forMonth = items.filter((it) => it.target_month === m.value);
+      const monthKey = m.value.slice(0, 7);
 
+      // Aportes — acciones ordinarias.
       let approvedShares = 0;
       let approvedAmount = 0;
       let pendingShares = 0;
       let pendingAmount = 0;
       let rejectedShares = 0;
+      // Aportes — acciones por préstamo (separadas de las ordinarias).
+      let approvedLoanShares = 0;
+      let approvedLoanShareAmount = 0;
+      let pendingLoanShares = 0;
+      let pendingLoanShareAmount = 0;
+      // Multas + capitalización.
       let approvedFines = 0;
       let pendingFines = 0;
       let approvedCapitalization = 0;
       let pendingCapitalization = 0;
 
-      // Set para no duplicar referencias al mismo recibo (si tiene varias
-      // líneas con el mismo target_month).
-      const receiptMap = new Map<
-        string,
-        { id: string; number: string; status: ReceiptStatus }
-      >();
-
       for (const it of forMonth) {
         const status = it.receipts.status;
-        receiptMap.set(it.receipts.id, {
-          id: it.receipts.id,
-          number: it.receipts.receipt_number ?? '—',
-          status,
-        });
 
-        if (it.concept === 'acciones' || it.concept === 'acciones_prestamo') {
-          // Las acciones por préstamo entran al mismo bucket que las
-          // ordinarias: contablemente son acciones del accionista (con
-          // share_count y unit_value poblados por el desembolso). Lo único
-          // distinto es su origen — se muestran en el mes del desembolso.
+        if (it.concept === 'acciones') {
           const shares = it.share_count ?? 0;
           const amount = Number(it.amount);
           if (status === 'approved') {
@@ -352,6 +397,16 @@ export default function ExtractoPage() {
             pendingAmount += amount;
           } else {
             rejectedShares += shares;
+          }
+        } else if (it.concept === 'acciones_prestamo') {
+          const shares = it.share_count ?? 0;
+          const amount = Number(it.amount);
+          if (status === 'approved') {
+            approvedLoanShares += shares;
+            approvedLoanShareAmount += amount;
+          } else if (status === 'pending') {
+            pendingLoanShares += shares;
+            pendingLoanShareAmount += amount;
           }
         } else if (it.concept === 'multa_acciones') {
           if (status === 'approved') approvedFines += Number(it.amount);
@@ -377,6 +432,11 @@ export default function ExtractoPage() {
         projectedFine = computeFineForMonth(m.value, today, rules);
       }
 
+      // Préstamos del mes (vienen de loanMonthly).
+      const disbursedAmount = loanMonthly.disbursedByMonth.get(monthKey) ?? 0;
+      const paidCapital = loanMonthly.paidCapitalByMonth.get(monthKey) ?? 0;
+      const paidInterest = loanMonthly.paidInterestByMonth.get(monthKey) ?? 0;
+
       return {
         month: m.value,
         monthIndex: m.monthIndex,
@@ -386,15 +446,21 @@ export default function ExtractoPage() {
         pendingShares,
         pendingAmount,
         rejectedShares,
+        approvedLoanShares,
+        approvedLoanShareAmount,
+        pendingLoanShares,
+        pendingLoanShareAmount,
         approvedFines,
         pendingFines,
         projectedFine,
         approvedCapitalization,
         pendingCapitalization,
-        receipts: Array.from(receiptMap.values()),
+        disbursedAmount,
+        paidCapital,
+        paidInterest,
       };
     });
-  }, [items, year, rules]);
+  }, [items, year, rules, loanMonthly]);
 
   // ===== Totales anuales (solo aprobados cuentan como "real") =====
 
@@ -410,6 +476,11 @@ export default function ExtractoPage() {
         acc.projectedFine += m.projectedFine;
         acc.approvedCapitalization += m.approvedCapitalization;
         acc.pendingCapitalization += m.pendingCapitalization;
+        acc.approvedLoanShares += m.approvedLoanShares;
+        acc.approvedLoanShareAmount += m.approvedLoanShareAmount;
+        acc.disbursedAmount += m.disbursedAmount;
+        acc.paidCapital += m.paidCapital;
+        acc.paidInterest += m.paidInterest;
         return acc;
       },
       {
@@ -422,6 +493,11 @@ export default function ExtractoPage() {
         projectedFine: 0,
         approvedCapitalization: 0,
         pendingCapitalization: 0,
+        approvedLoanShares: 0,
+        approvedLoanShareAmount: 0,
+        disbursedAmount: 0,
+        paidCapital: 0,
+        paidInterest: 0,
       },
     );
   }, [monthSummaries]);
@@ -443,60 +519,43 @@ export default function ExtractoPage() {
         title: `Movimiento mensual ${year}`,
         columns: [
           { header: 'Mes', key: 'month', width: 14 },
-          { header: 'Acciones aprobadas', key: 'approvedShares', width: 12, align: 'center' },
-          { header: 'Acciones pendientes', key: 'pendingShares', width: 12, align: 'center' },
-          { header: 'Aporte aprobado', key: 'approvedAmount', width: 16, align: 'right' },
-          { header: 'Aporte pendiente', key: 'pendingAmount', width: 16, align: 'right' },
-          { header: 'Capitalización aprobada', key: 'approvedCapitalization', width: 18, align: 'right' },
-          { header: 'Capitalización pendiente', key: 'pendingCapitalization', width: 18, align: 'right' },
-          { header: 'Multa aprobada', key: 'approvedFines', width: 16, align: 'right' },
-          { header: 'Multa pendiente', key: 'pendingFines', width: 16, align: 'right' },
-          { header: 'Multa proyectada', key: 'projectedFine', width: 16, align: 'right' },
-          { header: 'Total mes', key: 'total', width: 16, align: 'right' },
-          { header: 'Recibos', key: 'receipts', width: 24 },
+          { header: 'N° acciones', key: 'shares', width: 10, align: 'center' },
+          { header: 'Valor acciones', key: 'sharesAmount', width: 16, align: 'right' },
+          { header: 'Multas', key: 'fines', width: 14, align: 'right' },
+          { header: 'N° acc. préstamo', key: 'loanShares', width: 12, align: 'center' },
+          { header: 'Valor acc. préstamo', key: 'loanShareAmount', width: 18, align: 'right' },
+          { header: 'Capitalización', key: 'cap', width: 16, align: 'right' },
+          { header: 'Préstamo', key: 'disbursed', width: 16, align: 'right' },
+          { header: 'Pago capital', key: 'paidCapital', width: 16, align: 'right' },
+          { header: 'Pago intereses', key: 'paidInterest', width: 16, align: 'right' },
         ],
         rows: monthSummaries.map((m) => ({
           month: m.label,
-          approvedShares: m.approvedShares,
-          pendingShares: m.pendingShares,
-          approvedAmount: m.approvedAmount > 0 ? cop(m.approvedAmount) : '',
-          pendingAmount: m.pendingAmount > 0 ? cop(m.pendingAmount) : '',
-          approvedCapitalization:
-            m.approvedCapitalization > 0 ? cop(m.approvedCapitalization) : '',
-          pendingCapitalization:
-            m.pendingCapitalization > 0 ? cop(m.pendingCapitalization) : '',
-          approvedFines: m.approvedFines > 0 ? cop(m.approvedFines) : '',
-          pendingFines: m.pendingFines > 0 ? cop(m.pendingFines) : '',
-          projectedFine: m.projectedFine > 0 ? cop(m.projectedFine) : '',
-          total:
-            m.approvedAmount + m.approvedCapitalization + m.approvedFines > 0
-              ? cop(
-                  m.approvedAmount +
-                    m.approvedCapitalization +
-                    m.approvedFines,
-                )
+          shares: m.approvedShares || '',
+          sharesAmount: m.approvedAmount > 0 ? cop(m.approvedAmount) : '',
+          fines: m.approvedFines > 0 ? cop(m.approvedFines) : '',
+          loanShares: m.approvedLoanShares || '',
+          loanShareAmount:
+            m.approvedLoanShareAmount > 0
+              ? cop(m.approvedLoanShareAmount)
               : '',
-          receipts: m.receipts
-            .map((r) => `${r.number} (${receiptStatusLabel(r.status)})`)
-            .join(', '),
+          cap: m.approvedCapitalization > 0 ? cop(m.approvedCapitalization) : '',
+          disbursed: m.disbursedAmount > 0 ? cop(m.disbursedAmount) : '',
+          paidCapital: m.paidCapital > 0 ? cop(m.paidCapital) : '',
+          paidInterest: m.paidInterest > 0 ? cop(m.paidInterest) : '',
         })),
         totals: {
           label: `Total ${year}`,
           values: {
-            approvedShares: annualTotals.approvedShares,
-            pendingShares: annualTotals.pendingShares,
-            approvedAmount: cop(annualTotals.approvedAmount),
-            pendingAmount: cop(annualTotals.pendingAmount),
-            approvedCapitalization: cop(annualTotals.approvedCapitalization),
-            pendingCapitalization: cop(annualTotals.pendingCapitalization),
-            approvedFines: cop(annualTotals.approvedFines),
-            pendingFines: cop(annualTotals.pendingFines),
-            projectedFine: cop(annualTotals.projectedFine),
-            total: cop(
-              annualTotals.approvedAmount +
-                annualTotals.approvedCapitalization +
-                annualTotals.approvedFines,
-            ),
+            shares: annualTotals.approvedShares,
+            sharesAmount: cop(annualTotals.approvedAmount),
+            fines: cop(annualTotals.approvedFines),
+            loanShares: annualTotals.approvedLoanShares,
+            loanShareAmount: cop(annualTotals.approvedLoanShareAmount),
+            cap: cop(annualTotals.approvedCapitalization),
+            disbursed: cop(annualTotals.disbursedAmount),
+            paidCapital: cop(annualTotals.paidCapital),
+            paidInterest: cop(annualTotals.paidInterest),
           },
         },
       };
@@ -667,47 +726,140 @@ export default function ExtractoPage() {
             Cargando…
           </div>
         ) : (
-          <div className="hidden md:block">
-            {/* Cabecera tabla */}
-            <div className="grid grid-cols-[110px_80px_1fr_1fr_1fr_1fr_1fr] items-center gap-3 px-5 py-2.5 text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase border-b border-[var(--color-border)] bg-[var(--color-surface-alt)]/40">
-              <span>Mes</span>
-              <span className="text-center">Acciones</span>
-              <span className="text-right">Aporte</span>
-              <span className="text-right">Capitalización</span>
-              <span className="text-right">Multa</span>
-              <span className="text-right">Total mes</span>
-              <span>Recibos</span>
-            </div>
-            {monthSummaries.map((m) => (
-              <MonthRow key={m.month} row={m} />
-            ))}
-
-            {/* Totales */}
-            <div className="grid grid-cols-[110px_80px_1fr_1fr_1fr_1fr_1fr] items-center gap-3 px-5 py-3 border-t-2 border-[var(--color-border)] bg-[var(--color-surface-alt)]">
-              <span className="text-[12px] font-semibold text-[var(--color-text)]">
-                Total año
-              </span>
-              <span className="text-center text-[13px] font-semibold tabular">
-                {annualTotals.approvedShares}
-              </span>
-              <span className="text-right text-[13px] font-semibold tabular">
-                {cop(annualTotals.approvedAmount)}
-              </span>
-              <span className="text-right text-[13px] font-semibold tabular">
-                {cop(annualTotals.approvedCapitalization)}
-              </span>
-              <span className="text-right text-[13px] font-semibold tabular">
-                {cop(annualTotals.approvedFines)}
-              </span>
-              <span className="text-right text-[13px] font-semibold tabular">
-                {cop(
-                  annualTotals.approvedAmount +
-                    annualTotals.approvedCapitalization +
-                    annualTotals.approvedFines,
-                )}
-              </span>
-              <span />
-            </div>
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full text-[12px] tabular border-collapse">
+              <thead>
+                {/* Fila de secciones agrupadas */}
+                <tr className="bg-[var(--color-surface-alt)]/60 text-[10px] uppercase tracking-wider text-[var(--color-text-subtle)]">
+                  <th
+                    rowSpan={2}
+                    className="text-left font-semibold px-3 py-2 align-middle border-b border-[var(--color-border)]"
+                  >
+                    Mes
+                  </th>
+                  <th
+                    colSpan={6}
+                    className="text-center font-semibold px-3 py-1.5 border-b border-l border-[var(--color-border)] bg-[var(--color-info-soft)]/40 text-[var(--color-info)]"
+                  >
+                    Aportes
+                  </th>
+                  <th
+                    colSpan={3}
+                    className="text-center font-semibold px-3 py-1.5 border-b border-l border-[var(--color-border)] bg-[var(--color-warn-soft)]/40 text-[var(--color-warn)]"
+                  >
+                    Préstamos
+                  </th>
+                  <th
+                    colSpan={3}
+                    className="text-center font-semibold px-3 py-1.5 border-b border-l border-[var(--color-border)] bg-[var(--color-brand-soft)]/40 text-[var(--color-brand)]"
+                  >
+                    Utilidades
+                  </th>
+                </tr>
+                {/* Sub-encabezado por columna */}
+                <tr className="bg-[var(--color-surface-alt)]/40 text-[10px] uppercase tracking-wider text-[var(--color-text-subtle)]">
+                  {/* Aportes */}
+                  <th className="text-center font-semibold px-3 py-2 border-b border-l border-[var(--color-border)]">
+                    N° acciones
+                  </th>
+                  <th className="text-right font-semibold px-3 py-2 border-b border-[var(--color-border)]">
+                    Valor acciones
+                  </th>
+                  <th className="text-right font-semibold px-3 py-2 border-b border-[var(--color-border)]">
+                    Multas
+                  </th>
+                  <th className="text-center font-semibold px-3 py-2 border-b border-[var(--color-border)]">
+                    N° acc. préstamo
+                  </th>
+                  <th className="text-right font-semibold px-3 py-2 border-b border-[var(--color-border)]">
+                    Valor acc. préstamo
+                  </th>
+                  <th className="text-right font-semibold px-3 py-2 border-b border-[var(--color-border)]">
+                    Capitalización
+                  </th>
+                  {/* Préstamos */}
+                  <th className="text-right font-semibold px-3 py-2 border-b border-l border-[var(--color-border)]">
+                    Préstamo
+                  </th>
+                  <th className="text-right font-semibold px-3 py-2 border-b border-[var(--color-border)]">
+                    Pago capital
+                  </th>
+                  <th className="text-right font-semibold px-3 py-2 border-b border-[var(--color-border)]">
+                    Pago intereses
+                  </th>
+                  {/* Utilidades */}
+                  <th className="text-right font-semibold px-3 py-2 border-b border-l border-[var(--color-border)]">
+                    % part.
+                  </th>
+                  <th className="text-right font-semibold px-3 py-2 border-b border-[var(--color-border)]">
+                    Util. mes
+                  </th>
+                  <th className="text-right font-semibold px-3 py-2 border-b border-[var(--color-border)]">
+                    Distribución
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--color-border)]">
+                {monthSummaries.map((m) => (
+                  <MonthRow key={m.month} row={m} />
+                ))}
+              </tbody>
+              <tfoot className="bg-[var(--color-surface-alt)] text-[12px] font-semibold">
+                <tr>
+                  <td className="px-3 py-2.5 border-t-2 border-[var(--color-border)]">
+                    Total año
+                  </td>
+                  <td className="text-center px-3 py-2.5 border-t-2 border-l border-[var(--color-border)] tabular">
+                    {annualTotals.approvedShares}
+                  </td>
+                  <td className="text-right px-3 py-2.5 border-t-2 border-[var(--color-border)] tabular">
+                    {cop(annualTotals.approvedAmount)}
+                  </td>
+                  <td className="text-right px-3 py-2.5 border-t-2 border-[var(--color-border)] tabular text-[var(--color-warn)]">
+                    {annualTotals.approvedFines > 0
+                      ? cop(annualTotals.approvedFines)
+                      : '—'}
+                  </td>
+                  <td className="text-center px-3 py-2.5 border-t-2 border-[var(--color-border)] tabular">
+                    {annualTotals.approvedLoanShares}
+                  </td>
+                  <td className="text-right px-3 py-2.5 border-t-2 border-[var(--color-border)] tabular">
+                    {annualTotals.approvedLoanShareAmount > 0
+                      ? cop(annualTotals.approvedLoanShareAmount)
+                      : '—'}
+                  </td>
+                  <td className="text-right px-3 py-2.5 border-t-2 border-[var(--color-border)] tabular text-[var(--color-brand)]">
+                    {annualTotals.approvedCapitalization > 0
+                      ? cop(annualTotals.approvedCapitalization)
+                      : '—'}
+                  </td>
+                  <td className="text-right px-3 py-2.5 border-t-2 border-l border-[var(--color-border)] tabular">
+                    {annualTotals.disbursedAmount > 0
+                      ? cop(annualTotals.disbursedAmount)
+                      : '—'}
+                  </td>
+                  <td className="text-right px-3 py-2.5 border-t-2 border-[var(--color-border)] tabular text-[var(--color-success)]">
+                    {annualTotals.paidCapital > 0
+                      ? cop(annualTotals.paidCapital)
+                      : '—'}
+                  </td>
+                  <td className="text-right px-3 py-2.5 border-t-2 border-[var(--color-border)] tabular text-[var(--color-success)]">
+                    {annualTotals.paidInterest > 0
+                      ? cop(annualTotals.paidInterest)
+                      : '—'}
+                  </td>
+                  <td className="text-right px-3 py-2.5 border-t-2 border-l border-[var(--color-border)] text-[var(--color-text-subtle)]">
+                    —
+                  </td>
+                  <td className="text-right px-3 py-2.5 border-t-2 border-[var(--color-border)] text-[var(--color-text-subtle)]">
+                    —
+                  </td>
+                  <td className="text-right px-3 py-2.5 border-t-2 border-[var(--color-border)] text-[var(--color-text-subtle)]">
+                    —
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
           </div>
         )}
 
@@ -790,6 +942,8 @@ export default function ExtractoPage() {
                   <th className="text-left font-semibold px-4 py-2.5">Estado</th>
                   <th className="text-right font-semibold px-4 py-2.5">Monto</th>
                   <th className="text-right font-semibold px-4 py-2.5">Plazo</th>
+                  <th className="text-right font-semibold px-4 py-2.5">Capital pagado</th>
+                  <th className="text-right font-semibold px-4 py-2.5">Intereses pagados</th>
                   <th className="text-right font-semibold px-4 py-2.5">Saldo capital</th>
                   <th className="text-right font-semibold px-4 py-2.5">Intereses en mora</th>
                 </tr>
@@ -818,6 +972,28 @@ export default function ExtractoPage() {
                     <td className="px-4 py-2.5 text-right text-[var(--color-text-muted)]">
                       {l.payment_plan_months ?? '—'} meses ·{' '}
                       {(l.interest_rate * 100).toFixed(2)}%
+                    </td>
+                    <td
+                      className={`px-4 py-2.5 text-right ${
+                        l.total_paid_capital > 0
+                          ? 'text-[var(--color-success)] font-semibold'
+                          : 'text-[var(--color-text-subtle)]'
+                      }`}
+                    >
+                      {l.total_paid_capital > 0
+                        ? cop(l.total_paid_capital)
+                        : '—'}
+                    </td>
+                    <td
+                      className={`px-4 py-2.5 text-right ${
+                        l.total_paid_interest > 0
+                          ? 'text-[var(--color-success)] font-semibold'
+                          : 'text-[var(--color-text-subtle)]'
+                      }`}
+                    >
+                      {l.total_paid_interest > 0
+                        ? cop(l.total_paid_interest)
+                        : '—'}
                     </td>
                     <td className="px-4 py-2.5 text-right font-semibold">
                       {cop(l.current_capital_balance)}
@@ -933,178 +1109,217 @@ function SummaryCard({
 }
 
 function MonthRow({ row }: { row: MonthSummary }) {
-  const total =
-    row.approvedAmount + row.approvedCapitalization + row.approvedFines;
-  const hasPending =
-    row.pendingShares > 0 ||
-    row.pendingFines > 0 ||
-    row.pendingCapitalization > 0;
-  const hasActivity =
-    row.approvedShares > 0 ||
-    row.pendingShares > 0 ||
-    row.rejectedShares > 0 ||
-    row.approvedFines > 0 ||
-    row.pendingFines > 0 ||
-    row.approvedCapitalization > 0 ||
-    row.pendingCapitalization > 0;
+  // Helper para mostrar pendientes en revisión bajo el valor aprobado.
+  const cell = (approved: number, pending: number, fmt: (n: number) => string, tone?: string) => (
+    <>
+      <div className={`tabular font-medium ${approved > 0 ? tone ?? '' : 'text-[var(--color-text-subtle)]'}`}>
+        {approved > 0 ? fmt(approved) : '—'}
+      </div>
+      {pending > 0 && (
+        <div className="text-[10px] text-[var(--color-warn)] font-semibold">
+          +{fmt(pending)} en rev.
+        </div>
+      )}
+    </>
+  );
+
+  // Multas: si no hay aprobada/pendiente y el mes está en mora, mostramos
+  // proyección en rojo.
+  const finesCell = () => {
+    if (row.approvedFines > 0)
+      return (
+        <div className="tabular font-medium text-[var(--color-warn)]">
+          {cop(row.approvedFines)}
+        </div>
+      );
+    if (row.pendingFines > 0)
+      return (
+        <div className="tabular font-medium text-[var(--color-warn)]">
+          {cop(row.pendingFines)}
+          <div className="text-[10px] font-semibold">en rev.</div>
+        </div>
+      );
+    if (row.projectedFine > 0)
+      return (
+        <div className="tabular font-medium text-[var(--color-danger)]">
+          ≈ {cop(row.projectedFine)}
+          <div className="text-[10px] font-semibold">proyectada</div>
+        </div>
+      );
+    return <span className="text-[var(--color-text-subtle)]">—</span>;
+  };
 
   return (
-    <div className="grid grid-cols-[110px_80px_1fr_1fr_1fr_1fr_1fr] items-center gap-3 px-5 py-3 border-b border-[var(--color-border)] text-[13px] hover:bg-[var(--color-surface-alt)]/40 transition-colors">
-      <div className="flex flex-col">
-        <span className="font-semibold text-[var(--color-text)]">
+    <tr className="hover:bg-[var(--color-surface-alt)]/40 transition-colors">
+      <td className="px-3 py-2.5 align-top">
+        <div className="font-semibold text-[var(--color-text)]">
           {row.label}
-        </span>
+        </div>
         {row.projectedFine > 0 && (
-          <span className="text-[10px] font-semibold text-[var(--color-danger)] tracking-wide">
+          <div className="text-[10px] font-semibold text-[var(--color-danger)] tracking-wide">
             En mora
-          </span>
+          </div>
         )}
-      </div>
+      </td>
 
-      <div className="text-center font-semibold tabular">
-        {row.approvedShares}
+      {/* Aportes — N° acciones */}
+      <td className="text-center px-3 py-2.5 align-top tabular font-medium">
+        {row.approvedShares > 0 ? row.approvedShares : '—'}
         {row.pendingShares > 0 && (
-          <span className="ml-1 text-[10px] text-[var(--color-warn)] font-semibold">
-            +{row.pendingShares}
-          </span>
+          <div className="text-[10px] text-[var(--color-warn)] font-semibold">
+            +{row.pendingShares} en rev.
+          </div>
         )}
-      </div>
+      </td>
+      {/* Aportes — Valor acciones */}
+      <td className="text-right px-3 py-2.5 align-top">
+        {cell(row.approvedAmount, row.pendingAmount, cop, 'text-[var(--color-success)]')}
+      </td>
+      {/* Aportes — Multas */}
+      <td className="text-right px-3 py-2.5 align-top">{finesCell()}</td>
+      {/* Aportes — N° acciones por préstamo */}
+      <td className="text-center px-3 py-2.5 align-top tabular font-medium">
+        {row.approvedLoanShares > 0 ? row.approvedLoanShares : '—'}
+        {row.pendingLoanShares > 0 && (
+          <div className="text-[10px] text-[var(--color-warn)] font-semibold">
+            +{row.pendingLoanShares} en rev.
+          </div>
+        )}
+      </td>
+      {/* Aportes — Valor acciones por préstamo */}
+      <td className="text-right px-3 py-2.5 align-top">
+        {cell(
+          row.approvedLoanShareAmount,
+          row.pendingLoanShareAmount,
+          cop,
+          'text-[var(--color-success)]',
+        )}
+      </td>
+      {/* Aportes — Capitalización */}
+      <td className="text-right px-3 py-2.5 align-top">
+        {cell(
+          row.approvedCapitalization,
+          row.pendingCapitalization,
+          cop,
+          'text-[var(--color-brand)]',
+        )}
+      </td>
 
-      <div className="text-right">
+      {/* Préstamos — Préstamo desembolsado */}
+      <td className="text-right px-3 py-2.5 align-top tabular font-medium border-l border-[var(--color-border)]/60">
+        {row.disbursedAmount > 0 ? cop(row.disbursedAmount) : '—'}
+      </td>
+      {/* Préstamos — Pago capital */}
+      <td className="text-right px-3 py-2.5 align-top">
         <div
-          className={`tabular font-semibold ${
-            row.approvedAmount > 0
+          className={`tabular font-medium ${
+            row.paidCapital > 0
               ? 'text-[var(--color-success)]'
               : 'text-[var(--color-text-subtle)]'
           }`}
         >
-          {row.approvedAmount > 0 ? cop(row.approvedAmount) : '—'}
+          {row.paidCapital > 0 ? cop(row.paidCapital) : '—'}
         </div>
-        {row.pendingAmount > 0 && (
-          <div className="text-[10px] text-[var(--color-warn)] font-semibold">
-            {cop(row.pendingAmount)} en revisión
-          </div>
-        )}
-      </div>
-
-      <div className="text-right">
+      </td>
+      {/* Préstamos — Pago intereses */}
+      <td className="text-right px-3 py-2.5 align-top">
         <div
-          className={`tabular font-semibold ${
-            row.approvedCapitalization > 0
-              ? 'text-[var(--color-brand)]'
+          className={`tabular font-medium ${
+            row.paidInterest > 0
+              ? 'text-[var(--color-success)]'
               : 'text-[var(--color-text-subtle)]'
           }`}
         >
-          {row.approvedCapitalization > 0
-            ? cop(row.approvedCapitalization)
-            : '—'}
+          {row.paidInterest > 0 ? cop(row.paidInterest) : '—'}
         </div>
-        {row.pendingCapitalization > 0 && (
-          <div className="text-[10px] text-[var(--color-warn)] font-semibold">
-            {cop(row.pendingCapitalization)} en revisión
-          </div>
-        )}
-      </div>
+      </td>
 
-      <div className="text-right">
-        {row.approvedFines > 0 ? (
-          <div className="tabular font-semibold text-[var(--color-warn)]">
-            {cop(row.approvedFines)}
-          </div>
-        ) : row.pendingFines > 0 ? (
-          <div className="tabular font-semibold text-[var(--color-warn)]">
-            {cop(row.pendingFines)}
-            <div className="text-[10px] font-semibold">en revisión</div>
-          </div>
-        ) : row.projectedFine > 0 ? (
-          <div className="tabular font-semibold text-[var(--color-danger)]">
-            ≈ {cop(row.projectedFine)}
-            <div className="text-[10px] font-semibold">proyectada</div>
-          </div>
-        ) : (
-          <span className="text-[var(--color-text-subtle)]">—</span>
-        )}
-      </div>
-
-      <div className="text-right tabular font-semibold">
-        {total > 0 ? cop(total) : '—'}
-      </div>
-
-      <div className="flex items-center gap-1 flex-wrap">
-        {row.receipts.length === 0 ? (
-          <span className="text-[var(--color-text-subtle)] text-[12px]">
-            {hasActivity ? '—' : 'Sin movimiento'}
-          </span>
-        ) : (
-          row.receipts.map((r) => {
-            const Icon = statusIcon(r.status);
-            const tone = statusTone(r.status);
-            return (
-              <span
-                key={r.id}
-                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${
-                  tone === 'success'
-                    ? 'bg-[var(--color-success-soft)] text-[var(--color-success)]'
-                    : tone === 'warn'
-                      ? 'bg-[var(--color-warn-soft)] text-[var(--color-warn)]'
-                      : 'bg-[var(--color-danger-soft)] text-[var(--color-danger)]'
-                }`}
-                title={receiptStatusLabel(r.status)}
-              >
-                <Icon size={11} strokeWidth={2} />
-                {r.number}
-              </span>
-            );
-          })
-        )}
-        {hasPending && row.receipts.length > 0 && (
-          <span className="inline-flex items-center">
-            <ArrowRight size={10} strokeWidth={2} className="text-[var(--color-text-subtle)]" />
-          </span>
-        )}
-      </div>
-    </div>
+      {/* Utilidades — placeholder hasta que el módulo esté listo */}
+      <td className="text-right px-3 py-2.5 align-top text-[var(--color-text-subtle)] border-l border-[var(--color-border)]/60">
+        —
+      </td>
+      <td className="text-right px-3 py-2.5 align-top text-[var(--color-text-subtle)]">
+        —
+      </td>
+      <td className="text-right px-3 py-2.5 align-top text-[var(--color-text-subtle)]">
+        —
+      </td>
+    </tr>
   );
 }
 
 function MonthCardMobile({ row }: { row: MonthSummary }) {
-  const total =
-    row.approvedAmount + row.approvedCapitalization + row.approvedFines;
+  const aportesTotal =
+    row.approvedAmount +
+    row.approvedLoanShareAmount +
+    row.approvedCapitalization +
+    row.approvedFines;
+  const prestamosTotal = row.paidCapital + row.paidInterest;
+
   return (
-    <div className="px-5 py-3">
-      <div className="flex items-center justify-between mb-1">
+    <div className="px-5 py-3 flex flex-col gap-2">
+      <div className="flex items-center justify-between">
         <span className="text-[14px] font-semibold">{row.label}</span>
-        <span className="text-[14px] font-semibold tabular">
-          {total > 0 ? cop(total) : '—'}
-        </span>
-      </div>
-      <div className="flex items-center gap-3 text-[12px] text-[var(--color-text-muted)] flex-wrap">
-        <span>
-          {row.approvedShares} acciones
-          {row.pendingShares > 0 && ` (+${row.pendingShares})`}
-        </span>
-        {row.approvedCapitalization > 0 && (
-          <Badge tone="brand">
-            Capitaliz. {cop(row.approvedCapitalization)}
-          </Badge>
-        )}
-        {row.approvedFines > 0 && (
-          <Badge tone="warn">Multa {cop(row.approvedFines)}</Badge>
-        )}
         {row.projectedFine > 0 && (
-          <Badge tone="danger">Mora {cop(row.projectedFine)}</Badge>
+          <Badge tone="danger">Mora</Badge>
         )}
       </div>
-      {row.receipts.length > 0 && (
-        <div className="mt-1.5 flex items-center gap-1 flex-wrap">
-          {row.receipts.map((r) => (
-            <span
-              key={r.id}
-              className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]"
-            >
-              {r.number}
-            </span>
-          ))}
+
+      {/* Aportes */}
+      {(aportesTotal > 0 ||
+        row.pendingAmount > 0 ||
+        row.pendingCapitalization > 0) && (
+        <div className="flex flex-col gap-1 p-2.5 rounded-[8px] bg-[var(--color-info-soft)]/30">
+          <div className="text-[10px] font-semibold text-[var(--color-info)] uppercase tracking-wider">
+            Aportes
+          </div>
+          <div className="text-[12px] text-[var(--color-text-muted)] flex flex-wrap gap-x-3 gap-y-0.5">
+            {row.approvedShares > 0 && (
+              <span>
+                {row.approvedShares} acc · {cop(row.approvedAmount)}
+              </span>
+            )}
+            {row.approvedLoanShares > 0 && (
+              <span>
+                {row.approvedLoanShares} acc. préstamo ·{' '}
+                {cop(row.approvedLoanShareAmount)}
+              </span>
+            )}
+            {row.approvedCapitalization > 0 && (
+              <span className="text-[var(--color-brand)] font-semibold">
+                Capitaliz. {cop(row.approvedCapitalization)}
+              </span>
+            )}
+            {row.approvedFines > 0 && (
+              <span className="text-[var(--color-warn)] font-semibold">
+                Multa {cop(row.approvedFines)}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Préstamos */}
+      {(row.disbursedAmount > 0 || prestamosTotal > 0) && (
+        <div className="flex flex-col gap-1 p-2.5 rounded-[8px] bg-[var(--color-warn-soft)]/30">
+          <div className="text-[10px] font-semibold text-[var(--color-warn)] uppercase tracking-wider">
+            Préstamos
+          </div>
+          <div className="text-[12px] text-[var(--color-text-muted)] flex flex-wrap gap-x-3 gap-y-0.5">
+            {row.disbursedAmount > 0 && (
+              <span>Desembolso {cop(row.disbursedAmount)}</span>
+            )}
+            {row.paidCapital > 0 && (
+              <span className="text-[var(--color-success)] font-semibold">
+                Capital {cop(row.paidCapital)}
+              </span>
+            )}
+            {row.paidInterest > 0 && (
+              <span className="text-[var(--color-success)] font-semibold">
+                Intereses {cop(row.paidInterest)}
+              </span>
+            )}
+          </div>
         </div>
       )}
     </div>

@@ -41,10 +41,47 @@ export const capitalizacionItemInput = z.object({
 });
 export type CapitalizacionItemInput = z.infer<typeof capitalizacionItemInput>;
 
+// Pago de intereses / abono a capital de un préstamo activo del accionista.
+// loan_id es obligatorio; el trigger valida que pertenezca al mismo user.
+export const pagoInteresesItemInput = z.object({
+  concept: z.literal('pago_intereses'),
+  target_month: targetMonthString,
+  amount: z
+    .number()
+    .positive('El monto debe ser mayor a cero')
+    .max(999_999_999, 'Monto demasiado grande'),
+  loan_id: z.string().uuid('loan_id inválido'),
+});
+export type PagoInteresesItemInput = z.infer<typeof pagoInteresesItemInput>;
+
+export const pagoCapitalItemInput = z.object({
+  concept: z.literal('pago_capital'),
+  target_month: targetMonthString,
+  amount: z
+    .number()
+    .positive('El monto debe ser mayor a cero')
+    .max(999_999_999, 'Monto demasiado grande'),
+  loan_id: z.string().uuid('loan_id inválido'),
+});
+export type PagoCapitalItemInput = z.infer<typeof pagoCapitalItemInput>;
+
+// Pago upfront de las acciones por préstamo. La UI envía solo loan_id;
+// el backend resuelve loan_shares_count, unit_value y amount desde la fila
+// del préstamo (no confiamos en lo que mande el cliente para esto).
+export const accionesPrestamoItemInput = z.object({
+  concept: z.literal('acciones_prestamo'),
+  target_month: targetMonthString,
+  loan_id: z.string().uuid('loan_id inválido'),
+});
+export type AccionesPrestamoItemInput = z.infer<typeof accionesPrestamoItemInput>;
+
 // Discriminado por `concept` para que el consumidor pueda hacer narrowing.
 export const purchaseItemInput = z.discriminatedUnion('concept', [
   accionesItemInput,
   capitalizacionItemInput,
+  pagoInteresesItemInput,
+  pagoCapitalItemInput,
+  accionesPrestamoItemInput,
 ]);
 export type PurchaseItemInput = z.infer<typeof purchaseItemInput>;
 

@@ -37,6 +37,7 @@ import {
   countLoansAwaitingMyVote,
   countLoansReadyForDisbursementForUser,
   countLoansRequiringActionForUser,
+  countMyPendingLoanSharePurchases,
   type AdminPendingLoanCounts,
 } from '@/lib/data/loans';
 import type { TopNavNotificationItem } from '@/components/ui/TopNav';
@@ -64,6 +65,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [pendingLoanAction, setPendingLoanAction] = useState<number>(0);
   const [pendingLoanReady, setPendingLoanReady] = useState<number>(0);
   const [pendingLoanActive, setPendingLoanActive] = useState<number>(0);
+  const [pendingLoanShares, setPendingLoanShares] = useState<number>(0);
 
   // Sidebar abrible/cerrable. En desktop arranca abierto; en mobile cerrado.
   // Usamos un state único: sidebarOpen. El layout aplica clases distintas
@@ -201,11 +203,20 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             console.error('Error contando préstamos recién desembolsados:', err);
           }
         };
+        const fetchPendingLoanShares = async () => {
+          try {
+            const n = await countMyPendingLoanSharePurchases(supabase);
+            if (!cancelled) setPendingLoanShares(n);
+          } catch (err) {
+            console.error('Error contando acciones por préstamo pendientes:', err);
+          }
+        };
         fetchPendingVotes();
         fetchPendingRejected();
         fetchPendingLoanAction();
         fetchPendingLoanReady();
         fetchPendingLoanActive();
+        fetchPendingLoanShares();
         const channel = supabase
           .channel(`dashboard-shareholder-counts-${uid}`)
           .on(
@@ -216,6 +227,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               fetchPendingLoanAction();
               fetchPendingLoanReady();
               fetchPendingLoanActive();
+              fetchPendingLoanShares();
             },
           )
           .on(
@@ -226,7 +238,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           .on(
             'postgres_changes',
             { event: '*', schema: 'public', table: 'receipts', filter: `user_id=eq.${uid}` },
-            () => fetchPendingRejected(),
+            () => {
+              fetchPendingRejected();
+              // Si el accionista envía/aprueban un recibo de
+              // acciones_prestamo, este conteo cambia.
+              fetchPendingLoanShares();
+            },
           )
           .subscribe();
         cleanupRef.current = () => supabase.removeChannel(channel);
@@ -282,7 +299,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   const accionistaNav: NavItem[] = [
     { key: 'home', label: 'Mi capital', href: '/dashboard/accionista', icon: Wallet },
-    { key: 'compras', label: 'Comprar', href: '/dashboard/compras', icon: ShoppingCart },
+    {
+      key: 'compras',
+      label: 'Comprar',
+      href: '/dashboard/compras',
+      icon: ShoppingCart,
+      badge: pendingLoanShares > 0 ? pendingLoanShares : undefined,
+    },
     {
       key: 'prestamos',
       label: 'Préstamos',
@@ -388,6 +411,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         count: pendingRejected,
         href: '/dashboard/historial',
         icon: Receipt,
+      },
+      {
+        key: 'loan-shares',
+        label: 'Acciones por préstamo por pagar',
+        count: pendingLoanShares,
+        href: '/dashboard/compras',
+        icon: ShoppingCart,
       },
     ];
   };

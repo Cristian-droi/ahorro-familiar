@@ -98,13 +98,30 @@ export function computeFineForMonth(
   today: Date, // anchor en UTC de día Bogotá
   rules: PurchaseRules,
 ): number {
+  return computeFineDetail(targetMonth, today, rules).amount;
+}
+
+// Variante que también devuelve cuántos días en mora se están cobrando y
+// si llegó al tope. Útil para mostrar la info en la UI sin recalcular.
+export function computeFineDetail(
+  targetMonth: string, // "YYYY-MM-01"
+  today: Date, // anchor en UTC de día Bogotá
+  rules: PurchaseRules,
+): { amount: number; daysLate: number; chargedDays: number; capped: boolean } {
   const [year, month] = targetMonth.split('-').map(Number);
-  // Último día del periodo de gracia del target_month en UTC-anchor.
   const graceEnd = new Date(Date.UTC(year, month - 1, rules.grace_period_days));
 
   const diffMs = today.getTime() - graceEnd.getTime();
-  const daysLate = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  if (daysLate <= 0) return 0;
+  const daysLate = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+  if (daysLate <= 0) {
+    return { amount: 0, daysLate: 0, chargedDays: 0, capped: false };
+  }
 
-  return Math.min(daysLate * rules.fine_per_day, rules.fine_max_per_month);
+  const raw = daysLate * rules.fine_per_day;
+  const capped = raw > rules.fine_max_per_month;
+  const amount = capped ? rules.fine_max_per_month : raw;
+  const chargedDays = capped
+    ? Math.floor(rules.fine_max_per_month / rules.fine_per_day)
+    : daysLate;
+  return { amount, daysLate, chargedDays, capped };
 }

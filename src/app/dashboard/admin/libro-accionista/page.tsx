@@ -28,7 +28,13 @@ import {
   type LibroAccionistaEntry,
   type LibroAccionistaLoan,
 } from '@/lib/data/loans';
-import { computeLoanBook, type LoanBook, LOAN_STATUS_LABELS } from '@/lib/loans';
+import {
+  computeLoanBook,
+  computeUnifiedLoanBook,
+  type LoanBook,
+  type UnifiedLoanBook,
+  LOAN_STATUS_LABELS,
+} from '@/lib/loans';
 import { cop, monthLabel } from '@/lib/format';
 
 type BookedLoan = {
@@ -46,6 +52,7 @@ type BookedEntry = {
     interest_debt: number;
     current_balance: number;
   };
+  unified: UnifiedLoanBook;
 };
 
 function computeBookedEntries(entries: LibroAccionistaEntry[]): BookedEntry[] {
@@ -69,7 +76,14 @@ function computeBookedEntries(entries: LibroAccionistaEntry[]): BookedEntry[] {
       }),
       { requested: 0, paid_capital: 0, paid_interest: 0, interest_debt: 0, current_balance: 0 },
     );
-    return { user: e.user, loans, totals };
+    const unified = computeUnifiedLoanBook(
+      loans.map((bl) => ({
+        requested: bl.book.summary.requested_amount,
+        book: bl.book,
+        disbursedAt: bl.source.loan.disbursed_at ?? null,
+      })),
+    );
+    return { user: e.user, loans, totals, unified };
   });
 }
 
@@ -95,8 +109,11 @@ export default function LibroAccionistaPage() {
             ? current
             : booked[0].user.id,
         );
-        // Por defecto abrimos todos los préstamos del accionista seleccionado.
-        setExpandedLoans(new Set(booked.flatMap((b) => b.loans.map((l) => l.source.loan.id))));
+        // Por defecto los bloques individuales arrancan colapsados — la
+        // tabla unificada (panorama de todos los préstamos) es la vista
+        // principal, los individuales se expanden si el admin quiere
+        // detalle por préstamo.
+        setExpandedLoans(new Set());
       } else {
         setSelectedUserId(null);
         setExpandedLoans(new Set());
@@ -320,7 +337,18 @@ export default function LibroAccionistaPage() {
                 </div>
               </Card>
 
-              {/* Un bloque por préstamo */}
+              {/* Tabla unificada — todos los préstamos del accionista
+                  combinados mes a mes (vista principal). */}
+              {selected.loans.length > 0 && (
+                <UnifiedBookCard unified={selected.unified} />
+              )}
+
+              {/* Un bloque expandible por préstamo (detalle individual). */}
+              {selected.loans.length > 1 && (
+                <div className="text-[11px] font-semibold text-[var(--color-text-subtle)] tracking-[0.12em] uppercase mt-2">
+                  Detalle por préstamo
+                </div>
+              )}
               {selected.loans.map((bl) => {
                 const l = bl.source.loan;
                 const loanId = l.id;
@@ -511,6 +539,153 @@ export default function LibroAccionistaPage() {
         </div>
       )}
     </div>
+  );
+}
+
+// Tabla unificada con todos los préstamos del accionista combinados
+// mes a mes. Replica el formato Excel-like que el admin pidió: una sola
+// vista con cuotas, abonos, mora y saldo agregados.
+function UnifiedBookCard({ unified }: { unified: UnifiedLoanBook }) {
+  if (unified.rows.length === 0) {
+    return null;
+  }
+  const totalRequested = unified.rows.reduce(
+    (s, r) => s + r.disbursed_this_month,
+    0,
+  );
+  const totalPlanCapital = unified.rows.reduce(
+    (s, r) => s + r.plan_capital,
+    0,
+  );
+  const totalPlanInterest = unified.rows.reduce(
+    (s, r) => s + r.plan_interest,
+    0,
+  );
+  const totalCuota = totalPlanCapital + totalPlanInterest;
+  const totalPaidCapital = unified.summary.total_paid_capital;
+  const totalPaidInterest = unified.summary.total_paid_interest;
+  const totalInterestDebt = unified.summary.total_interest_debt;
+  const finalBalance = unified.summary.current_capital_balance;
+
+  return (
+    <Card padding="none" className="overflow-hidden">
+      <div className="px-5 py-3.5 border-b border-[var(--color-border)] flex items-center gap-2">
+        <BookUser size={15} strokeWidth={1.75} className="text-[var(--color-brand)]" />
+        <span className="text-[13px] font-semibold tracking-tight">
+          Resumen mensual unificado
+        </span>
+        <span className="text-[11px] text-[var(--color-text-subtle)] ml-auto">
+          Suma de todos los préstamos del accionista
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[12px] tabular">
+          <thead className="bg-[var(--color-surface-alt)]/60 text-[10px] uppercase tracking-wider text-[var(--color-text-subtle)]">
+            <tr>
+              <th className="text-left font-semibold px-4 py-2.5">Mes</th>
+              <th className="text-right font-semibold px-4 py-2.5">Préstamo</th>
+              <th className="text-right font-semibold px-4 py-2.5">
+                Cuota capital
+              </th>
+              <th className="text-right font-semibold px-4 py-2.5">
+                Cuota intereses
+              </th>
+              <th className="text-right font-semibold px-4 py-2.5">
+                Total cuota
+              </th>
+              <th className="text-right font-semibold px-4 py-2.5">
+                Abono capital
+              </th>
+              <th className="text-right font-semibold px-4 py-2.5">
+                Abono intereses
+              </th>
+              <th className="text-right font-semibold px-4 py-2.5">
+                Saldo intereses
+              </th>
+              <th className="text-right font-semibold px-4 py-2.5">
+                Saldo capital
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[var(--color-border)]">
+            {unified.rows.map((row) => {
+              const totalCuotaRow = row.plan_capital + row.plan_interest;
+              const hasDebt = row.interest_debt > 0;
+              return (
+                <tr key={row.month_key}>
+                  <td className="px-4 py-2.5 font-medium text-[var(--color-text)]">
+                    {monthLabel(row.month_key, true)}
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-[var(--color-text-muted)]">
+                    {row.disbursed_this_month > 0
+                      ? cop(row.disbursed_this_month)
+                      : '—'}
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-[var(--color-text-muted)]">
+                    {row.plan_capital > 0 ? cop(row.plan_capital) : '—'}
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-[var(--color-text-muted)]">
+                    {row.plan_interest > 0 ? cop(row.plan_interest) : '—'}
+                  </td>
+                  <td className="px-4 py-2.5 text-right font-medium">
+                    {totalCuotaRow > 0 ? cop(totalCuotaRow) : '—'}
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-[var(--color-success)]">
+                    {row.paid_capital > 0 ? cop(row.paid_capital) : '—'}
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-[var(--color-success)]">
+                    {row.paid_interest > 0 ? cop(row.paid_interest) : '—'}
+                  </td>
+                  <td
+                    className={`px-4 py-2.5 text-right ${
+                      hasDebt
+                        ? 'text-[var(--color-danger)] font-semibold'
+                        : 'text-[var(--color-text-subtle)]'
+                    }`}
+                  >
+                    {hasDebt ? cop(row.interest_debt) : '—'}
+                  </td>
+                  <td className="px-4 py-2.5 text-right font-semibold">
+                    {cop(row.capital_balance_after)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot className="bg-[var(--color-surface-alt)]/60 text-[11px] font-semibold">
+            <tr>
+              <td className="px-4 py-2.5">Totales</td>
+              <td className="px-4 py-2.5 text-right text-[var(--color-text-muted)]">
+                {cop(totalRequested)}
+              </td>
+              <td className="px-4 py-2.5 text-right text-[var(--color-text-muted)]">
+                {cop(totalPlanCapital)}
+              </td>
+              <td className="px-4 py-2.5 text-right text-[var(--color-text-muted)]">
+                {cop(totalPlanInterest)}
+              </td>
+              <td className="px-4 py-2.5 text-right">{cop(totalCuota)}</td>
+              <td className="px-4 py-2.5 text-right text-[var(--color-success)]">
+                {cop(totalPaidCapital)}
+              </td>
+              <td className="px-4 py-2.5 text-right text-[var(--color-success)]">
+                {cop(totalPaidInterest)}
+              </td>
+              <td
+                className={`px-4 py-2.5 text-right ${
+                  totalInterestDebt > 0
+                    ? 'text-[var(--color-danger)]'
+                    : 'text-[var(--color-text-subtle)]'
+                }`}
+              >
+                {totalInterestDebt > 0 ? cop(totalInterestDebt) : '—'}
+              </td>
+              <td className="px-4 py-2.5 text-right">{cop(finalBalance)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </Card>
   );
 }
 

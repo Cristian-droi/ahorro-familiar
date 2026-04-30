@@ -509,6 +509,7 @@ export type Database = {
         Returns: undefined
       }
       count_active_shareholders: { Args: never; Returns: number }
+      count_my_pending_loan_share_purchases: { Args: never; Returns: number }
       get_capitalization_window_state: { Args: never; Returns: Json }
       get_capitalization_windows_admin: {
         Args: never
@@ -527,6 +528,31 @@ export type Database = {
       }
       get_cash_balance: { Args: never; Returns: number }
       get_my_capitalization_state: { Args: never; Returns: Json }
+      get_my_pending_loan_share_purchases: {
+        Args: never
+        Returns: {
+          loan_created_at: string
+          loan_id: string
+          loan_shares_amount: number
+          loan_shares_count: number
+          requested_amount: number
+          unit_value: number
+        }[]
+      }
+      get_user_active_loans_debt: {
+        Args: never
+        Returns: {
+          disbursed_at: string
+          disbursement_number: string
+          interest_owed: number
+          interest_rate: number
+          loan_id: string
+          months_overdue: number
+          next_due_month: string
+          outstanding_capital: number
+          requested_amount: number
+        }[]
+      }
       is_admin: { Args: never; Returns: boolean }
       mark_my_loans_status_seen: { Args: never; Returns: number }
       open_capitalization_window: {

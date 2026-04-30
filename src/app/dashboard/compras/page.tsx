@@ -33,6 +33,7 @@ import {
   CheckCircle2,
   TrendingUp,
   Lock,
+  Landmark,
 } from 'lucide-react';
 import { getProfile } from '@/lib/data/profiles';
 import { listReceiptsForUser } from '@/lib/data/receipts';
@@ -41,7 +42,13 @@ import {
   type MyCapState,
 } from '@/lib/data/capitalization';
 import {
-  computeFineForMonth,
+  getMyActiveLoansDebt,
+  getMyPendingLoanSharePurchases,
+  type ActiveLoanDebt,
+  type PendingLoanSharePurchase,
+} from '@/lib/data/loans';
+import {
+  computeFineDetail,
   DEFAULT_PURCHASE_RULES,
   getBogotaCurrentMonth,
   getBogotaToday,
@@ -110,6 +117,29 @@ export default function ComprasPage() {
   const [capState, setCapState] = useState<MyCapState | null>(null);
   const [capEnabled, setCapEnabled] = useState(false);
   const [capAmountInput, setCapAmountInput] = useState<string>('');
+
+  // Pago de préstamos: lista de préstamos activos con su deuda calculada
+  // por backend. El user marca cuáles pagar (Set) y opcionalmente abona
+  // capital (string indexado por loan_id, formato es-CO con separadores).
+  // Los intereses son siempre `interest_owed` y NO son editables.
+  const [loanDebts, setLoanDebts] = useState<ActiveLoanDebt[]>([]);
+  const [loanPaySelected, setLoanPaySelected] = useState<Set<string>>(new Set());
+  const [loanPayCapital, setLoanPayCapital] = useState<Map<string, string>>(
+    new Map(),
+  );
+
+  // Acciones por préstamo (upfront) pendientes. Cuando hay préstamos en
+  // pending_disbursement con upfront=true, el accionista DEBE pagar las
+  // acciones antes de que admin pueda desembolsar. Se muestran en una
+  // sección no editable (cantidad y monto fijos por el préstamo). Por
+  // defecto vienen TODOS seleccionados — el user puede deseleccionar si
+  // quiere postergar (no es obligatorio incluirlos en este recibo).
+  const [pendingLoanShares, setPendingLoanShares] = useState<
+    PendingLoanSharePurchase[]
+  >([]);
+  const [loanSharesSelected, setLoanSharesSelected] = useState<Set<string>>(
+    new Set(),
+  );
 
   // Archivo comprobante.
   const [file, setFile] = useState<File | null>(null);
@@ -243,6 +273,27 @@ export default function ComprasPage() {
         console.error('Error cargando capitalizaciones:', err);
       }
 
+      // Préstamos activos con deuda — solo se muestra la sección si hay.
+      try {
+        const debts = await getMyActiveLoansDebt(supabase);
+        if (!cancelled) setLoanDebts(debts);
+      } catch (err) {
+        console.error('Error cargando deuda de préstamos:', err);
+      }
+
+      // Acciones por préstamo (upfront) pendientes — sección no editable.
+      // Por defecto las pre-seleccionamos todas para que el accionista solo
+      // tenga que confirmar y pagar.
+      try {
+        const pending = await getMyPendingLoanSharePurchases(supabase);
+        if (!cancelled) {
+          setPendingLoanShares(pending);
+          setLoanSharesSelected(new Set(pending.map((p) => p.loan_id)));
+        }
+      } catch (err) {
+        console.error('Error cargando acciones por préstamo:', err);
+      }
+
       if (!cancelled) setLoading(false);
     })();
 
@@ -265,18 +316,38 @@ export default function ComprasPage() {
   }, [lines]);
 
   // Multas por cada mes distinto del carrito (solo si aún no hay multa
-  // registrada en otro recibo activo del usuario).
+  // registrada en otro recibo activo del usuario). Calculamos también
+  // `chargedDays` para mostrarlo inline en la línea correspondiente.
   const fineBreakdown = useMemo(() => {
     const today = getBogotaToday();
     const distinctMonths = Array.from(new Set(lines.map((l) => l.target_month)));
-    const out: { month: string; amount: number }[] = [];
+    const out: {
+      month: string;
+      amount: number;
+      chargedDays: number;
+      capped: boolean;
+    }[] = [];
     for (const m of distinctMonths) {
       if (monthsAlreadyFined.has(m)) continue;
-      const fine = computeFineForMonth(m, today, rules);
-      if (fine > 0) out.push({ month: m, amount: fine });
+      const detail = computeFineDetail(m, today, rules);
+      if (detail.amount > 0) {
+        out.push({
+          month: m,
+          amount: detail.amount,
+          chargedDays: detail.chargedDays,
+          capped: detail.capped,
+        });
+      }
     }
     return out;
   }, [lines, rules, monthsAlreadyFined]);
+
+  // Mapa mes → multa (para mostrar la info inline en cada línea).
+  const fineByMonth = useMemo(() => {
+    const m = new Map<string, (typeof fineBreakdown)[number]>();
+    for (const f of fineBreakdown) m.set(f.month, f);
+    return m;
+  }, [fineBreakdown]);
 
   const sharesSubtotal = useMemo(() => {
     if (shareValue == null) return 0;
@@ -298,7 +369,53 @@ export default function ComprasPage() {
     return Number.isFinite(n) ? n : 0;
   }, [capEnabled, capAmountInput]);
 
-  const totalAmount = sharesSubtotal + finesSubtotal + capAmountParsed;
+  // Subtotales de pagos de préstamo. Para cada loan seleccionado:
+  //   - intereses = interest_owed (obligatorio, no editable).
+  //   - capital   = parseado del input (puede ser 0 → solo intereses).
+  // Total de pagos de préstamo = suma de ambos por todos los seleccionados.
+  const loanPaymentBreakdown = useMemo(() => {
+    const out: { loan: ActiveLoanDebt; interests: number; capital: number }[] = [];
+    for (const debt of loanDebts) {
+      if (!loanPaySelected.has(debt.loan_id)) continue;
+      const raw = loanPayCapital.get(debt.loan_id) ?? '';
+      const digits = raw.replace(/[^\d]/g, '');
+      const capital = digits === '' ? 0 : Number(digits);
+      out.push({
+        loan: debt,
+        interests: debt.interest_owed,
+        capital: Number.isFinite(capital) ? capital : 0,
+      });
+    }
+    return out;
+  }, [loanDebts, loanPaySelected, loanPayCapital]);
+
+  const loanPaymentsSubtotal = useMemo(
+    () =>
+      loanPaymentBreakdown.reduce(
+        (s, p) => s + p.interests + p.capital,
+        0,
+      ),
+    [loanPaymentBreakdown],
+  );
+
+  // Subtotal de acciones por préstamo seleccionadas. El monto es fijo y
+  // viene del backend (no es editable).
+  const loanSharesBreakdown = useMemo(
+    () =>
+      pendingLoanShares.filter((p) => loanSharesSelected.has(p.loan_id)),
+    [pendingLoanShares, loanSharesSelected],
+  );
+  const loanSharesSubtotal = useMemo(
+    () => loanSharesBreakdown.reduce((s, p) => s + p.loan_shares_amount, 0),
+    [loanSharesBreakdown],
+  );
+
+  const totalAmount =
+    sharesSubtotal +
+    finesSubtotal +
+    capAmountParsed +
+    loanPaymentsSubtotal +
+    loanSharesSubtotal;
 
   // ===== Validaciones =====
 
@@ -318,10 +435,12 @@ export default function ComprasPage() {
   // porque ya se muestra inline). Se renderiza sólo dentro de la card
   // de acciones, no mezclado con mensajes de capitalización.
   const accionesValidationError: string | null = useMemo(() => {
-    // Sólo pedimos agregar una línea si el usuario no está armando una
-    // capitalización "sola". Mientras capEnabled esté activo, permitimos
-    // que el carrito de acciones quede vacío.
-    if (lines.length === 0 && !capEnabled) {
+    // El carrito de acciones puede quedar vacío si el usuario está armando
+    // una capitalización "sola", un pago de préstamo "solo" o solo
+    // confirmando el pago de acciones por préstamo.
+    const hasOtherKind =
+      capEnabled || loanPaySelected.size > 0 || loanSharesSelected.size > 0;
+    if (lines.length === 0 && !hasOtherKind) {
       return 'Agrega al menos una línea de compra.';
     }
     for (const l of lines) {
@@ -333,14 +452,18 @@ export default function ComprasPage() {
     // aquí devolvemos '' para bloquear el submit sin duplicar el mensaje.
     if (hasMonthOverMax) return '';
     return null;
-  }, [lines, capEnabled, rules, hasMonthOverMax]);
+  }, [lines, capEnabled, loanPaySelected, loanSharesSelected, rules, hasMonthOverMax]);
 
   // Error agregado para el submit. Incluye acciones + capitalización +
   // caso "no hay nada para enviar". El mensaje de capitalización no se
   // pinta en la card de acciones; la propia card de capitalización ya
   // muestra el aviso inline en amarillo.
   const validationError: string | null = useMemo(() => {
-    const hasAnything = lines.length > 0 || (capEnabled && capAmountParsed > 0);
+    const hasAnything =
+      lines.length > 0 ||
+      (capEnabled && capAmountParsed > 0) ||
+      loanPaymentBreakdown.length > 0 ||
+      loanSharesBreakdown.length > 0;
     if (!hasAnything) return 'Agrega al menos una línea de compra.';
     if (accionesValidationError != null) return accionesValidationError;
     if (capEnabled) {
@@ -360,6 +483,15 @@ export default function ComprasPage() {
         return `El monto excede tu cupo (${cop(capState.remaining)} disponibles).`;
       }
     }
+    // Pagos de préstamo: validar capital ≤ saldo.
+    for (const p of loanPaymentBreakdown) {
+      if (p.capital > p.loan.outstanding_capital) {
+        return `El abono a capital del préstamo ${p.loan.disbursement_number ?? ''} excede el saldo (${cop(p.loan.outstanding_capital)}).`;
+      }
+      if (p.interests <= 0 && p.capital <= 0) {
+        return `El préstamo ${p.loan.disbursement_number ?? ''} no tiene intereses adeudados ni abono — quítalo del recibo.`;
+      }
+    }
     return null;
   }, [
     lines,
@@ -367,6 +499,8 @@ export default function ComprasPage() {
     capEnabled,
     capAmountParsed,
     capState,
+    loanPaymentBreakdown,
+    loanSharesBreakdown,
   ]);
 
   // ===== Handlers del carrito =====
@@ -384,11 +518,12 @@ export default function ComprasPage() {
 
   const removeLine = (uid: string) => {
     setLines((prev) => {
-      // Permitimos vaciar el carrito de acciones sólo si el usuario está
-      // armando una capitalización en este mismo recibo. No exigimos que
-      // ya tenga monto digitado: la card de capitalización muestra su
-      // propio aviso para que complete el campo.
-      if (prev.length <= 1 && !capEnabled) {
+      // Permitimos vaciar el carrito de acciones si el usuario está armando
+      // una capitalización, un pago de préstamo o un pago de acciones por
+      // préstamo en este mismo recibo.
+      const hasOtherKind =
+        capEnabled || loanPaySelected.size > 0 || loanSharesSelected.size > 0;
+      if (prev.length <= 1 && !hasOtherKind) {
         return prev;
       }
       return prev.filter((l) => l.uid !== uid);
@@ -468,7 +603,8 @@ export default function ComprasPage() {
       }
 
       // 2) Crear recibo. Se pueden mezclar líneas 'acciones' con una única
-      // línea 'capitalizacion' (el schema del backend lo valida).
+      // línea 'capitalizacion' y N pagos de préstamo (intereses+capital
+      // por cada loan seleccionado). El schema del backend lo valida.
       const items: Array<
         | {
             concept: 'acciones';
@@ -479,6 +615,17 @@ export default function ComprasPage() {
             concept: 'capitalizacion';
             target_month: string;
             amount: number;
+          }
+        | {
+            concept: 'pago_intereses' | 'pago_capital';
+            target_month: string;
+            amount: number;
+            loan_id: string;
+          }
+        | {
+            concept: 'acciones_prestamo';
+            target_month: string;
+            loan_id: string;
           }
       > = lines.map((l) => ({
         concept: 'acciones' as const,
@@ -491,6 +638,36 @@ export default function ComprasPage() {
           concept: 'capitalizacion' as const,
           target_month: currentMonth,
           amount: capAmountParsed,
+        });
+      }
+
+      for (const p of loanPaymentBreakdown) {
+        if (p.interests > 0) {
+          items.push({
+            concept: 'pago_intereses' as const,
+            target_month: p.loan.next_due_month,
+            amount: p.interests,
+            loan_id: p.loan.loan_id,
+          });
+        }
+        if (p.capital > 0) {
+          items.push({
+            concept: 'pago_capital' as const,
+            target_month: p.loan.next_due_month,
+            amount: p.capital,
+            loan_id: p.loan.loan_id,
+          });
+        }
+      }
+
+      // Acciones por préstamo (upfront): el monto y la cantidad los
+      // resuelve el backend desde el loan; nosotros solo mandamos
+      // loan_id + target_month (mes corriente).
+      for (const lp of loanSharesBreakdown) {
+        items.push({
+          concept: 'acciones_prestamo' as const,
+          target_month: currentMonth,
+          loan_id: lp.loan_id,
         });
       }
 
@@ -607,6 +784,7 @@ export default function ComprasPage() {
                   ? effectiveTotal - rules.max_shares_per_month
                   : 0;
                 const lineSubtotal = l.share_count * (shareValue ?? 0);
+                const fine = fineByMonth.get(l.target_month) ?? null;
 
                 return (
                   <div
@@ -706,6 +884,15 @@ export default function ComprasPage() {
                           +
                         </button>
                       </div>
+                      {/* Días de multa cobrados (debajo del input de
+                          acciones) — solo cuando hay multa real para este mes. */}
+                      {fine && (
+                        <div className="text-[10.5px] font-semibold text-[var(--color-warn)] mt-0.5">
+                          + {fine.chargedDays}{' '}
+                          {fine.chargedDays === 1 ? 'día' : 'días'} de multa
+                          {fine.capped ? ' (tope mensual)' : ''}
+                        </div>
+                      )}
                     </div>
 
                     {/* Subtotal */}
@@ -716,6 +903,12 @@ export default function ComprasPage() {
                       <div className="h-10 flex items-center text-[14px] font-semibold tabular">
                         {cop(lineSubtotal)}
                       </div>
+                      {/* Valor de la multa (debajo del subtotal). */}
+                      {fine && (
+                        <div className="text-[11px] font-semibold text-[var(--color-warn)] tabular mt-0.5">
+                          + {cop(fine.amount)} multa
+                        </div>
+                      )}
                     </div>
 
                     {/* Remover */}
@@ -723,7 +916,12 @@ export default function ComprasPage() {
                       <button
                         type="button"
                         onClick={() => removeLine(l.uid)}
-                        disabled={lines.length === 1 && !capEnabled}
+                        disabled={
+                          lines.length === 1 &&
+                          !capEnabled &&
+                          loanPaySelected.size === 0 &&
+                          loanSharesSelected.size === 0
+                        }
                         title="Quitar línea"
                         aria-label="Quitar línea"
                         className="w-9 h-10 rounded-[9px] flex items-center justify-center text-[var(--color-text-subtle)] hover:text-[var(--color-danger)] hover:bg-[var(--color-danger-soft)] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
@@ -795,41 +993,33 @@ export default function ComprasPage() {
             currentMonth={currentMonth}
           />
 
-          {/* Multas (preview) */}
-          {fineBreakdown.length > 0 && (
-            <Card padding="lg" className="border-[var(--color-warn)]/60">
-              <div className="flex items-start gap-3">
-                <div className="w-8 h-8 rounded-lg bg-[var(--color-warn-soft)] text-[var(--color-warn)] flex items-center justify-center shrink-0">
-                  <AlertTriangle size={16} strokeWidth={1.75} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h2 className="text-[15px] font-semibold tracking-tight">
-                    Multas por mora
-                  </h2>
-                  <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
-                    Se agregan automáticamente al recibo y se congelan al
-                    momento de enviarlo (no suben aunque la revisión tarde).
-                  </p>
-
-                  <ul className="mt-3 flex flex-col divide-y divide-[var(--color-border)]">
-                    {fineBreakdown.map((f) => (
-                      <li
-                        key={f.month}
-                        className="py-2 flex items-center justify-between gap-3 text-[13px]"
-                      >
-                        <span className="text-[var(--color-text)] font-medium">
-                          {monthLabel(f.month, true)}
-                        </span>
-                        <span className="font-semibold text-[var(--color-warn)] tabular">
-                          + {cop(f.amount)}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            </Card>
+          {/* Acciones por préstamo (upfront) — solo si tiene préstamos en
+              pending_disbursement con upfront=true que aún no fueron
+              cubiertos por un recibo. Bloquea el desembolso hasta que se
+              apruebe este recibo. */}
+          {pendingLoanShares.length > 0 && (
+            <LoanSharePurchasesSection
+              items={pendingLoanShares}
+              selected={loanSharesSelected}
+              setSelected={setLoanSharesSelected}
+            />
           )}
+
+          {/* Pago de préstamos (solo si tiene préstamos activos) */}
+          {loanDebts.length > 0 && (
+            <LoanPaymentsSection
+              debts={loanDebts}
+              selected={loanPaySelected}
+              setSelected={setLoanPaySelected}
+              capitalInputs={loanPayCapital}
+              setCapitalInputs={setLoanPayCapital}
+            />
+          )}
+
+          {/* Las multas por mora se muestran inline dentro de cada línea
+              de acciones (debajo del input + del subtotal) — ya no hay
+              card separada. Igual siguen entrando al receipt vía el
+              builder del backend. */}
 
           {/* Subida de comprobante */}
           <Card padding="lg">
@@ -940,6 +1130,26 @@ export default function ComprasPage() {
                   >
                     {capAmountParsed > 0 ? '+ ' : ''}
                     {cop(capAmountParsed)}
+                  </span>
+                </div>
+              )}
+              {loanPaymentBreakdown.length > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-[var(--color-text-muted)]">
+                    Pagos de préstamo
+                  </span>
+                  <span className="font-semibold tabular text-[var(--color-text)]">
+                    + {cop(loanPaymentsSubtotal)}
+                  </span>
+                </div>
+              )}
+              {loanSharesBreakdown.length > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-[var(--color-text-muted)]">
+                    Acciones por préstamo
+                  </span>
+                  <span className="font-semibold tabular text-[var(--color-brand)]">
+                    + {cop(loanSharesSubtotal)}
                   </span>
                 </div>
               )}
@@ -1182,6 +1392,294 @@ function CapitalizationSection({
           )}
         </div>
       )}
+    </Card>
+  );
+}
+
+// =============================================================================
+// Sección de pagos de préstamo (compras)
+//
+// Por cada préstamo activo del accionista mostramos un sub-card con:
+//   - saldo actual de capital,
+//   - intereses adeudados a mes vencido (calculados en backend),
+//   - check para "incluir en el recibo",
+//   - input de capital opcional (≤ saldo).
+// Si los intereses adeudados son 0 (préstamo recién desembolsado, mes 0),
+// el accionista puede igual abonar capital — en ese caso solo se inserta
+// la línea de pago_capital.
+// =============================================================================
+function LoanPaymentsSection({
+  debts,
+  selected,
+  setSelected,
+  capitalInputs,
+  setCapitalInputs,
+}: {
+  debts: ActiveLoanDebt[];
+  selected: Set<string>;
+  setSelected: React.Dispatch<React.SetStateAction<Set<string>>>;
+  capitalInputs: Map<string, string>;
+  setCapitalInputs: React.Dispatch<React.SetStateAction<Map<string, string>>>;
+}) {
+  const toggle = (loanId: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(loanId)) next.delete(loanId);
+      else next.add(loanId);
+      return next;
+    });
+  };
+
+  const setCapital = (loanId: string, raw: string) => {
+    const digits = raw.replace(/[^\d]/g, '');
+    const formatted =
+      digits === ''
+        ? ''
+        : new Intl.NumberFormat('es-CO').format(Number(digits));
+    setCapitalInputs((prev) => {
+      const next = new Map(prev);
+      next.set(loanId, formatted);
+      return next;
+    });
+  };
+
+  return (
+    <Card padding="lg">
+      <div className="flex items-start gap-3 mb-4">
+        <div className="w-8 h-8 rounded-lg bg-[var(--color-brand-soft)] text-[var(--color-brand)] flex items-center justify-center shrink-0">
+          <Landmark size={16} strokeWidth={1.75} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <h2 className="text-[15px] font-semibold tracking-tight">
+            Pago de préstamos
+          </h2>
+          <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
+            Selecciona los préstamos a pagar en este recibo. Los intereses
+            adeudados son obligatorios; el abono a capital es opcional.
+          </p>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-3">
+        {debts.map((debt) => {
+          const isSelected = selected.has(debt.loan_id);
+          const capitalRaw = capitalInputs.get(debt.loan_id) ?? '';
+          const capitalDigits = capitalRaw.replace(/[^\d]/g, '');
+          const capitalNum = capitalDigits === '' ? 0 : Number(capitalDigits);
+          const exceeds = capitalNum > debt.outstanding_capital;
+          const subtotal =
+            (isSelected ? debt.interest_owed : 0) +
+            (isSelected ? capitalNum : 0);
+
+          return (
+            <div
+              key={debt.loan_id}
+              className={`rounded-[12px] border p-4 transition-colors ${
+                isSelected
+                  ? 'border-[var(--color-brand)]/60 bg-[var(--color-brand-soft)]/20'
+                  : 'border-[var(--color-border)] bg-[var(--color-surface-alt)]/40'
+              }`}
+            >
+              <div className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={() => toggle(debt.loan_id)}
+                  className="mt-1 w-4 h-4 cursor-pointer accent-[var(--color-brand)]"
+                  aria-label={`Pagar préstamo ${debt.disbursement_number ?? ''}`}
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[13px] font-semibold tracking-tight">
+                      {debt.disbursement_number ?? 'Préstamo'}
+                    </span>
+                    <span className="text-[11px] text-[var(--color-text-subtle)]">
+                      Pedido {cop(debt.requested_amount)}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1 text-[11px]">
+                    <span className="text-[var(--color-text-muted)]">
+                      Saldo:{' '}
+                      <span className="font-semibold text-[var(--color-text)] tabular">
+                        {cop(debt.outstanding_capital)}
+                      </span>
+                    </span>
+                    <span className="text-[var(--color-text-muted)]">
+                      Intereses adeudados:{' '}
+                      <span
+                        className={`font-semibold tabular ${
+                          debt.interest_owed > 0
+                            ? 'text-[var(--color-warn)]'
+                            : 'text-[var(--color-text)]'
+                        }`}
+                      >
+                        {cop(debt.interest_owed)}
+                      </span>
+                      {debt.months_overdue > 0 && (
+                        <span className="ml-1 text-[var(--color-text-subtle)]">
+                          ({debt.months_overdue}{' '}
+                          {debt.months_overdue === 1 ? 'mes' : 'meses'})
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                </div>
+                {isSelected && (
+                  <div className="text-right shrink-0">
+                    <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-subtle)] font-semibold">
+                      Subtotal
+                    </div>
+                    <div className="text-[14px] font-semibold tabular">
+                      {cop(subtotal)}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {isSelected && (
+                <div className="mt-3 flex flex-col gap-2 pl-7">
+                  <label className="text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase">
+                    Abono a capital (opcional)
+                  </label>
+                  <div className="flex items-center h-10 rounded-[9px] bg-[var(--color-surface)] border border-[var(--color-border)] px-3 max-w-[280px]">
+                    <span className="text-[13px] text-[var(--color-text-subtle)] mr-1.5">
+                      $
+                    </span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="0"
+                      value={capitalRaw}
+                      onChange={(e) => setCapital(debt.loan_id, e.target.value)}
+                      className="flex-1 bg-transparent text-[13.5px] font-semibold text-[var(--color-text)] focus:outline-none tabular"
+                    />
+                  </div>
+                  {exceeds && (
+                    <div className="flex items-start gap-1.5 text-[11px] text-[var(--color-danger)]">
+                      <AlertTriangle
+                        size={12}
+                        strokeWidth={2}
+                        className="mt-px shrink-0"
+                      />
+                      Excede el saldo ({cop(debt.outstanding_capital)}).
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+// =============================================================================
+// Sección de acciones por préstamo (compras)
+//
+// Cuando el accionista tiene préstamos en pending_disbursement con
+// upfront=true que aún no pagó las acciones, los muestra acá. La cantidad
+// y el monto NO son editables — vienen del préstamo. El user solo decide
+// si los incluye en este recibo (checkbox).
+// =============================================================================
+function LoanSharePurchasesSection({
+  items,
+  selected,
+  setSelected,
+}: {
+  items: PendingLoanSharePurchase[];
+  selected: Set<string>;
+  setSelected: React.Dispatch<React.SetStateAction<Set<string>>>;
+}) {
+  const toggle = (loanId: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(loanId)) next.delete(loanId);
+      else next.add(loanId);
+      return next;
+    });
+  };
+
+  return (
+    <Card padding="lg" className="border-[var(--color-brand)]/40">
+      <div className="flex items-start gap-3 mb-3">
+        <div className="w-8 h-8 rounded-lg bg-[var(--color-brand-soft)] text-[var(--color-brand)] flex items-center justify-center shrink-0">
+          <Landmark size={16} strokeWidth={1.75} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <h2 className="text-[15px] font-semibold tracking-tight">
+            Acciones por préstamo
+          </h2>
+          <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
+            Tenés {items.length} préstamo{items.length === 1 ? '' : 's'} listo
+            {items.length === 1 ? '' : 's'} para desembolso que requiere
+            {items.length === 1 ? '' : 'n'} el pago de las acciones por
+            adelantado. La cantidad y el monto vienen del préstamo y no se
+            pueden modificar. <strong>El admin no podrá desembolsar hasta
+            que este recibo esté aprobado.</strong>
+          </p>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-2.5">
+        {items.map((it) => {
+          const isSelected = selected.has(it.loan_id);
+          const created = new Date(it.loan_created_at).toLocaleDateString(
+            'es-CO',
+            { day: 'numeric', month: 'short', year: 'numeric' },
+          );
+          return (
+            <div
+              key={it.loan_id}
+              className={`rounded-[12px] border p-4 transition-colors ${
+                isSelected
+                  ? 'border-[var(--color-brand)]/60 bg-[var(--color-brand-soft)]/20'
+                  : 'border-[var(--color-border)] bg-[var(--color-surface-alt)]/40'
+              }`}
+            >
+              <div className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={() => toggle(it.loan_id)}
+                  className="mt-1 w-4 h-4 cursor-pointer accent-[var(--color-brand)]"
+                  aria-label="Incluir en este recibo"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[13px] font-semibold tracking-tight">
+                    Préstamo de {cop(it.requested_amount)}
+                    <span className="text-[11px] text-[var(--color-text-subtle)] font-normal ml-2">
+                      solicitado el {created}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1 text-[11px]">
+                    {it.loan_shares_count != null && (
+                      <span className="text-[var(--color-text-muted)]">
+                        Acciones:{' '}
+                        <span className="font-semibold text-[var(--color-text)] tabular">
+                          {it.loan_shares_count}
+                        </span>
+                        {it.unit_value != null && (
+                          <span className="text-[var(--color-text-subtle)]">
+                            {' '}
+                            × {cop(it.unit_value)}
+                          </span>
+                        )}
+                      </span>
+                    )}
+                    <span className="text-[var(--color-text-muted)]">
+                      Total a pagar:{' '}
+                      <span className="font-semibold text-[var(--color-brand)] tabular">
+                        {cop(it.loan_shares_amount)}
+                      </span>
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </Card>
   );
 }

@@ -66,12 +66,36 @@ export async function POST(request: Request) {
     const unitValue = Number(profile.selected_share_value);
 
     const rules = await loadPurchaseRules(admin);
-    const { items: builtItems, fineCount } = await buildReceiptItems(admin, {
-      userId: user.id,
-      unitValue,
-      items,
-      rules,
-    });
+    let builtItems: Awaited<ReturnType<typeof buildReceiptItems>>['items'];
+    let fineCount: number;
+    try {
+      const built = await buildReceiptItems(admin, {
+        userId: user.id,
+        unitValue,
+        items,
+        rules,
+      });
+      builtItems = built.items;
+      fineCount = built.fineCount;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      const friendly: Record<string, string> = {
+        loan_not_found_for_acciones_prestamo: 'El préstamo no existe.',
+        loan_user_mismatch_for_acciones_prestamo:
+          'El préstamo no pertenece a este accionista.',
+        loan_not_in_pending_disbursement:
+          'Solo podés pagar acciones por préstamo cuando el préstamo está listo para desembolso.',
+        loan_not_upfront_shares:
+          'Este préstamo no requiere pago de acciones por adelantado.',
+        loan_no_shares_to_pay: 'El préstamo no tiene acciones por pagar.',
+        acciones_prestamo_already_paid:
+          'Ya existe un recibo con el pago de acciones por préstamo para este préstamo.',
+      };
+      if (friendly[msg]) {
+        return NextResponse.json({ error: friendly[msg] }, { status: 400 });
+      }
+      throw err;
+    }
 
     // Crear el receipt. receipt_number se asigna por trigger.
     const { data: receipt, error: insertReceiptError } = await admin
