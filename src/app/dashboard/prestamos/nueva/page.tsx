@@ -315,7 +315,7 @@ export default function NuevaSolicitudPage() {
                               <button onClick={() => setEditingMonth(null)} className="text-[var(--color-text-subtle)] hover:opacity-70"><X size={13} /></button>
                             </div>
                           ) : (
-                            <span className={row.capital_amount === 0 && row.month_number !== plan.length ? 'text-[var(--color-text-subtle)]' : ''}>
+                            <span className={row.capital_amount === 0 ? 'text-[var(--color-text-subtle)]' : ''}>
                               {cop(row.capital_amount)}
                             </span>
                           )}
@@ -327,7 +327,7 @@ export default function NuevaSolicitudPage() {
                           {cop(row.estimated_balance_after)}
                         </td>
                         <td className="px-2 py-3 text-right">
-                          {editingMonth !== row.month_number && row.month_number !== plan.length && (
+                          {editingMonth !== row.month_number && (
                             <button
                               onClick={() => startEdit(row)}
                               className="text-[var(--color-text-subtle)] hover:text-[var(--color-brand)] transition-colors"

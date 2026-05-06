@@ -527,6 +527,7 @@ export type Database = {
         }[]
       }
       get_cash_balance: { Args: never; Returns: number }
+      get_loan_interest_owed: { Args: { p_loan_id: string }; Returns: number }
       get_my_capitalization_state: { Args: never; Returns: Json }
       get_my_pending_loan_share_purchases: {
         Args: never
@@ -537,6 +538,15 @@ export type Database = {
           loan_shares_count: number
           requested_amount: number
           unit_value: number
+        }[]
+      }
+      get_my_utilities_by_year: {
+        Args: { p_year: number }
+        Returns: {
+          distribution: number
+          month_number: number
+          participation: number
+          utilities_pool: number
         }[]
       }
       get_user_active_loans_debt: {
@@ -551,6 +561,15 @@ export type Database = {
           next_due_month: string
           outstanding_capital: number
           requested_amount: number
+        }[]
+      }
+      get_user_utilities_by_year: {
+        Args: { p_user_id: string; p_year: number }
+        Returns: {
+          distribution: number
+          month_number: number
+          participation: number
+          utilities_pool: number
         }[]
       }
       is_admin: { Args: never; Returns: boolean }

@@ -125,7 +125,7 @@ export default function HistorialPage() {
       const { data, error } = await supabase
         .from('receipts')
         .select(
-          'id, receipt_number, user_id, status, submitted_at, reviewed_at, reviewed_by, rejection_reason, rejection_note, payment_proof_path, total_amount, created_at, updated_at, receipt_items(*)',
+          'id, receipt_number, user_id, status, submitted_at, reviewed_at, reviewed_by, rejection_reason, rejection_note, payment_proof_path, total_amount, created_at, updated_at, receipt_items(*, loan:loans(disbursement_number))',
         )
         .eq('user_id', uid)
         .order('submitted_at', { ascending: false });
@@ -730,33 +730,45 @@ export default function HistorialPage() {
                         Detalle
                       </div>
                       <div className="divide-y divide-[var(--color-border)] rounded-[10px] border border-[var(--color-border)] bg-[var(--color-surface)]">
-                        {r.items.map((it) => (
-                          <div
-                            key={it.id}
-                            className="flex items-center gap-3 px-3.5 py-2.5 text-[13px]"
-                          >
-                            <div className="flex-1 min-w-0">
-                              <div className="font-semibold text-[var(--color-text)]">
-                                {conceptLabel(it.concept)}
-                                {it.auto_generated && (
-                                  <span className="ml-2 text-[10px] font-semibold text-[var(--color-warn)] tracking-wider uppercase">
-                                    Auto
-                                  </span>
-                                )}
+                        {r.items.map((it) => {
+                          const itLoanNumber = (
+                            it as unknown as {
+                              loan?: { disbursement_number: string | null } | null;
+                            }
+                          ).loan?.disbursement_number;
+                          return (
+                            <div
+                              key={it.id}
+                              className="flex items-center gap-3 px-3.5 py-2.5 text-[13px]"
+                            >
+                              <div className="flex-1 min-w-0">
+                                <div className="font-semibold text-[var(--color-text)] flex items-center gap-2 flex-wrap">
+                                  {conceptLabel(it.concept)}
+                                  {itLoanNumber && (
+                                    <span className="text-[10px] font-semibold text-[var(--color-brand)] bg-[var(--color-brand-soft)] px-1.5 py-0.5 rounded uppercase tracking-wider">
+                                      {itLoanNumber}
+                                    </span>
+                                  )}
+                                  {it.auto_generated && (
+                                    <span className="text-[10px] font-semibold text-[var(--color-warn)] tracking-wider uppercase">
+                                      Auto
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[11px] text-[var(--color-text-subtle)]">
+                                  {monthLabel(it.target_month, true)}
+                                  {it.share_count ? ` · ${it.share_count} acciones` : ''}
+                                  {it.unit_value
+                                    ? ` · ${cop(Number(it.unit_value))} c/u`
+                                    : ''}
+                                </div>
                               </div>
-                              <div className="text-[11px] text-[var(--color-text-subtle)]">
-                                {monthLabel(it.target_month, true)}
-                                {it.share_count ? ` · ${it.share_count} acciones` : ''}
-                                {it.unit_value
-                                  ? ` · ${cop(Number(it.unit_value))} c/u`
-                                  : ''}
+                              <div className="text-right font-semibold tabular">
+                                {cop(Number(it.amount))}
                               </div>
                             </div>
-                            <div className="text-right font-semibold tabular">
-                              {cop(Number(it.amount))}
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                         <div className="flex items-center gap-3 px-3.5 py-2.5 text-[13px] bg-[var(--color-surface-alt)]">
                           <span className="flex-1 font-semibold text-[var(--color-text)]">
                             Total
@@ -780,11 +792,13 @@ export default function HistorialPage() {
                           Ver comprobante
                         </Button>
                       )}
-                      {r.status === 'rejected' && !isEditing && (
+                      {r.status === 'rejected' && (
                         <Button
                           variant="primary"
                           size="sm"
-                          onClick={() => startEdit(r)}
+                          onClick={() =>
+                            router.push(`/dashboard/compras?resubmit=${r.id}`)
+                          }
                         >
                           <RefreshCw size={14} strokeWidth={1.75} />
                           Editar y reenviar

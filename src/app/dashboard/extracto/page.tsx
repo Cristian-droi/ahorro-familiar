@@ -36,7 +36,12 @@ import { Landmark } from 'lucide-react';
 import { exportToExcel, exportToPdf, type ExportSection } from '@/lib/exports';
 import { getProfile } from '@/lib/data/profiles';
 import { listReceiptItemsByYear } from '@/lib/data/receipts';
-import { getLibroAccionistaData } from '@/lib/data/loans';
+import {
+  getLibroAccionistaData,
+  getMyUtilitiesByYear,
+  getUserUtilitiesByYear,
+  type MonthlyUtility,
+} from '@/lib/data/loans';
 import { computeLoanBook, LOAN_STATUS_LABELS } from '@/lib/loans';
 import { cop, monthLabel } from '@/lib/format';
 import {
@@ -101,6 +106,14 @@ type MonthSummary = {
   // recibos aprobados).
   paidCapital: number;
   paidInterest: number;
+
+  // === UTILIDADES ===
+  // % de participación del accionista al cierre del mes (0..1).
+  participation: number;
+  // Pool total de intereses pagados por TODOS con target_month = mes.
+  utilitiesPool: number;
+  // Lo que le corresponde a este accionista (= participation * pool).
+  distribution: number;
 };
 
 type LoanSummaryData = {
@@ -140,8 +153,20 @@ type LoanMonthlyMap = {
 };
 
 
-export default function ExtractoPage() {
+// Tipos del componente reusable. Cuando `targetUserId` está presente, el
+// viewer es admin y vemos el extracto de otro accionista. Cuando no
+// está, usamos el accionista autenticado.
+export type ExtractoViewProps = {
+  targetUserId?: string;
+};
+
+export default function ExtractoPage(props: ExtractoViewProps = {}) {
+  return <ExtractoView {...props} />;
+}
+
+export function ExtractoView({ targetUserId }: ExtractoViewProps = {}) {
   const router = useRouter();
+  const isAdminView = !!targetUserId;
 
   const [userId, setUserId] = useState<string | null>(null);
   const [firstName, setFirstName] = useState<string>('');
@@ -155,6 +180,8 @@ export default function ExtractoPage() {
     paidCapitalByMonth: new Map(),
     paidInterestByMonth: new Map(),
   });
+  // Utilidades por mes del año seleccionado.
+  const [utilities, setUtilities] = useState<MonthlyUtility[]>([]);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
 
@@ -166,23 +193,31 @@ export default function ExtractoPage() {
     let cancelled = false;
 
     (async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) {
-        router.replace('/login');
-        return;
+      // Si vienen como admin viendo a otro accionista, NO redirigimos por
+      // auth (la página admin ya valida acceso) — solo usamos targetUserId.
+      let effectiveUserId: string | null = targetUserId ?? null;
+      if (!effectiveUserId) {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (!user) {
+          router.replace('/login');
+          return;
+        }
+        effectiveUserId = user.id;
       }
       if (cancelled) return;
-      setUserId(user.id);
+      setUserId(effectiveUserId);
 
       try {
-        const profile = await getProfile(supabase, user.id);
+        const profile = await getProfile(supabase, effectiveUserId);
         if (cancelled) return;
         setFirstName(profile.first_name ?? '');
         setLastName(profile.last_name ?? '');
         if (profile.selected_share_value != null) {
           setShareValue(Number(profile.selected_share_value));
+        } else {
+          setShareValue(null);
         }
       } catch (err) {
         console.error('Error perfil:', err);
@@ -216,7 +251,7 @@ export default function ExtractoPage() {
     return () => {
       cancelled = true;
     };
-  }, [router]);
+  }, [router, targetUserId]);
 
   // Cada vez que cambie el usuario o el año, releemos los items.
   useEffect(() => {
@@ -226,8 +261,23 @@ export default function ExtractoPage() {
     (async () => {
       setLoading(true);
       try {
-        const rows = await listReceiptItemsByYear(supabase, { userId, year });
-        if (!cancelled) setItems(rows as unknown as ItemRow[]);
+        const utilitiesPromise = isAdminView
+          ? getUserUtilitiesByYear(supabase, userId, year).catch((err) => {
+              console.error('Error cargando utilidades:', err);
+              return [] as MonthlyUtility[];
+            })
+          : getMyUtilitiesByYear(supabase, year).catch((err) => {
+              console.error('Error cargando utilidades:', err);
+              return [] as MonthlyUtility[];
+            });
+        const [rows, utilitiesRows] = await Promise.all([
+          listReceiptItemsByYear(supabase, { userId, year }),
+          utilitiesPromise,
+        ]);
+        if (!cancelled) {
+          setItems(rows as unknown as ItemRow[]);
+          setUtilities(utilitiesRows);
+        }
       } catch (err) {
         console.error('Error cargando extracto:', err);
         showToast('error', 'No se pudo cargar el extracto.');
@@ -239,7 +289,7 @@ export default function ExtractoPage() {
     return () => {
       cancelled = true;
     };
-  }, [userId, year]);
+  }, [userId, year, isAdminView]);
 
   // Resumen de préstamos del accionista (no depende del año).
   useEffect(() => {
@@ -437,6 +487,14 @@ export default function ExtractoPage() {
       const paidCapital = loanMonthly.paidCapitalByMonth.get(monthKey) ?? 0;
       const paidInterest = loanMonthly.paidInterestByMonth.get(monthKey) ?? 0;
 
+      // Utilidades del mes (RPC). monthIndex en listAllMonthsOfYear ya
+      // viene 1-12 (no 0-11), igual que el month_number que devuelve el
+      // RPC — match directo, sin +1.
+      const util = utilities.find((u) => u.month_number === m.monthIndex);
+      const participation = util?.participation ?? 0;
+      const utilitiesPool = util?.utilities_pool ?? 0;
+      const distribution = util?.distribution ?? 0;
+
       return {
         month: m.value,
         monthIndex: m.monthIndex,
@@ -458,9 +516,12 @@ export default function ExtractoPage() {
         disbursedAmount,
         paidCapital,
         paidInterest,
+        participation,
+        utilitiesPool,
+        distribution,
       };
     });
-  }, [items, year, rules, loanMonthly]);
+  }, [items, year, rules, loanMonthly, utilities]);
 
   // ===== Totales anuales (solo aprobados cuentan como "real") =====
 
@@ -481,6 +542,8 @@ export default function ExtractoPage() {
         acc.disbursedAmount += m.disbursedAmount;
         acc.paidCapital += m.paidCapital;
         acc.paidInterest += m.paidInterest;
+        acc.utilitiesPool += m.utilitiesPool;
+        acc.distribution += m.distribution;
         return acc;
       },
       {
@@ -498,14 +561,11 @@ export default function ExtractoPage() {
         disbursedAmount: 0,
         paidCapital: 0,
         paidInterest: 0,
+        utilitiesPool: 0,
+        distribution: 0,
       },
     );
   }, [monthSummaries]);
-
-  const monthsInArrears = useMemo(
-    () => monthSummaries.filter((m) => m.projectedFine > 0).length,
-    [monthSummaries],
-  );
 
   // ===== Export =====
 
@@ -528,6 +588,9 @@ export default function ExtractoPage() {
           { header: 'Préstamo', key: 'disbursed', width: 16, align: 'right' },
           { header: 'Pago capital', key: 'paidCapital', width: 16, align: 'right' },
           { header: 'Pago intereses', key: 'paidInterest', width: 16, align: 'right' },
+          { header: '% participación', key: 'participation', width: 14, align: 'right' },
+          { header: 'Util. mes', key: 'utilitiesPool', width: 16, align: 'right' },
+          { header: 'Distribución', key: 'distribution', width: 16, align: 'right' },
         ],
         rows: monthSummaries.map((m) => ({
           month: m.label,
@@ -543,6 +606,13 @@ export default function ExtractoPage() {
           disbursed: m.disbursedAmount > 0 ? cop(m.disbursedAmount) : '',
           paidCapital: m.paidCapital > 0 ? cop(m.paidCapital) : '',
           paidInterest: m.paidInterest > 0 ? cop(m.paidInterest) : '',
+          participation:
+            m.participation > 0
+              ? `${(m.participation * 100).toFixed(2)}%`
+              : '',
+          utilitiesPool:
+            m.utilitiesPool > 0 ? cop(m.utilitiesPool) : '',
+          distribution: m.distribution > 0 ? cop(m.distribution) : '',
         })),
         totals: {
           label: `Total ${year}`,
@@ -556,6 +626,8 @@ export default function ExtractoPage() {
             disbursed: cop(annualTotals.disbursedAmount),
             paidCapital: cop(annualTotals.paidCapital),
             paidInterest: cop(annualTotals.paidInterest),
+            utilitiesPool: cop(annualTotals.utilitiesPool),
+            distribution: cop(annualTotals.distribution),
           },
         },
       };
@@ -649,34 +721,34 @@ export default function ExtractoPage() {
         </div>
       </header>
 
-      {/* Tarjetas de resumen anual */}
+      {/* Tarjetas de resumen anual — los 5 totales que el accionista
+          quiere ver de un vistazo. */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+        {/* 1. Acciones — valor total como número principal, count como hint
+            (ordinarias + por préstamo). */}
         <SummaryCard
           icon={TrendingUp}
           tone="brand"
-          label="Acciones aprobadas"
-          value={`${annualTotals.approvedShares}`}
+          label="Acciones"
+          value={cop(
+            annualTotals.approvedAmount + annualTotals.approvedLoanShareAmount,
+          )}
           hint={
-            annualTotals.pendingShares > 0
-              ? `+${annualTotals.pendingShares} en revisión`
-              : undefined
+            (() => {
+              const totalShares =
+                annualTotals.approvedShares + annualTotals.approvedLoanShares;
+              return totalShares > 0
+                ? `${totalShares} ${totalShares === 1 ? 'acción' : 'acciones'}`
+                : undefined;
+            })()
           }
         />
-        <SummaryCard
-          icon={Coins}
-          tone="success"
-          label="Aporte en acciones"
-          value={cop(annualTotals.approvedAmount)}
-          hint={
-            annualTotals.pendingAmount > 0
-              ? `${cop(annualTotals.pendingAmount)} pendientes`
-              : undefined
-          }
-        />
+
+        {/* 2. Capitalizaciones */}
         <SummaryCard
           icon={Coins}
           tone="brand"
-          label="Aporte capitalizado"
+          label="Capitalizaciones"
           value={cop(annualTotals.approvedCapitalization)}
           hint={
             annualTotals.pendingCapitalization > 0
@@ -684,25 +756,45 @@ export default function ExtractoPage() {
               : undefined
           }
         />
+
+        {/* 3. Multas pagadas — con la proyección del año si hay mes en mora */}
         <SummaryCard
           icon={AlertTriangle}
           tone="warn"
           label="Multas pagadas"
           value={cop(annualTotals.approvedFines)}
           hint={
-            annualTotals.pendingFines > 0
-              ? `${cop(annualTotals.pendingFines)} en revisión`
+            annualTotals.projectedFine > 0
+              ? `≈ ${cop(annualTotals.projectedFine)} proyectada`
+              : annualTotals.pendingFines > 0
+                ? `${cop(annualTotals.pendingFines)} en revisión`
+                : undefined
+          }
+        />
+
+        {/* 4. Préstamos — total desembolsado en el año */}
+        <SummaryCard
+          icon={Landmark}
+          tone="success"
+          label="Préstamos"
+          value={cop(annualTotals.disbursedAmount)}
+          hint={
+            loanSummary && loanSummary.current_capital_balance > 0
+              ? `Saldo: ${cop(loanSummary.current_capital_balance)}`
               : undefined
           }
         />
+
+        {/* 5. Distribución de utilidades — suma anual de lo que le
+            corresponde al accionista del pool de intereses cobrados. */}
         <SummaryCard
-          icon={AlertTriangle}
-          tone="danger"
-          label={monthsInArrears === 1 ? 'Mes en mora' : 'Meses en mora'}
-          value={`${monthsInArrears}`}
+          icon={TrendingUp}
+          tone="brand"
+          label="Distribución"
+          value={cop(annualTotals.distribution)}
           hint={
-            annualTotals.projectedFine > 0
-              ? `≈ ${cop(annualTotals.projectedFine)} proyectado`
+            annualTotals.utilitiesPool > 0
+              ? `Pool anual ${cop(annualTotals.utilitiesPool)}`
               : undefined
           }
         />
@@ -851,11 +943,15 @@ export default function ExtractoPage() {
                   <td className="text-right px-3 py-2.5 border-t-2 border-l border-[var(--color-border)] text-[var(--color-text-subtle)]">
                     —
                   </td>
-                  <td className="text-right px-3 py-2.5 border-t-2 border-[var(--color-border)] text-[var(--color-text-subtle)]">
-                    —
+                  <td className="text-right px-3 py-2.5 border-t-2 border-[var(--color-border)] tabular text-[var(--color-text-muted)]">
+                    {annualTotals.utilitiesPool > 0
+                      ? cop(annualTotals.utilitiesPool)
+                      : '—'}
                   </td>
-                  <td className="text-right px-3 py-2.5 border-t-2 border-[var(--color-border)] text-[var(--color-text-subtle)]">
-                    —
+                  <td className="text-right px-3 py-2.5 border-t-2 border-[var(--color-border)] tabular text-[var(--color-brand)]">
+                    {annualTotals.distribution > 0
+                      ? cop(annualTotals.distribution)
+                      : '—'}
                   </td>
                 </tr>
               </tfoot>
@@ -1234,15 +1330,23 @@ function MonthRow({ row }: { row: MonthSummary }) {
         </div>
       </td>
 
-      {/* Utilidades — placeholder hasta que el módulo esté listo */}
-      <td className="text-right px-3 py-2.5 align-top text-[var(--color-text-subtle)] border-l border-[var(--color-border)]/60">
-        —
+      {/* Utilidades */}
+      <td className="text-right px-3 py-2.5 align-top tabular border-l border-[var(--color-border)]/60">
+        {row.participation > 0
+          ? `${(row.participation * 100).toFixed(2)}%`
+          : '—'}
       </td>
-      <td className="text-right px-3 py-2.5 align-top text-[var(--color-text-subtle)]">
-        —
+      <td className="text-right px-3 py-2.5 align-top tabular text-[var(--color-text-muted)]">
+        {row.utilitiesPool > 0 ? cop(row.utilitiesPool) : '—'}
       </td>
-      <td className="text-right px-3 py-2.5 align-top text-[var(--color-text-subtle)]">
-        —
+      <td className="text-right px-3 py-2.5 align-top tabular font-medium">
+        {row.distribution > 0 ? (
+          <span className="text-[var(--color-brand)]">
+            {cop(row.distribution)}
+          </span>
+        ) : (
+          <span className="text-[var(--color-text-subtle)]">—</span>
+        )}
       </td>
     </tr>
   );

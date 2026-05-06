@@ -9,13 +9,12 @@ import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { showToast } from '@/components/ui/Toast';
 import { ChevronLeft, ThumbsUp, ThumbsDown, Users, AlertTriangle, RotateCcw, Send } from 'lucide-react';
-import { getLoanWithDetails } from '@/lib/data/loans';
+import { getLoanWithDetails, getMyActiveLoansDebt } from '@/lib/data/loans';
 import type { LoanWithDetails } from '@/types/entities';
 import { cop } from '@/lib/format';
 import {
   LOAN_STATUS_LABELS,
   LOAN_STATUS_TONE,
-  calcAccruedInterest,
   requiredVotes,
 } from '@/lib/loans';
 
@@ -28,6 +27,10 @@ export default function LoanDetailPage() {
   const [voting, setVoting] = useState<'approved' | 'rejected' | null>(null);
   const [submittingVote, setSubmittingVote] = useState(false);
   const [resubmitting, setResubmitting] = useState(false);
+  // Intereses adeudados al día (calculados por RPC sobre el saldo al
+  // INICIO de cada mes vencido — la lógica correcta a "mes vencido"). Solo
+  // aplica para el dueño del préstamo cuando está activo.
+  const [accruedInterest, setAccruedInterest] = useState<number>(0);
 
   const load = async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -35,6 +38,23 @@ export default function LoanDetailPage() {
     setCurrentUserId(user.id);
     const data = await getLoanWithDetails(supabase, id);
     setLoan(data);
+
+    // Si soy el dueño y el préstamo está activo, traemos el interest_owed
+    // desde el RPC get_user_active_loans_debt — calcula sobre el saldo
+    // al inicio de cada mes vencido (no sobre el saldo actual).
+    if (data && data.user_id === user.id && data.status === 'active') {
+      try {
+        const debts = await getMyActiveLoansDebt(supabase);
+        const mine = debts.find((d) => d.loan_id === id);
+        setAccruedInterest(mine?.interest_owed ?? 0);
+      } catch (err) {
+        console.error('Error cargando intereses acumulados:', err);
+        setAccruedInterest(0);
+      }
+    } else {
+      setAccruedInterest(0);
+    }
+
     setLoading(false);
   };
 
@@ -89,18 +109,6 @@ export default function LoanDetailPage() {
   };
   const needed = requiredVotes(loan.total_active_shareholders);
   const tone = LOAN_STATUS_TONE[loan.status] as Parameters<typeof Badge>[0]['tone'];
-
-  const accruedInterest =
-    loan.status === 'active' && loan.disbursed_at
-      ? calcAccruedInterest({
-          outstandingBalance: Number(loan.outstanding_balance),
-          rate: Number(loan.interest_rate),
-          disbursedAt: new Date(loan.disbursed_at),
-          lastInterestPaymentDate: loan.last_interest_payment_date
-            ? new Date(loan.last_interest_payment_date)
-            : null,
-        })
-      : 0;
 
   return (
     <div className="flex flex-col gap-7 animate-in fade-in duration-300">

@@ -294,6 +294,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       href: '/dashboard/admin/libro-accionista',
       icon: BookUser,
     },
+    {
+      key: 'extractos',
+      label: 'Extractos',
+      href: '/dashboard/admin/extractos',
+      icon: ClipboardList,
+    },
     { key: 'ajustes', label: 'Ajustes', href: '/dashboard/ajustes', icon: Settings },
   ];
 
@@ -545,7 +551,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           sidebarOpen={sidebarOpen}
         />
         <div className="flex-1 overflow-y-auto">
-          <div className="max-w-[1200px] mx-auto px-4 md:px-6 lg:px-9 py-5 md:py-7 lg:py-8">
+          <div className="max-w-[1440px] mx-auto px-4 md:px-5 lg:px-6 py-5 md:py-6 lg:py-7">
             {children}
           </div>
         </div>

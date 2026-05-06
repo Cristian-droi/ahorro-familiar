@@ -16,7 +16,7 @@
 // <user.id>/<uuid>.<ext>, y llama a POST /api/receipts con el path.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -80,6 +80,12 @@ function extensionFromMime(mime: string): string {
 
 export default function ComprasPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // Si viene `?resubmit=<id>`, estamos editando un recibo rechazado: al
+  // enviar pegamos al endpoint /resubmit del mismo id y precargamos sus
+  // items. Si no, flujo normal de creación.
+  const resubmitId = searchParams.get('resubmit');
+  const [resubmitNumber, setResubmitNumber] = useState<string | null>(null);
 
   // Datos iniciales del usuario.
   const [userId, setUserId] = useState<string | null>(null);
@@ -302,6 +308,96 @@ export default function ComprasPage() {
     };
   }, [router]);
 
+  // Precarga del recibo a reenviar cuando viene `?resubmit=<id>` en URL.
+  // Cargamos el recibo completo + sus items y mapeamos cada concepto al
+  // state correspondiente (lines, capEnabled, loanPaySelected, etc.).
+  // Las multas (concept='multa_acciones') no se precargan: se recalculan
+  // automáticamente al reenviar (ver buildReceiptItems con
+  // excludeReceiptId).
+  useEffect(() => {
+    if (!resubmitId) return;
+    let cancelled = false;
+    (async () => {
+      const { data: receipt, error } = await supabase
+        .from('receipts')
+        .select(
+          'id, receipt_number, status, receipt_items(concept, target_month, share_count, amount, loan_id)',
+        )
+        .eq('id', resubmitId)
+        .maybeSingle();
+      if (cancelled) return;
+      if (error || !receipt) {
+        showToast('error', 'No se pudo cargar el recibo a editar.');
+        return;
+      }
+      if (receipt.status !== 'rejected') {
+        showToast('error', 'Solo se pueden reenviar recibos rechazados.');
+        router.replace('/dashboard/historial');
+        return;
+      }
+      setResubmitNumber(receipt.receipt_number ?? null);
+
+      const items = (receipt.receipt_items ?? []) as Array<{
+        concept: string;
+        target_month: string;
+        share_count: number | null;
+        amount: number;
+        loan_id: string | null;
+      }>;
+
+      // 1) Acciones → reemplazamos `lines`.
+      const acciones = items
+        .filter((it) => it.concept === 'acciones')
+        .map((it) => ({
+          uid: makeUid(),
+          target_month: it.target_month,
+          share_count: it.share_count ?? 1,
+        }));
+      if (acciones.length > 0) setLines(acciones);
+      else setLines([]);
+
+      // 2) Capitalización → habilitar y precargar monto.
+      const cap = items.find((it) => it.concept === 'capitalizacion');
+      if (cap) {
+        setCapEnabled(true);
+        setCapAmountInput(
+          new Intl.NumberFormat('es-CO').format(Number(cap.amount)),
+        );
+      }
+
+      // 3) Pagos a préstamo (intereses + capital).
+      const paySet = new Set<string>();
+      const capitalMap = new Map<string, string>();
+      for (const it of items) {
+        if (it.concept === 'pago_intereses' && it.loan_id) {
+          paySet.add(it.loan_id);
+        }
+        if (it.concept === 'pago_capital' && it.loan_id) {
+          paySet.add(it.loan_id);
+          capitalMap.set(
+            it.loan_id,
+            new Intl.NumberFormat('es-CO').format(Number(it.amount)),
+          );
+        }
+      }
+      if (paySet.size > 0) {
+        setLoanPaySelected(paySet);
+        setLoanPayCapital(capitalMap);
+      }
+
+      // 4) Acciones por préstamo upfront.
+      const sharesSet = new Set<string>(
+        items
+          .filter((it) => it.concept === 'acciones_prestamo' && it.loan_id)
+          .map((it) => it.loan_id as string),
+      );
+      if (sharesSet.size > 0) setLoanSharesSelected(sharesSet);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [resubmitId, router]);
+
   // ===== Derivados del carrito =====
 
   // Agrupa por mes: sumamos share_count por mes para validar el tope
@@ -395,6 +491,16 @@ export default function ComprasPage() {
         (s, p) => s + p.interests + p.capital,
         0,
       ),
+    [loanPaymentBreakdown],
+  );
+  // Sub-totales separados para mostrarlos como líneas distintas en el
+  // resumen lateral (intereses arriba, capital abajo).
+  const loanPaymentsInterestsTotal = useMemo(
+    () => loanPaymentBreakdown.reduce((s, p) => s + p.interests, 0),
+    [loanPaymentBreakdown],
+  );
+  const loanPaymentsCapitalTotal = useMemo(
+    () => loanPaymentBreakdown.reduce((s, p) => s + p.capital, 0),
     [loanPaymentBreakdown],
   );
 
@@ -676,7 +782,12 @@ export default function ComprasPage() {
         payment_proof_path: path,
       };
 
-      const res = await fetch('/api/receipts', {
+      // Si estamos editando un recibo rechazado, pegamos al endpoint
+      // /resubmit (mantiene el receipt_number). Sino, creamos uno nuevo.
+      const endpoint = resubmitId
+        ? `/api/receipts/${resubmitId}/resubmit`
+        : '/api/receipts';
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -694,7 +805,9 @@ export default function ComprasPage() {
 
       showToast(
         'success',
-        `Recibo ${json?.receipt?.receipt_number ?? ''} enviado. Queda en revisión.`,
+        resubmitId
+          ? `Recibo ${resubmitNumber ?? ''} reenviado. Queda en revisión.`
+          : `Recibo ${json?.receipt?.receipt_number ?? ''} enviado. Queda en revisión.`,
       );
       // Reset local; redirige al historial.
       router.push('/dashboard/historial');
@@ -721,10 +834,40 @@ export default function ComprasPage() {
 
   return (
     <div className="flex flex-col gap-7 animate-in fade-in duration-300">
+      {/* Banner cuando estamos editando un recibo rechazado. */}
+      {resubmitId && (
+        <Card padding="md" className="border-[var(--color-warn)]/40 bg-[var(--color-warn-soft)]/20">
+          <div className="flex items-start gap-3">
+            <AlertTriangle
+              size={16}
+              strokeWidth={2}
+              className="text-[var(--color-warn)] mt-0.5 shrink-0"
+            />
+            <div className="flex-1 min-w-0">
+              <div className="text-[13px] font-semibold text-[var(--color-warn)]">
+                Editando recibo {resubmitNumber ?? ''} rechazado
+              </div>
+              <div className="text-[12px] text-[var(--color-text-muted)] mt-0.5">
+                Ajustá los conceptos y montos, sube un nuevo comprobante y
+                volvé a enviar. Las multas por mora se recalculan al
+                reenviar.
+              </div>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => router.push('/dashboard/historial')}
+            >
+              Cancelar
+            </Button>
+          </div>
+        </Card>
+      )}
+
       <header className="flex flex-col md:flex-row md:items-end md:justify-between gap-5">
         <div>
           <h1 className="text-[26px] font-semibold tracking-[-0.025em] leading-[1.15]">
-            Comprar acciones
+            {resubmitId ? 'Editar recibo' : 'Comprar acciones'}
           </h1>
           <p className="text-sm text-[var(--color-text-muted)] mt-1.5 max-w-xl">
             {firstName ? `${firstName}, ` : ''}arma tu recibo con los meses
@@ -1133,13 +1276,23 @@ export default function ComprasPage() {
                   </span>
                 </div>
               )}
-              {loanPaymentBreakdown.length > 0 && (
+              {loanPaymentsInterestsTotal > 0 && (
                 <div className="flex items-center justify-between">
                   <span className="text-[var(--color-text-muted)]">
-                    Pagos de préstamo
+                    Pago intereses
                   </span>
                   <span className="font-semibold tabular text-[var(--color-text)]">
-                    + {cop(loanPaymentsSubtotal)}
+                    + {cop(loanPaymentsInterestsTotal)}
+                  </span>
+                </div>
+              )}
+              {loanPaymentsCapitalTotal > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-[var(--color-text-muted)]">
+                    Pago capital
+                  </span>
+                  <span className="font-semibold tabular text-[var(--color-text)]">
+                    + {cop(loanPaymentsCapitalTotal)}
                   </span>
                 </div>
               )}
@@ -1174,11 +1327,11 @@ export default function ComprasPage() {
               onClick={handleSubmit}
             >
               {submitting ? (
-                'Enviando…'
+                resubmitId ? 'Reenviando…' : 'Enviando…'
               ) : (
                 <>
                   <CheckCircle2 size={16} strokeWidth={2} />
-                  Enviar recibo
+                  {resubmitId ? 'Reenviar recibo' : 'Enviar recibo'}
                 </>
               )}
             </Button>

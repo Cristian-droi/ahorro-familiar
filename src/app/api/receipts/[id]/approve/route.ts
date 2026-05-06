@@ -64,33 +64,45 @@ export async function POST(
       (item) => item.loan_id != null && (item.concept === 'pago_capital' || item.concept === 'pago_intereses'),
     );
 
-    // Validar: si hay pagos de capital, verificar que los intereses estén al día
+    // Validar: si hay pagos de capital, verificar contra el cálculo real
+    // del interés adeudado (RPC get_loan_interest_owed). Si el MISMO
+    // recibo trae pago_intereses para ese loan, su monto se considera
+    // como cobertura. Si después de eso queda deuda > 0, bloqueamos.
     const capitalItems = loanItems.filter((i) => i.concept === 'pago_capital');
+    // Acumular pagos de intereses por loan_id incluidos en este recibo.
+    const interestPaidInReceiptByLoan = new Map<string, number>();
+    for (const it of loanItems) {
+      if (it.concept !== 'pago_intereses' || !it.loan_id) continue;
+      interestPaidInReceiptByLoan.set(
+        it.loan_id,
+        (interestPaidInReceiptByLoan.get(it.loan_id) ?? 0) + Number(it.amount),
+      );
+    }
+
     for (const ci of capitalItems) {
-      const { data: loan } = await admin
-        .from('loans')
-        .select('outstanding_balance, interest_rate, disbursed_at, last_interest_payment_date')
-        .eq('id', ci.loan_id)
-        .maybeSingle();
-
-      if (loan && loan.disbursed_at) {
-        const from = loan.last_interest_payment_date
-          ? new Date(loan.last_interest_payment_date)
-          : new Date(loan.disbursed_at);
-        const now = new Date();
-        const months =
-          (now.getFullYear() - from.getFullYear()) * 12 +
-          (now.getMonth() - from.getMonth());
-
-        if (months > 0) {
-          return NextResponse.json(
-            {
-              error:
-                'No se puede aprobar el pago de capital. El accionista tiene intereses pendientes en este préstamo que deben pagarse primero.',
-            },
-            { status: 422 },
-          );
-        }
+      const loanId = ci.loan_id as string;
+      const { data: owedRaw, error: owedErr } = await admin.rpc(
+        'get_loan_interest_owed',
+        { p_loan_id: loanId },
+      );
+      if (owedErr) {
+        console.error('Error calculando interest_owed:', owedErr);
+        return NextResponse.json(
+          { error: 'No se pudo validar la deuda de intereses.' },
+          { status: 500 },
+        );
+      }
+      const interestOwed = Number(owedRaw ?? 0);
+      const inReceipt = interestPaidInReceiptByLoan.get(loanId) ?? 0;
+      const remaining = interestOwed - inReceipt;
+      if (remaining > 0) {
+        return NextResponse.json(
+          {
+            error:
+              'No se puede aprobar el pago de capital. El accionista tiene intereses pendientes en este préstamo que deben pagarse primero.',
+          },
+          { status: 422 },
+        );
       }
     }
 
