@@ -45,24 +45,24 @@ export async function POST(
     const updates =
       action === 'approve'
         ? {
-            plan_status: 'approved',
+            plan_status: 'approved' as const,
             plan_rejection_reason: null,
             admin_notes: admin_notes ?? null,
             updated_at: new Date().toISOString(),
           }
         : action === 'request_revision'
           ? {
-              status: 'draft',
+              status: 'draft' as const,
               plan_status: null,
               plan_rejection_reason: null,
               admin_notes: admin_notes ?? null,
               updated_at: new Date().toISOString(),
             }
           : {
-              plan_status: 'rejected',
+              plan_status: 'rejected' as const,
               plan_rejection_reason: rejection_reason,
               admin_notes: admin_notes ?? null,
-              status: 'rejected_by_admin',
+              status: 'rejected_by_admin' as const,
               rejection_reason,
               updated_at: new Date().toISOString(),
             };

@@ -1,80 +1,212 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+// Dashboard del administrador. Muestra los KPIs más relevantes del fondo:
+//   - Accionistas activos
+//   - Saldo en caja
+//   - Ingresos del mes (recibos aprobados con reviewed_at en el mes)
+//   - Egresos del mes (desembolsos con disbursed_at en el mes)
+//   - Multas pendientes del mes actual (accionistas que aún no compraron
+//     acciones ese mes y ya pasó el período de gracia)
+//   - Acciones pendientes para el admin (recibos por aprobar, préstamos
+//     en revisión / por desembolsar, solicitudes de ingreso)
+
+import React, { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { Card } from '@/components/ui/Card';
-import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Avatar } from '@/components/ui/Avatar';
-import { Sparkline, Bars } from '@/components/ui/charts';
 import {
+  Users,
+  Wallet,
   ArrowUp,
   ArrowDown,
-  Users,
+  AlertTriangle,
   FileText,
+  Receipt,
+  Landmark,
+  ChevronRight,
   CheckCircle2,
-  Filter,
-  Download,
-  Plus,
-  ArrowRight,
+  TrendingUp,
 } from 'lucide-react';
-import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
-import { getProfile } from '@/lib/data/profiles';
+import { getProfile, listProfilesWithNames } from '@/lib/data/profiles';
+import {
+  getCashBalance,
+  getLoansWithDisbursement,
+  countAdminPendingLoans,
+} from '@/lib/data/loans';
+import {
+  countPendingReceipts,
+  listAllReceiptsWithItems,
+} from '@/lib/data/receipts';
+import { countPendingMembershipRequests } from '@/lib/data/membership-requests';
+import {
+  computeFineDetail,
+  DEFAULT_PURCHASE_RULES,
+  getBogotaCurrentMonth,
+  getBogotaToday,
+  type PurchaseRules,
+} from '@/lib/fines';
+import { cop } from '@/lib/format';
 
-const cop = (n: number) => '$ ' + new Intl.NumberFormat('es-CO').format(n);
-
-// Datos de ejemplo — se reemplazarán por datos reales cuando existan tablas
-// de aportes / actividad en Supabase.
-const sparkData = [12, 14, 13, 16, 18, 17, 20, 22, 21, 24, 26, 28, 30, 32];
-const months = [
-  { label: 'Oct', value: 32 },
-  { label: 'Nov', value: 38 },
-  { label: 'Dic', value: 44 },
-  { label: 'Ene', value: 41 },
-  { label: 'Feb', value: 48 },
-  { label: 'Mar', value: 52 },
-  { label: 'Abr', value: 58 },
-];
-
-type ActivityTone = 'success' | 'info' | 'brand' | 'warn';
-type ActivityIcon = 'arrowUp' | 'arrowDown' | 'doc' | 'check' | 'users';
-
-type ActivityItem = {
-  who: string;
-  what: string;
-  amount: number | null;
-  when: string;
-  tone: ActivityTone;
-  icon: ActivityIcon;
+type ProfileLite = {
+  id: string;
+  first_name: string;
+  last_name: string;
+  identity_document: string;
 };
 
-const activity: ActivityItem[] = [
-  { who: 'Mariana Ochoa', what: 'realizó un aporte', amount: 250_000, when: 'hace 12 min', tone: 'success', icon: 'arrowUp' },
-  { who: 'Julián Pérez', what: 'solicitó préstamo', amount: 1_800_000, when: 'hace 1 h', tone: 'info', icon: 'doc' },
-  { who: 'Sofía Mendoza', what: 'pagó cuota', amount: 320_000, when: 'hace 3 h', tone: 'success', icon: 'check' },
-  { who: 'Andrés Villalba', what: 'se unió al grupo', amount: null, when: 'ayer', tone: 'brand', icon: 'users' },
-  { who: 'Lucía Ramírez', what: 'retiró fondos', amount: 400_000, when: 'ayer', tone: 'warn', icon: 'arrowDown' },
-];
-
-const pendingSample = [
-  { name: 'Valentina Ríos', doc: '52.118.903', income: 3_200_000, time: 'hace 2 h' },
-  { name: 'Tomás Escobar', doc: '71.445.208', income: 4_500_000, time: 'hace 5 h' },
-  { name: 'Paula Montaño', doc: '1.023.556.102', income: 2_800_000, time: 'ayer' },
-];
+type OverdueRow = {
+  user: ProfileLite;
+  amount: number;
+  daysLate: number;
+};
 
 export default function AdminDashboardPage() {
   const [firstName, setFirstName] = useState<string>('');
+  const [loading, setLoading] = useState(true);
+
+  // KPIs
+  const [activeShareholders, setActiveShareholders] = useState<number>(0);
+  const [cashBalance, setCashBalance] = useState<number>(0);
+  const [inflowMonth, setInflowMonth] = useState<number>(0);
+  const [outflowMonth, setOutflowMonth] = useState<number>(0);
+
+  // Pendientes
+  const [pendingReceipts, setPendingReceipts] = useState<number>(0);
+  const [pendingMembership, setPendingMembership] = useState<number>(0);
+  const [pendingLoanReview, setPendingLoanReview] = useState<number>(0);
+  const [pendingLoanDisbursement, setPendingLoanDisbursement] = useState<number>(0);
+
+  // Multas del mes actual
+  const [overdue, setOverdue] = useState<OverdueRow[]>([]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const { data } = await supabase.auth.getUser();
-      if (!data.user || cancelled) return;
+      const { data: authData } = await supabase.auth.getUser();
+      if (!authData.user || cancelled) return;
       try {
-        const profile = await getProfile(supabase, data.user.id);
+        const profile = await getProfile(supabase, authData.user.id);
         if (!cancelled && profile?.first_name) setFirstName(profile.first_name);
       } catch {
         /* ignore */
+      }
+
+      const ym = getBogotaCurrentMonth().slice(0, 7);
+      const today = getBogotaToday();
+
+      try {
+        const [
+          shareholdersRes,
+          balance,
+          receipts,
+          disbursements,
+          pendReceipts,
+          pendMembership,
+          pendLoans,
+          profiles,
+          rulesRes,
+        ] = await Promise.all([
+          supabase.rpc('count_active_shareholders'),
+          getCashBalance(supabase).catch(() => 0),
+          listAllReceiptsWithItems(supabase, { status: 'approved' }).catch(
+            () => [],
+          ),
+          getLoansWithDisbursement(supabase).catch(() => []),
+          countPendingReceipts(supabase).catch(() => 0),
+          countPendingMembershipRequests(supabase).catch(() => 0),
+          countAdminPendingLoans(supabase).catch(() => ({
+            pendingReview: 0,
+            pendingDisbursement: 0,
+            total: 0,
+          })),
+          listProfilesWithNames(supabase).catch(() => []),
+          supabase
+            .from('system_settings')
+            .select('value')
+            .eq('key', 'purchase_rules')
+            .maybeSingle(),
+        ]);
+
+        if (cancelled) return;
+
+        setActiveShareholders(Number(shareholdersRes.data ?? 0));
+        setCashBalance(Number(balance));
+        setPendingReceipts(pendReceipts);
+        setPendingMembership(pendMembership);
+        setPendingLoanReview(pendLoans.pendingReview);
+        setPendingLoanDisbursement(pendLoans.pendingDisbursement);
+
+        // Ingresos del mes = recibos aprobados con reviewed_at del mes
+        // (ó submitted_at de fallback). Suma total_amount.
+        let inflow = 0;
+        for (const r of receipts) {
+          const date = (r.reviewed_at ?? r.submitted_at ?? '').slice(0, 7);
+          if (date === ym) inflow += Number(r.total_amount ?? 0);
+        }
+        setInflowMonth(inflow);
+
+        // Egresos del mes = desembolsos con disbursed_at del mes (usamos
+        // requested_amount = monto bruto otorgado, consistente con la
+        // tarjeta del libro de caja).
+        let outflow = 0;
+        for (const d of disbursements) {
+          const date = (d.disbursed_at ?? '').slice(0, 7);
+          if (date === ym) outflow += Number(d.requested_amount ?? 0);
+        }
+        setOutflowMonth(outflow);
+
+        // Multas del mes actual: por cada accionista activo, si NO tiene
+        // receipt approved/pending con concept='acciones' para este mes
+        // Y ya pasó el período de gracia, calculamos la multa proyectada.
+        const rules: PurchaseRules = rulesRes?.data?.value
+          ? {
+              ...DEFAULT_PURCHASE_RULES,
+              ...(rulesRes.data.value as Partial<PurchaseRules>),
+            }
+          : DEFAULT_PURCHASE_RULES;
+
+        const monthFirst = `${ym}-01`;
+
+        // Para esto necesitamos los items del mes actual de TODOS los
+        // recibos (pending o approved) con concept='acciones'.
+        const { data: itemsThisMonth } = await supabase
+          .from('receipt_items')
+          .select('receipt_id, target_month, receipts!inner(user_id, status)')
+          .eq('concept', 'acciones')
+          .eq('target_month', monthFirst)
+          .in('receipts.status', ['pending', 'approved']);
+
+        const usersWithActivity = new Set(
+          (itemsThisMonth ?? [])
+            .map((r) => (r as Record<string, unknown> & { receipts: { user_id: string } }).receipts?.user_id)
+            .filter(Boolean),
+        );
+
+        const fineDetail = computeFineDetail(monthFirst, today, rules);
+        const overdueList: OverdueRow[] = [];
+        if (fineDetail.amount > 0) {
+          for (const p of profiles) {
+            if (usersWithActivity.has(p.id)) continue;
+            overdueList.push({
+              user: p,
+              amount: fineDetail.amount,
+              daysLate: fineDetail.chargedDays,
+            });
+          }
+        }
+        // Orden alfabético por nombre.
+        overdueList.sort((a, b) =>
+          `${a.user.first_name} ${a.user.last_name}`.localeCompare(
+            `${b.user.first_name} ${b.user.last_name}`,
+          ),
+        );
+        setOverdue(overdueList);
+      } catch (err) {
+        console.error('Error cargando dashboard admin:', err);
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     })();
     return () => {
@@ -83,300 +215,300 @@ export default function AdminDashboardPage() {
   }, []);
 
   const greeting = firstName ? `Buen día, ${firstName}` : 'Buen día';
+  const monthLabelEs = useMemo(() => {
+    const d = new Date();
+    return d.toLocaleDateString('es-CO', { month: 'long', year: 'numeric' });
+  }, []);
+
+  const totalPendingActions =
+    pendingReceipts +
+    pendingMembership +
+    pendingLoanReview +
+    pendingLoanDisbursement;
 
   return (
     <div className="flex flex-col gap-7 animate-in fade-in duration-300">
       {/* Page header */}
-      <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-5">
-        <div>
-          <h1 className="text-[26px] font-semibold tracking-[-0.025em] leading-[1.15]">
-            {greeting}
-          </h1>
-          <p className="text-sm text-[var(--color-text-muted)] mt-1.5">
-            Esto es lo que ha pasado en el fondo esta semana.
-          </p>
-        </div>
-        <div className="flex gap-2.5">
-          <Button variant="secondary" size="md">
-            <Download size={15} strokeWidth={1.75} />
-            Exportar
-          </Button>
-          <Button size="md">
-            <Plus size={15} strokeWidth={1.75} />
-            Nuevo movimiento
-          </Button>
-        </div>
+      <div>
+        <h1 className="text-[26px] font-semibold tracking-[-0.025em] leading-[1.15]">
+          {greeting}
+        </h1>
+        <p className="text-sm text-[var(--color-text-muted)] mt-1.5 capitalize">
+          Resumen del fondo · {monthLabelEs}
+        </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[1.35fr_1fr] gap-[18px]">
-        {/* Left column */}
-        <div className="flex flex-col gap-[18px] min-w-0">
-          {/* Hero balance card */}
-          <Card padding="none" className="overflow-hidden">
-            <div className="px-[26px] py-6 border-b border-[var(--color-border)] bg-[linear-gradient(135deg,#F2F8F3_0%,#FFFFFF_60%)] dark:bg-[linear-gradient(135deg,rgba(74,222,128,0.12)_0%,rgba(74,222,128,0.02)_60%)]">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="text-[11px] font-semibold text-[var(--color-text-muted)] tracking-[0.12em] uppercase">
-                    Fondo total
-                  </div>
-                  <div className="text-[40px] font-semibold tracking-[-0.035em] leading-[1.1] mt-2.5">
-                    {cop(48_720_500)}
-                    <span className="text-lg text-[var(--color-text-muted)] font-medium ml-1">
-                      COP
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap gap-4 mt-3 text-[13px] text-[var(--color-text-muted)]">
-                    <span className="inline-flex items-center gap-1.5">
-                      <ArrowUp
-                        size={13}
-                        strokeWidth={1.75}
-                        className="text-[var(--color-success)]"
-                      />
-                      <b className="text-[var(--color-success)] font-semibold">
-                        +$1.12 M
-                      </b>{' '}
-                      este mes
-                    </span>
-                    <span>·</span>
-                    <span>
-                      Rendimiento{' '}
-                      <b className="text-[var(--color-text)] font-semibold">2.4%</b>
-                    </span>
-                  </div>
-                </div>
-                <Badge tone="success" dot>
-                  En crecimiento
-                </Badge>
-              </div>
-            </div>
-            <div className="px-[26px] pt-2.5 pb-[22px]">
-              <Sparkline
-                data={sparkData}
-                width={640}
-                height={80}
-                color="var(--color-brand)"
-                fill="var(--color-brand)"
-              />
-            </div>
-          </Card>
+      {/* KPIs principales */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+        <Kpi
+          icon={Users}
+          tone="brand"
+          label="Accionistas activos"
+          value={loading ? '…' : `${activeShareholders}`}
+          href="/dashboard/miembros"
+        />
+        <Kpi
+          icon={Wallet}
+          tone="success"
+          label="Saldo en caja"
+          value={loading ? '…' : cop(cashBalance)}
+          href="/dashboard/libro-caja"
+        />
+        <Kpi
+          icon={ArrowUp}
+          tone="success"
+          label="Ingresos del mes"
+          value={loading ? '…' : cop(inflowMonth)}
+          href="/dashboard/libro-caja"
+        />
+        <Kpi
+          icon={ArrowDown}
+          tone="danger"
+          label="Egresos del mes"
+          value={loading ? '…' : cop(outflowMonth)}
+          href="/dashboard/libro-caja"
+        />
+      </div>
 
-          {/* KPI row */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
-            <Kpi label="Accionistas" value="24" delta="+2" icon={Users} />
-            <Kpi
-              label="Préstamos activos"
-              value="7"
-              sub={cop(8_400_000)}
-              icon={FileText}
-            />
-            <Kpi
-              label="Cuotas al día"
-              value="96%"
-              sub="23 de 24"
-              icon={CheckCircle2}
-              tone="success"
-            />
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6 items-start">
+        {/* Multas pendientes del mes */}
+        <Card padding="none" className="overflow-hidden">
+          <div className="px-5 py-3.5 border-b border-[var(--color-border)] flex items-center gap-3">
+            <div className="w-9 h-9 rounded-[10px] bg-[var(--color-warn-soft)] text-[var(--color-warn)] flex items-center justify-center shrink-0">
+              <AlertTriangle size={16} strokeWidth={1.75} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h2 className="text-[14px] font-semibold tracking-tight">
+                Multas pendientes este mes
+              </h2>
+              <p className="text-[11px] text-[var(--color-text-subtle)] mt-0.5">
+                Accionistas que aún no han comprado acciones de{' '}
+                <span className="capitalize">{monthLabelEs}</span>.
+              </p>
+            </div>
+            {overdue.length > 0 && (
+              <Badge tone="warn">
+                {overdue.length}{' '}
+                {overdue.length === 1 ? 'pendiente' : 'pendientes'}
+              </Badge>
+            )}
           </div>
 
-          {/* Monthly aportes chart */}
-          <Card padding="md">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <div className="text-sm font-semibold tracking-tight">
-                  Aportes mensuales
-                </div>
-                <div className="text-xs text-[var(--color-text-muted)] mt-0.5">
-                  Últimos 7 meses · en millones
-                </div>
-              </div>
-              <div className="flex gap-1.5">
-                {['6M', '1A', 'Todo'].map((k, i) => (
-                  <span
-                    key={k}
-                    className={`text-xs font-semibold px-2.5 py-1 rounded-md ${
-                      i === 0
-                        ? 'bg-[var(--color-surface-alt)] text-[var(--color-text)]'
-                        : 'text-[var(--color-text-muted)]'
-                    }`}
-                  >
-                    {k}
-                  </span>
-                ))}
-              </div>
+          {loading ? (
+            <div className="px-5 py-6 text-center text-[12px] text-[var(--color-text-subtle)] animate-pulse">
+              Cargando…
             </div>
-            <div className="text-[var(--color-text)]">
-              <Bars
-                data={months}
-                width={640}
-                height={140}
-                color="var(--color-brand)"
-                track="var(--color-surface-alt)"
+          ) : overdue.length === 0 ? (
+            <div className="px-5 py-10 flex flex-col items-center gap-2 text-center">
+              <CheckCircle2
+                size={28}
+                strokeWidth={1.5}
+                className="text-[var(--color-success)]"
               />
+              <p className="text-[13px] font-semibold">
+                Todos al día por ahora
+              </p>
+              <p className="text-[11px] text-[var(--color-text-subtle)] max-w-xs">
+                Aún no hay accionistas con multa proyectada este mes (o nadie
+                pasó el período de gracia).
+              </p>
             </div>
-          </Card>
-        </div>
-
-        {/* Right column */}
-        <div className="flex flex-col gap-[18px] min-w-0">
-          {/* Pending requests */}
-          <Card padding="none">
-            <div className="px-5 pt-[18px] pb-3.5 flex items-center justify-between">
-              <div>
-                <div className="text-sm font-semibold tracking-tight">
-                  Solicitudes pendientes
-                </div>
-                <div className="text-xs text-[var(--color-text-muted)] mt-0.5">
-                  {pendingSample.length} esperan tu revisión
-                </div>
-              </div>
-              <Link
-                href="/dashboard/solicitudes"
-                className="text-xs font-semibold text-[var(--color-brand)] hover:underline inline-flex items-center gap-1"
-              >
-                Ver todas <ArrowRight size={12} strokeWidth={2} />
-              </Link>
-            </div>
-            <div>
-              {pendingSample.map((r, i) => (
+          ) : (
+            <div className="divide-y divide-[var(--color-border)]">
+              {overdue.map((o) => (
                 <div
-                  key={i}
-                  className="px-5 py-3 flex items-center gap-3 border-t border-[var(--color-border)]"
+                  key={o.user.id}
+                  className="flex items-center gap-3 px-5 py-3"
                 >
-                  <Avatar name={r.name} size={34} />
+                  <Avatar name={o.user.first_name} size={32} />
                   <div className="flex-1 min-w-0">
                     <div className="text-[13px] font-semibold tracking-tight truncate">
-                      {r.name}
+                      {o.user.first_name} {o.user.last_name}
                     </div>
-                    <div className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
-                      CC {r.doc} · Ingreso {cop(r.income)}
+                    <div className="text-[11px] text-[var(--color-text-subtle)]">
+                      CC {o.user.identity_document} · {o.daysLate}{' '}
+                      {o.daysLate === 1 ? 'día' : 'días'} de mora
                     </div>
                   </div>
-                  <div className="text-[11px] text-[var(--color-text-subtle)] whitespace-nowrap">
-                    {r.time}
+                  <div className="text-right shrink-0">
+                    <div className="text-[13px] font-semibold tabular text-[var(--color-warn)]">
+                      {cop(o.amount)}
+                    </div>
+                    <div className="text-[10px] text-[var(--color-text-subtle)]">
+                      proyectada
+                    </div>
                   </div>
                 </div>
               ))}
-            </div>
-          </Card>
-
-          {/* Activity feed */}
-          <Card padding="none" className="flex-1 min-h-0">
-            <div className="px-5 pt-[18px] pb-3.5 flex items-center justify-between">
-              <div>
-                <div className="text-sm font-semibold tracking-tight">
-                  Actividad reciente
-                </div>
-                <div className="text-xs text-[var(--color-text-muted)] mt-0.5">
-                  En tiempo real
-                </div>
+              <div className="px-5 py-3 bg-[var(--color-surface-alt)] flex items-center justify-between">
+                <span className="text-[12px] font-semibold text-[var(--color-text-muted)]">
+                  Total proyectado
+                </span>
+                <span className="text-[14px] font-semibold tabular text-[var(--color-warn)]">
+                  {cop(overdue.reduce((s, o) => s + o.amount, 0))}
+                </span>
               </div>
-              <Filter
-                size={15}
-                strokeWidth={1.75}
-                className="text-[var(--color-text-muted)]"
+            </div>
+          )}
+        </Card>
+
+        {/* Acciones pendientes del admin */}
+        <Card padding="none" className="overflow-hidden">
+          <div className="px-5 py-3.5 border-b border-[var(--color-border)] flex items-center gap-3">
+            <div className="w-9 h-9 rounded-[10px] bg-[var(--color-brand-soft)] text-[var(--color-brand)] flex items-center justify-center shrink-0">
+              <TrendingUp size={16} strokeWidth={1.75} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h2 className="text-[14px] font-semibold tracking-tight">
+                Tu bandeja
+              </h2>
+              <p className="text-[11px] text-[var(--color-text-subtle)] mt-0.5">
+                {totalPendingActions === 0
+                  ? 'Estás al día'
+                  : `${totalPendingActions} ${totalPendingActions === 1 ? 'tarea' : 'tareas'}`}
+              </p>
+            </div>
+          </div>
+
+          {loading ? (
+            <div className="px-5 py-6 text-center text-[12px] text-[var(--color-text-subtle)] animate-pulse">
+              Cargando…
+            </div>
+          ) : totalPendingActions === 0 ? (
+            <div className="px-5 py-10 flex flex-col items-center gap-2 text-center">
+              <CheckCircle2
+                size={28}
+                strokeWidth={1.5}
+                className="text-[var(--color-success)]"
               />
+              <p className="text-[13px] font-semibold">Sin pendientes</p>
+              <p className="text-[11px] text-[var(--color-text-subtle)] max-w-xs">
+                Cuando llegue una solicitud o un recibo aparecerán acá.
+              </p>
             </div>
-            <div>
-              {activity.map((a, i) => (
-                <ActivityRow key={i} item={a} />
-              ))}
+          ) : (
+            <div className="divide-y divide-[var(--color-border)]">
+              {pendingMembership > 0 && (
+                <InboxRow
+                  icon={FileText}
+                  label="Solicitudes de ingreso"
+                  count={pendingMembership}
+                  href="/dashboard/solicitudes"
+                />
+              )}
+              {pendingReceipts > 0 && (
+                <InboxRow
+                  icon={Receipt}
+                  label="Recibos por aprobar"
+                  count={pendingReceipts}
+                  href="/dashboard/libro-caja"
+                />
+              )}
+              {pendingLoanReview > 0 && (
+                <InboxRow
+                  icon={Landmark}
+                  label="Préstamos en revisión"
+                  count={pendingLoanReview}
+                  href="/dashboard/admin/prestamos"
+                />
+              )}
+              {pendingLoanDisbursement > 0 && (
+                <InboxRow
+                  icon={Landmark}
+                  label="Préstamos por desembolsar"
+                  count={pendingLoanDisbursement}
+                  href="/dashboard/admin/prestamos"
+                />
+              )}
             </div>
-          </Card>
-        </div>
+          )}
+        </Card>
       </div>
     </div>
   );
 }
 
-const toneToBg: Record<ActivityTone, string> = {
-  success: 'bg-[var(--color-success-soft)] text-[var(--color-success)]',
-  info: 'bg-[var(--color-info-soft)] text-[var(--color-info)]',
-  brand: 'bg-[var(--color-brand-soft)] text-[var(--color-brand)]',
-  warn: 'bg-[var(--color-warn-soft)] text-[var(--color-warn)]',
-};
-
-function ActivityRow({ item }: { item: ActivityItem }) {
-  const Icon = ICONS[item.icon];
-  const sign = item.icon === 'arrowDown' ? '−' : '+';
-  return (
-    <div className="px-5 py-3 flex items-center gap-3 border-t border-[var(--color-border)]">
-      <div
-        className={`w-8 h-8 rounded-[8px] flex items-center justify-center shrink-0 ${toneToBg[item.tone]}`}
-      >
-        <Icon size={14} strokeWidth={1.75} />
-      </div>
-      <div className="flex-1 min-w-0 text-[13px]">
-        <span className="font-semibold">{item.who}</span>{' '}
-        <span className="text-[var(--color-text-muted)]">{item.what}</span>
-        <div className="text-[11px] text-[var(--color-text-subtle)] mt-0.5">
-          {item.when}
-        </div>
-      </div>
-      {item.amount && (
-        <div className="text-[13px] font-semibold text-[var(--color-text)] tracking-tight whitespace-nowrap">
-          {sign}
-          {cop(item.amount).replace('$ ', '$')}
-        </div>
-      )}
-    </div>
-  );
-}
-
-const ICONS = {
-  arrowUp: ArrowUp,
-  arrowDown: ArrowDown,
-  doc: FileText,
-  check: CheckCircle2,
-  users: Users,
-} as const;
-
-type KpiTone = 'success' | 'warn' | 'danger' | 'info' | 'brand';
-type LucideIcon = typeof Users;
+// =============================================================================
+// Subcomponentes
+// =============================================================================
 
 function Kpi({
+  icon: Icon,
+  tone,
   label,
   value,
-  sub,
-  delta,
-  icon: IconComp,
-  tone,
+  href,
 }: {
+  icon: typeof Users;
+  tone: 'brand' | 'success' | 'danger' | 'warn';
   label: string;
   value: string;
-  sub?: string;
-  delta?: string;
-  icon: LucideIcon;
-  tone?: KpiTone;
+  href: string;
 }) {
-  const toneBg: Record<KpiTone, string> = {
-    success: 'bg-[var(--color-success-soft)] text-[var(--color-success)]',
-    warn: 'bg-[var(--color-warn-soft)] text-[var(--color-warn)]',
-    danger: 'bg-[var(--color-danger-soft)] text-[var(--color-danger)]',
-    info: 'bg-[var(--color-info-soft)] text-[var(--color-info)]',
+  const toneBg: Record<typeof tone, string> = {
     brand: 'bg-[var(--color-brand-soft)] text-[var(--color-brand)]',
+    success: 'bg-[var(--color-success-soft)] text-[var(--color-success)]',
+    danger: 'bg-[var(--color-danger-soft)] text-[var(--color-danger)]',
+    warn: 'bg-[var(--color-warn-soft)] text-[var(--color-warn)]',
   };
-  const iconClass = tone
-    ? toneBg[tone]
-    : 'bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]';
   return (
-    <Card padding="none" className="p-[18px]">
-      <div className="flex items-center justify-between mb-4">
-        <div
-          className={`w-[30px] h-[30px] rounded-[8px] flex items-center justify-center ${iconClass}`}
-        >
-          <IconComp size={15} strokeWidth={1.75} />
+    <Link href={href} className="block group">
+      <Card padding="md" className="group-hover:border-[var(--color-brand)]/40 transition-colors">
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div
+            className={`w-9 h-9 rounded-[10px] flex items-center justify-center ${toneBg[tone]}`}
+          >
+            <Icon size={16} strokeWidth={1.75} />
+          </div>
+          <ChevronRight
+            size={14}
+            strokeWidth={1.75}
+            className="text-[var(--color-text-subtle)] opacity-0 group-hover:opacity-100 transition-opacity"
+          />
         </div>
-        {delta && <Badge tone="success">{delta}</Badge>}
+        <div className="text-[11px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase">
+          {label}
+        </div>
+        <div className="text-[20px] font-semibold tracking-[-0.02em] tabular mt-0.5">
+          {value}
+        </div>
+      </Card>
+    </Link>
+  );
+}
+
+function InboxRow({
+  icon: Icon,
+  label,
+  count,
+  href,
+}: {
+  icon: typeof Users;
+  label: string;
+  count: number;
+  href: string;
+}) {
+  return (
+    <Link
+      href={href}
+      className="flex items-center gap-3 px-5 py-3 hover:bg-[var(--color-surface-alt)] transition-colors"
+    >
+      <div className="w-8 h-8 rounded-[8px] bg-[var(--color-surface-alt)] flex items-center justify-center text-[var(--color-text-muted)] shrink-0">
+        <Icon size={14} strokeWidth={1.75} />
       </div>
-      <div className="text-[11px] font-semibold text-[var(--color-text-muted)] tracking-[0.07em] uppercase">
-        {label}
+      <div className="flex-1 min-w-0">
+        <div className="text-[12.5px] font-medium tracking-tight text-[var(--color-text)] truncate">
+          {label}
+        </div>
       </div>
-      <div className="text-[26px] font-semibold tracking-[-0.03em] mt-1 leading-none">
-        {value}
-      </div>
-      {sub && (
-        <div className="text-xs text-[var(--color-text-muted)] mt-1.5">{sub}</div>
-      )}
-    </Card>
+      <span className="min-w-[22px] h-[22px] px-1.5 rounded-full bg-[var(--color-brand)] text-white dark:text-[var(--color-brand-ink)] text-[11px] font-bold inline-flex items-center justify-center shrink-0">
+        {count}
+      </span>
+      <ChevronRight
+        size={14}
+        strokeWidth={1.75}
+        className="text-[var(--color-text-subtle)] shrink-0"
+      />
+    </Link>
   );
 }
