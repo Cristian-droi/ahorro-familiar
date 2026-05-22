@@ -36,6 +36,8 @@ import {
   ArrowUp,
   ArrowDown,
   TrendingUp,
+  DollarSign,
+  Landmark,
 } from 'lucide-react';
 import { exportToExcel, exportToPdf, type ExportSection } from '@/lib/exports';
 import { getProfileRole, listProfilesWithNames } from '@/lib/data/profiles';
@@ -1100,6 +1102,32 @@ export default function LibroCajaPage() {
                           <span className="font-semibold tabular">
                             {cop(Number(r.total_amount))}
                           </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Método de pago */}
+                    <div className="mt-4 animate-in fade-in duration-200">
+                      <div className="text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase mb-1.5">
+                        Método de pago
+                      </div>
+                      <div className="p-3.5 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-surface)] flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-[8px] bg-[var(--color-surface-alt)] border border-[var(--color-border)] flex items-center justify-center text-[var(--color-text-muted)] shrink-0">
+                          {r.payment_method === 'transfer' ? (
+                            <Landmark size={14} strokeWidth={1.75} />
+                          ) : (
+                            <DollarSign size={14} strokeWidth={1.75} />
+                          )}
+                        </div>
+                        <div className="flex-1 text-[13px] min-w-0">
+                          <p className="font-semibold text-[var(--color-text)]">
+                            {r.payment_method === 'transfer' ? 'Transferencia Bancaria' : 'Pago en Efectivo'}
+                          </p>
+                          {r.payment_method === 'transfer' && r.bank_accounts && (
+                            <p className="text-[11px] text-[var(--color-text-subtle)] mt-0.5 truncate">
+                              Destino: <span className="font-medium text-[var(--color-text)]">{r.bank_accounts.bank_name}</span> · Nº <span className="font-medium text-[var(--color-text)]">{r.bank_accounts.account_number}</span> ({r.bank_accounts.holder_name})
+                            </p>
+                          )}
                         </div>
                       </div>
                     </div>

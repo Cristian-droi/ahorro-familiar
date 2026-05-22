@@ -59,6 +59,18 @@ export interface ReceiptItem {
   created_at: string;
 }
 
+export interface BankAccount {
+  id: string;
+  bank_name: string;
+  account_type: 'ahorros' | 'corriente';
+  holder_name: string;
+  account_number: string;
+  qr_path: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Receipt {
   id: string;
   receipt_number: string | null;
@@ -71,6 +83,9 @@ export interface Receipt {
   rejection_note: string | null;
   payment_proof_path: string | null;
   total_amount: number;
+  payment_method: 'transfer' | 'cash';
+  bank_account_id: string | null;
+  bank_accounts?: BankAccount | null;
   created_at: string;
   updated_at: string;
 }

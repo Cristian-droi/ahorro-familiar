@@ -45,14 +45,16 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
-    const { items, payment_proof_path } = parsed.data;
+    const { items, payment_method, bank_account_id, payment_proof_path } = parsed.data;
 
-    // El comprobante debe vivir dentro de la carpeta del propio usuario.
-    if (!payment_proof_path.startsWith(`${user.id}/`)) {
-      return NextResponse.json(
-        { error: 'Ruta de comprobante inválida' },
-        { status: 400 },
-      );
+    // El comprobante debe vivir dentro de la carpeta del propio usuario, si es transferencia.
+    if (payment_method === 'transfer') {
+      if (!payment_proof_path || !payment_proof_path.startsWith(`${user.id}/`)) {
+        return NextResponse.json(
+          { error: 'Ruta de comprobante inválida o faltante para transferencia' },
+          { status: 400 },
+        );
+      }
     }
 
     const admin = createSupabaseAdminClient();
@@ -103,7 +105,9 @@ export async function POST(request: Request) {
       .insert({
         user_id: user.id,
         status: 'pending',
-        payment_proof_path,
+        payment_method,
+        bank_account_id: payment_method === 'transfer' ? bank_account_id : null,
+        payment_proof_path: payment_method === 'transfer' ? payment_proof_path : null,
         total_amount: 0, // trigger lo recalcula con los items
       })
       .select('id, receipt_number')

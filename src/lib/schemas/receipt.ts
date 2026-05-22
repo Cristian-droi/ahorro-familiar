@@ -91,10 +91,13 @@ export const createReceiptPayload = z
       .array(purchaseItemInput)
       .min(1, 'Agrega al menos una compra')
       .max(24, 'Demasiadas líneas en un solo recibo'),
+    payment_method: z.enum(['transfer', 'cash']).default('transfer'),
+    bank_account_id: z.string().uuid('Cuenta de banco inválida').nullable().optional(),
     payment_proof_path: z
       .string()
-      .min(1, 'El comprobante es obligatorio')
-      .max(512),
+      .max(512)
+      .nullable()
+      .optional(),
   })
   .superRefine((val, ctx) => {
     // Una sola capitalización por recibo. Ver spec del módulo.
@@ -107,6 +110,23 @@ export const createReceiptPayload = z
         message: 'Solo se permite una línea de capitalización por recibo',
         path: ['items'],
       });
+    }
+
+    if (val.payment_method === 'transfer') {
+      if (!val.bank_account_id) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'Debe seleccionar una cuenta bancaria para pagos por transferencia',
+          path: ['bank_account_id'],
+        });
+      }
+      if (!val.payment_proof_path || val.payment_proof_path.trim() === '') {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'El comprobante es obligatorio para pagos por transferencia',
+          path: ['payment_proof_path'],
+        });
+      }
     }
   });
 

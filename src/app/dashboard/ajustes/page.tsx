@@ -27,6 +27,10 @@ import {
   MapPin,
   Wallet,
   IdCard,
+  Edit,
+  Trash2,
+  QrCode,
+  Eye,
 } from 'lucide-react';
 import {
   getProfile,
@@ -40,6 +44,7 @@ import {
   type AdminCapWindow,
 } from '@/lib/data/capitalization';
 import { showToast } from '@/components/ui/Toast';
+import { BankAccount } from '@/types/entities';
 
 const cop = (n: number) => '$ ' + new Intl.NumberFormat('es-CO').format(n);
 
@@ -120,6 +125,122 @@ export default function AjustesPage() {
   const [capDeadlineInput, setCapDeadlineInput] = useState('');
   const [capLoading, setCapLoading] =
     useState<'opening' | 'closing' | string | null>(null);
+
+  // Cuentas bancarias (solo admin)
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [loadingBankAccounts, setLoadingBankAccounts] = useState(false);
+  const [editingBankAccount, setEditingBankAccount] = useState<Partial<BankAccount> | null>(null);
+  const [qrFile, setQrFile] = useState<File | null>(null);
+  const [savingBankAccount, setSavingBankAccount] = useState(false);
+
+  const loadBankAccounts = useCallback(async () => {
+    setLoadingBankAccounts(true);
+    try {
+      const { data, error } = await supabase
+        .from('bank_accounts')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      setBankAccounts(data || []);
+    } catch (err) {
+      console.error('Error loading bank accounts:', err);
+      showToast('error', 'No se pudieron cargar las cuentas de banco');
+    } finally {
+      setLoadingBankAccounts(false);
+    }
+  }, []);
+
+  const handleSaveBankAccount = async () => {
+    if (!editingBankAccount) return;
+    const { bank_name, account_type, holder_name, account_number, is_active } = editingBankAccount;
+    
+    if (!bank_name?.trim() || !account_type || !holder_name?.trim() || !account_number?.trim()) {
+      showToast('error', 'Por favor llena todos los campos obligatorios');
+      return;
+    }
+
+    setSavingBankAccount(true);
+    try {
+      let qr_path = editingBankAccount.qr_path || null;
+
+      if (qrFile) {
+        const ext = qrFile.name.split('.').pop() || 'png';
+        const fileName = `${crypto.randomUUID()}.${ext}`;
+        const { error: uploadError } = await supabase.storage
+          .from('bank-qrs')
+          .upload(fileName, qrFile, {
+            contentType: qrFile.type,
+            upsert: true,
+          });
+        
+        if (uploadError) throw uploadError;
+        qr_path = fileName;
+      }
+
+      const payload = {
+        bank_name: bank_name.trim(),
+        account_type,
+        holder_name: holder_name.trim(),
+        account_number: account_number.trim(),
+        qr_path,
+        is_active: is_active ?? true,
+      };
+
+      if (editingBankAccount.id) {
+        const { error } = await supabase
+          .from('bank_accounts')
+          .update(payload)
+          .eq('id', editingBankAccount.id);
+        if (error) throw error;
+        showToast('success', 'Cuenta bancaria actualizada correctamente');
+      } else {
+        const { error } = await supabase
+          .from('bank_accounts')
+          .insert(payload);
+        if (error) throw error;
+        showToast('success', 'Cuenta bancaria registrada correctamente');
+      }
+
+      setEditingBankAccount(null);
+      setQrFile(null);
+      loadBankAccounts();
+    } catch (err) {
+      console.error('Error saving bank account:', err);
+      showToast('error', 'Ocurrió un error al guardar la cuenta bancaria');
+    } finally {
+      setSavingBankAccount(false);
+    }
+  };
+
+  const handleDeleteBankAccount = async (id: string, qrPath: string | null) => {
+    if (!window.confirm('¿Estás seguro de eliminar esta cuenta bancaria?')) return;
+    
+    try {
+      const { error } = await supabase
+        .from('bank_accounts')
+        .delete()
+        .eq('id', id);
+      
+      if (error) {
+        if (error.code === '23503') {
+          showToast('error', 'No se puede eliminar la cuenta porque tiene pagos asociados. Puedes desactivarla en su lugar.');
+        } else {
+          throw error;
+        }
+        return;
+      }
+
+      if (qrPath) {
+        await supabase.storage.from('bank-qrs').remove([qrPath]);
+      }
+
+      showToast('success', 'Cuenta bancaria eliminada correctamente');
+      loadBankAccounts();
+    } catch (err) {
+      console.error('Error deleting bank account:', err);
+      showToast('error', 'Ocurrió un error al eliminar la cuenta bancaria');
+    }
+  };
 
   const refreshShareChangeStats = useCallback(async () => {
     const [totalRes, enabledRes] = await Promise.all([
@@ -228,6 +349,7 @@ export default function AjustesPage() {
           // de ventanas activas de capitalización.
           if (userRole === 'admin') {
             refreshShareChangeStats();
+            loadBankAccounts();
             try {
               const list = await listAdminCapitalizationWindows(supabase);
               if (!cancelled) setCapWindows(list);
@@ -1006,6 +1128,21 @@ export default function AjustesPage() {
                 onClose={handleCloseCapWindow}
               />
             </div>
+
+            {/* Cuentas bancarias de depósito (solo admin). Ocupa el ancho completo. */}
+            <div className="md:col-span-2">
+              <BankAccountsAdminCard
+                bankAccounts={bankAccounts}
+                loading={loadingBankAccounts}
+                editingAccount={editingBankAccount}
+                setEditingAccount={setEditingBankAccount}
+                qrFile={qrFile}
+                setQrFile={setQrFile}
+                saving={savingBankAccount}
+                onSave={handleSaveBankAccount}
+                onDelete={handleDeleteBankAccount}
+              />
+            </div>
           </>
         )}
       </div>
@@ -1219,6 +1356,293 @@ function CapitalizationAdminCard({
             <PlayCircle size={15} strokeWidth={1.75} />
             {isGlobalOpen ? 'Reemplazar global' : 'Abrir global'}
           </Button>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function BankAccountsAdminCard({
+  bankAccounts,
+  loading,
+  editingAccount,
+  setEditingAccount,
+  qrFile,
+  setQrFile,
+  saving,
+  onSave,
+  onDelete,
+}: {
+  bankAccounts: BankAccount[];
+  loading: boolean;
+  editingAccount: Partial<BankAccount> | null;
+  setEditingAccount: (a: Partial<BankAccount> | null) => void;
+  qrFile: File | null;
+  setQrFile: (f: File | null) => void;
+  saving: boolean;
+  onSave: () => void;
+  onDelete: (id: string, qrPath: string | null) => void;
+}) {
+  const [selectedQrPath, setSelectedQrPath] = useState<string | null>(null);
+
+  const getQrUrl = (path: string | null) => {
+    if (!path) return '';
+    const { data } = supabase.storage.from('bank-qrs').getPublicUrl(path);
+    return data.publicUrl;
+  };
+
+  return (
+    <Card padding="none" className="overflow-hidden">
+      <div className="p-6 flex flex-col gap-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-[10px] bg-[var(--color-brand-soft)] text-[var(--color-brand)] flex items-center justify-center">
+              <Landmark size={18} strokeWidth={1.75} />
+            </div>
+            <div>
+              <h2 className="text-[15px] font-semibold tracking-tight text-[var(--color-text)]">
+                Cuentas bancarias activas
+              </h2>
+              <p className="text-[var(--color-text-muted)] text-[13px] leading-[1.55] mt-1">
+                Registra y gestiona las cuentas donde los accionistas podrán reportar transferencias.
+              </p>
+            </div>
+          </div>
+          {!editingAccount && (
+            <Button
+              size="sm"
+              onClick={() =>
+                setEditingAccount({
+                  bank_name: '',
+                  account_type: 'ahorros',
+                  holder_name: '',
+                  account_number: '',
+                  is_active: true,
+                })
+              }
+            >
+              <Plus size={14} strokeWidth={2} />
+              Agregar cuenta
+            </Button>
+          )}
+        </div>
+
+        {selectedQrPath && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-[var(--color-surface)] rounded-[16px] border border-[var(--color-border)] p-6 max-w-sm w-full relative shadow-2xl flex flex-col items-center">
+              <button
+                type="button"
+                onClick={() => setSelectedQrPath(null)}
+                className="absolute right-4 top-4 p-1.5 rounded-full hover:bg-[var(--color-surface-alt)] text-[var(--color-text-muted)] transition-colors"
+              >
+                <X size={18} strokeWidth={2} />
+              </button>
+              <h3 className="text-sm font-semibold mb-4 text-[var(--color-text)]">Código QR de Pago</h3>
+              <div className="w-64 h-64 relative bg-white border border-[var(--color-border)] rounded-[12px] p-2 flex items-center justify-center overflow-hidden">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={getQrUrl(selectedQrPath)}
+                  alt="Código QR de banco"
+                  className="max-w-full max-h-full object-contain"
+                />
+              </div>
+              <p className="text-[11px] text-[var(--color-text-muted)] mt-3 text-center">
+                Este QR se mostrará a los accionistas para que escaneen y transfieran.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {editingAccount && (
+          <div className="flex flex-col gap-4 p-4 rounded-[12px] border border-dashed border-[var(--color-border)] bg-[var(--color-surface-alt)]/50">
+            <h3 className="text-[13px] font-semibold text-[var(--color-text)]">
+              {editingAccount.id ? 'Editar cuenta bancaria' : 'Nueva cuenta bancaria'}
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Input
+                label="Nombre del banco *"
+                value={editingAccount.bank_name || ''}
+                onChange={(e) => setEditingAccount({ ...editingAccount, bank_name: e.target.value })}
+                placeholder="Ej. Bancolombia"
+                maxLength={60}
+              />
+              <Input
+                label="Número de cuenta *"
+                value={editingAccount.account_number || ''}
+                onChange={(e) => setEditingAccount({ ...editingAccount, account_number: e.target.value.replace(/\D/g, '') })}
+                placeholder="Solo números"
+                maxLength={30}
+              />
+              <Input
+                label="Titular de la cuenta *"
+                value={editingAccount.holder_name || ''}
+                onChange={(e) => setEditingAccount({ ...editingAccount, holder_name: e.target.value })}
+                placeholder="Nombre completo"
+                maxLength={100}
+              />
+              <div>
+                <label className="block text-[11px] font-semibold text-[var(--color-text-muted)] uppercase tracking-[0.12em] mb-1.5">
+                  Tipo de cuenta *
+                </label>
+                <div className="relative">
+                  <select
+                    value={editingAccount.account_type || 'ahorros'}
+                    onChange={(e) =>
+                      setEditingAccount({
+                        ...editingAccount,
+                        account_type: e.target.value as 'ahorros' | 'corriente',
+                      })
+                    }
+                    className="w-full appearance-none h-11 px-3.5 pr-10 rounded-[12px] border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)] text-sm font-medium transition-colors focus:outline-none focus:border-[var(--color-brand)] focus:ring-4 focus:ring-[var(--color-ring)] cursor-pointer"
+                  >
+                    <option value="ahorros">Ahorros</option>
+                    <option value="corriente">Corriente</option>
+                  </select>
+                  <ChevronDown
+                    size={16}
+                    strokeWidth={1.75}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] pointer-events-none"
+                  />
+                </div>
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-[11px] font-semibold text-[var(--color-text-muted)] uppercase tracking-[0.12em] mb-1.5">
+                  Código QR de Pago (opcional)
+                </label>
+                <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
+                  <input
+                    type="file"
+                    accept="image/png, image/jpeg"
+                    onChange={(e) => {
+                      if (e.target.files?.[0]) {
+                        setQrFile(e.target.files[0]);
+                      }
+                    }}
+                    className="text-xs text-[var(--color-text-muted)] file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-[var(--color-brand-soft)] file:text-[var(--color-brand)] hover:file:bg-[var(--color-brand-soft)]/80 cursor-pointer"
+                  />
+                  {qrFile && (
+                    <span className="text-xs text-[var(--color-success)] font-medium">
+                      Archivo seleccionado: {qrFile.name}
+                    </span>
+                  )}
+                  {editingAccount.qr_path && !qrFile && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-[var(--color-text-muted)]">QR actual guardado</span>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedQrPath(editingAccount.qr_path!)}
+                        className="text-xs text-[var(--color-brand)] font-semibold flex items-center gap-1 hover:underline"
+                      >
+                        <Eye size={12} /> Ver QR
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="md:col-span-2 flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="account_is_active"
+                  checked={editingAccount.is_active ?? true}
+                  onChange={(e) => setEditingAccount({ ...editingAccount, is_active: e.target.checked })}
+                  className="rounded border-[var(--color-border)] text-[var(--color-brand)] focus:ring-[var(--color-ring)] h-4 w-4"
+                />
+                <label htmlFor="account_is_active" className="text-xs font-semibold text-[var(--color-text)] uppercase tracking-wider cursor-pointer">
+                  Cuenta activa (los accionistas podrán seleccionarla)
+                </label>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 mt-2">
+              <Button size="md" onClick={onSave} disabled={saving}>
+                <Save size={15} strokeWidth={1.75} />
+                {saving ? 'Guardando...' : 'Guardar cuenta'}
+              </Button>
+              <Button
+                size="md"
+                variant="secondary"
+                onClick={() => {
+                  setEditingAccount(null);
+                  setQrFile(null);
+                }}
+                disabled={saving}
+              >
+                Cancelar
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {loading ? (
+          <p className="text-sm text-[var(--color-text-muted)] italic">Cargando cuentas...</p>
+        ) : bankAccounts.length === 0 ? (
+          <p className="text-sm text-[var(--color-text-muted)] italic">No hay cuentas bancarias configuradas.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-[var(--color-border)] text-[var(--color-text-muted)] uppercase tracking-wider font-semibold">
+                  <th className="py-2.5 px-3">Banco</th>
+                  <th className="py-2.5 px-3">Tipo</th>
+                  <th className="py-2.5 px-3">Número de Cuenta</th>
+                  <th className="py-2.5 px-3">Titular</th>
+                  <th className="py-2.5 px-3 text-center">QR</th>
+                  <th className="py-2.5 px-3 text-center">Estado</th>
+                  <th className="py-2.5 px-3 text-right">Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--color-border)] font-medium text-[var(--color-text)]">
+                {bankAccounts.map((account) => (
+                  <tr key={account.id} className="hover:bg-[var(--color-surface-alt)]/40 transition-colors">
+                    <td className="py-3 px-3 font-semibold">{account.bank_name}</td>
+                    <td className="py-3 px-3 capitalize">{account.account_type}</td>
+                    <td className="py-3 px-3 tabular">{account.account_number}</td>
+                    <td className="py-3 px-3">{account.holder_name}</td>
+                    <td className="py-3 px-3 text-center">
+                      {account.qr_path ? (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedQrPath(account.qr_path)}
+                          className="p-1.5 rounded-md bg-[var(--color-brand-soft)] text-[var(--color-brand)] inline-flex items-center justify-center hover:bg-[var(--color-brand-soft)]/80 transition-colors"
+                          title="Ver código QR"
+                        >
+                          <QrCode size={14} />
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-[var(--color-text-subtle)]">Sin QR</span>
+                      )}
+                    </td>
+                    <td className="py-3 px-3 text-center">
+                      {account.is_active ? (
+                        <Badge tone="success" dot>Activa</Badge>
+                      ) : (
+                        <Badge tone="neutral" dot>Inactiva</Badge>
+                      )}
+                    </td>
+                    <td className="py-3 px-3 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setEditingAccount(account)}
+                          className="p-1.5 rounded-md border border-[var(--color-border)] hover:bg-[var(--color-surface)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+                          title="Editar"
+                        >
+                          <Edit size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onDelete(account.id, account.qr_path)}
+                          className="p-1.5 rounded-md border border-[var(--color-border)] hover:bg-[var(--color-danger-soft)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-danger)] transition-colors"
+                          title="Eliminar"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </Card>
