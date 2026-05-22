@@ -348,7 +348,7 @@ export default function ComprasPage() {
       const { data: receipt, error } = await supabase
         .from('receipts')
         .select(
-          'id, receipt_number, status, receipt_items(concept, target_month, share_count, amount, loan_id)',
+          'id, receipt_number, status, payment_method, bank_account_id, receipt_items(concept, target_month, share_count, amount, loan_id)',
         )
         .eq('id', resubmitId)
         .maybeSingle();
@@ -363,6 +363,12 @@ export default function ComprasPage() {
         return;
       }
       setResubmitNumber(receipt.receipt_number ?? null);
+      if (receipt.payment_method) {
+        setPaymentMethod(receipt.payment_method as 'transfer' | 'cash');
+      }
+      if (receipt.bank_account_id) {
+        setSelectedBankAccountId(receipt.bank_account_id);
+      }
 
       const items = (receipt.receipt_items ?? []) as Array<{
         concept: string;

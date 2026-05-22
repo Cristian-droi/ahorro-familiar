@@ -127,7 +127,7 @@ export default function HistorialPage() {
       const { data, error } = await supabase
         .from('receipts')
         .select(
-          'id, receipt_number, user_id, status, submitted_at, reviewed_at, reviewed_by, rejection_reason, rejection_note, payment_proof_path, total_amount, created_at, updated_at, receipt_items(*, loan:loans(disbursement_number))',
+          'id, receipt_number, user_id, status, submitted_at, reviewed_at, reviewed_by, rejection_reason, rejection_note, payment_proof_path, total_amount, created_at, updated_at, payment_method, bank_account_id, bank_accounts(bank_name, account_number, holder_name, account_type), receipt_items(*, loan:loans(disbursement_number))',
         )
         .eq('user_id', uid)
         .order('submitted_at', { ascending: false });
