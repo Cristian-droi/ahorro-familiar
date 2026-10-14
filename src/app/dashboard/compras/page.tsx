@@ -35,8 +35,6 @@ import {
   Lock,
   Landmark,
   QrCode,
-  Eye,
-  ChevronDown,
 } from 'lucide-react';
 import { getProfile } from '@/lib/data/profiles';
 import { listReceiptsForUser } from '@/lib/data/receipts';
@@ -73,6 +71,44 @@ type CartLine = {
 
 function makeUid() {
   return Math.random().toString(36).slice(2, 10);
+}
+
+function buildDefaultLines(
+  currentMonthStr: string,
+  sharesBoughtMap: Map<string, number>,
+  minSharesRule: number,
+): CartLine[] {
+  const currentYearNum = Number(currentMonthStr.slice(0, 4));
+  const currMonthNum = Number(currentMonthStr.slice(5, 7));
+  const defaultLines: CartLine[] = [];
+
+  // 1. Pre-cargar meses en mora del año en curso
+  for (let m = 1; m < currMonthNum; m++) {
+    const mStr = `${currentYearNum}-${String(m).padStart(2, '0')}-01`;
+    const bought = sharesBoughtMap.get(mStr) ?? 0;
+    if (bought < minSharesRule) {
+      defaultLines.push({
+        uid: makeUid(),
+        target_month: mStr,
+        share_count: Math.max(1, minSharesRule - bought),
+      });
+    }
+  }
+
+  // 2. Pre-cargar el mes actual
+  const currentBought = sharesBoughtMap.get(currentMonthStr) ?? 0;
+  const alreadyInList = defaultLines.some((l) => l.target_month === currentMonthStr);
+  if (!alreadyInList && (currentBought < minSharesRule || defaultLines.length === 0)) {
+    defaultLines.push({
+      uid: makeUid(),
+      target_month: currentMonthStr,
+      share_count: Math.max(1, minSharesRule - currentBought),
+    });
+  }
+
+  return defaultLines.length > 0
+    ? defaultLines
+    : [{ uid: makeUid(), target_month: currentMonthStr, share_count: 1 }];
 }
 
 function extensionFromMime(mime: string): string {
@@ -160,6 +196,7 @@ export default function ComprasPage() {
   const [paymentMethod, setPaymentMethod] = useState<'transfer' | 'cash'>('transfer');
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [selectedBankAccountId, setSelectedBankAccountId] = useState<string | null>(null);
+  const [selectedQrPath, setSelectedQrPath] = useState<string | null>(null);
 
   const [submitting, setSubmitting] = useState(false);
 
@@ -205,6 +242,7 @@ export default function ComprasPage() {
         showToast('error', 'No se pudo cargar tu perfil.');
       }
 
+      let loadedMinShares = DEFAULT_PURCHASE_RULES.min_shares_per_month;
       // Reglas.
       try {
         const { data } = await supabase
@@ -214,10 +252,11 @@ export default function ComprasPage() {
           .maybeSingle();
         if (!cancelled && data?.value) {
           const v = data.value as Partial<PurchaseRules>;
+          loadedMinShares =
+            v.min_shares_per_month ??
+            DEFAULT_PURCHASE_RULES.min_shares_per_month;
           setRules({
-            min_shares_per_month:
-              v.min_shares_per_month ??
-              DEFAULT_PURCHASE_RULES.min_shares_per_month,
+            min_shares_per_month: loadedMinShares,
             max_shares_per_month:
               v.max_shares_per_month ??
               DEFAULT_PURCHASE_RULES.max_shares_per_month,
@@ -238,6 +277,7 @@ export default function ComprasPage() {
       // Para el preview: meses en los que el usuario ya tiene multa
       // pending/approved (en otro recibo). RLS filtra a sus propios
       // recibos al hacer el select anidado.
+      const boughtMap = new Map<string, number>();
       try {
         const receipts = await listReceiptsForUser(supabase, user.id);
         const activeReceiptIds = receipts
@@ -258,9 +298,6 @@ export default function ComprasPage() {
           }
 
           // Totales de acciones previas (pending + approved) por mes.
-          // El trigger max_shares_per_month_exceeded usa exactamente esta
-          // misma suma + lo nuevo; aquí replicamos el cálculo para poder
-          // avisar en vivo.
           const { data: shareItems } = await supabase
             .from('receipt_items')
             .select('target_month, share_count')
@@ -268,16 +305,25 @@ export default function ComprasPage() {
             .in('receipt_id', activeReceiptIds);
 
           if (!cancelled && shareItems) {
-            const map = new Map<string, number>();
             for (const it of shareItems) {
-              const prev = map.get(it.target_month) ?? 0;
-              map.set(it.target_month, prev + (it.share_count ?? 0));
+              const prev = boughtMap.get(it.target_month) ?? 0;
+              boughtMap.set(it.target_month, prev + (it.share_count ?? 0));
             }
-            setSharesAlreadyBoughtByMonth(map);
+            setSharesAlreadyBoughtByMonth(boughtMap);
           }
         }
       } catch (err) {
         console.error('Error cargando multas previas:', err);
+      }
+
+      // Pre-cargar por defecto 1 acción por cada mes en mora + 1 acción para el mes actual
+      if (!cancelled && !resubmitId) {
+        const defaultLines = buildDefaultLines(
+          currentMonth,
+          boughtMap,
+          loadedMinShares,
+        );
+        setLines(defaultLines);
       }
 
       // Estado de capitalización para este accionista (no bloqueante).
@@ -333,7 +379,7 @@ export default function ComprasPage() {
     return () => {
       cancelled = true;
     };
-  }, [router]);
+  }, [router, currentMonth, resubmitId]);
 
   // Precarga del recibo a reenviar cuando viene `?resubmit=<id>` en URL.
   // Cargamos el recibo completo + sus items y mapeamos cada concepto al
@@ -624,11 +670,12 @@ export default function ComprasPage() {
     }
     // Pagos de préstamo: validar capital ≤ saldo.
     for (const p of loanPaymentBreakdown) {
+      const pName = `Préstamo #${p.loan.loan_number}${p.loan.disbursement_number ? ` (${p.loan.disbursement_number})` : ''}`;
       if (p.capital > p.loan.outstanding_capital) {
-        return `El abono a capital del préstamo ${p.loan.disbursement_number ?? ''} excede el saldo (${cop(p.loan.outstanding_capital)}).`;
+        return `El abono a capital del ${pName} excede el saldo (${cop(p.loan.outstanding_capital)}).`;
       }
       if (p.interests <= 0 && p.capital <= 0) {
-        return `El préstamo ${p.loan.disbursement_number ?? ''} no tiene intereses adeudados ni abono — quítalo del recibo.`;
+        return `El ${pName} no tiene intereses adeudados ni abono — quítalo del recibo.`;
       }
     }
     return null;
@@ -1310,7 +1357,15 @@ export default function ComprasPage() {
                             </div>
                           </div>
                           {activeAcc.qr_path && (
-                            <div className="flex flex-col items-center gap-1.5 bg-white p-2 rounded-[12px] border border-[var(--color-border)] shadow-sm shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const url = supabase.storage.from('bank-qrs').getPublicUrl(activeAcc.qr_path!).data.publicUrl;
+                                setSelectedQrPath(url);
+                              }}
+                              className="flex flex-col items-center gap-1.5 bg-white p-2 rounded-[12px] border border-[var(--color-border)] shadow-sm shrink-0 cursor-zoom-in hover:scale-[1.03] transition-all duration-200 active:scale-95 focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)]/40"
+                              title="Hacé clic para ampliar el QR"
+                            >
                               <div className="w-28 h-28 relative flex items-center justify-center overflow-hidden">
                                 {/* eslint-disable-next-line @next/next/no-img-element */}
                                 <img
@@ -1319,10 +1374,10 @@ export default function ComprasPage() {
                                   className="max-w-full max-h-full object-contain"
                                 />
                               </div>
-                              <span className="text-[9px] font-bold text-gray-500 uppercase tracking-wide">
-                                Escanear para pagar
+                              <span className="text-[9px] font-bold text-gray-500 uppercase tracking-wide flex items-center gap-1">
+                                <QrCode size={10} /> Escanear / Ampliar
                               </span>
-                            </div>
+                            </button>
                           )}
                         </div>
                       );
@@ -1492,7 +1547,7 @@ export default function ComprasPage() {
               variant="primary"
               size="lg"
               className="w-full mt-5"
-              disabled={submitting || validationError != null || !file}
+              disabled={submitting || validationError != null || (paymentMethod === 'transfer' && !file)}
               onClick={handleSubmit}
             >
               {submitting ? (
@@ -1520,6 +1575,42 @@ export default function ComprasPage() {
           </div>
         </aside>
       </div>
+
+      {/* Modal para ampliar el QR */}
+      {selectedQrPath && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md transition-opacity duration-300"
+          onClick={() => setSelectedQrPath(null)}
+        >
+          <div
+            className="relative max-w-sm w-full mx-4 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[20px] shadow-2xl p-6 flex flex-col items-center gap-4 animate-in fade-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              className="absolute top-4 right-4 text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors p-1.5 rounded-full hover:bg-[var(--color-surface-hover)]"
+              onClick={() => setSelectedQrPath(null)}
+              aria-label="Cerrar modal"
+            >
+              <X size={18} strokeWidth={2} />
+            </button>
+            <h3 className="text-sm font-bold text-[var(--color-text)] uppercase tracking-wider text-center mt-2">
+              Código QR de Pago
+            </h3>
+            <div className="w-64 h-64 relative flex items-center justify-center bg-white p-3 rounded-[16px] border border-[var(--color-border)] shadow-inner">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={selectedQrPath}
+                alt="QR ampliado"
+                className="max-w-full max-h-full object-contain"
+              />
+            </div>
+            <p className="text-xs text-[var(--color-text-muted)] font-medium text-center px-2">
+              Escaneá este código QR desde la app de tu banco para realizar la transferencia de manera rápida y segura.
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1813,7 +1904,7 @@ function LoanPaymentsSection({
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-[13px] font-semibold tracking-tight">
-                      {debt.disbursement_number ?? 'Préstamo'}
+                      Préstamo #{debt.loan_number}{debt.disbursement_number ? ` (${debt.disbursement_number})` : ''}
                     </span>
                     <span className="text-[11px] text-[var(--color-text-subtle)]">
                       Pedido {cop(debt.requested_amount)}

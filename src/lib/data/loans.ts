@@ -133,6 +133,7 @@ export async function countMyPendingLoanSharePurchases(
 // meses vencidos y target_month a usar para los receipt_items del pago.
 export type ActiveLoanDebt = {
   loan_id: string;
+  loan_number: number;
   disbursement_number: string | null;
   requested_amount: number;
   outstanding_capital: number;
@@ -148,6 +149,7 @@ export async function getMyActiveLoansDebt(supabase: SB): Promise<ActiveLoanDebt
   if (error) throw error;
   return (data ?? []).map((row) => ({
     loan_id: row.loan_id,
+    loan_number: Number(row.loan_number ?? 0),
     disbursement_number: row.disbursement_number,
     requested_amount: Number(row.requested_amount),
     outstanding_capital: Number(row.outstanding_capital),

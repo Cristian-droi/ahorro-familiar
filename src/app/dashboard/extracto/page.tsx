@@ -126,6 +126,7 @@ type LoanSummaryData = {
   next_installment_amount: number | null;
   next_installment_month: string | null;
   loans: Array<{
+    loan_number: number;
     disbursement_number: string | null;
     status: string;
     disbursed_at: string | null;
@@ -311,6 +312,8 @@ export function ExtractoView({ targetUserId }: ExtractoViewProps = {}) {
             requestedAmount: Number(l.loan.requested_amount),
             plan: l.plan,
             payments: l.payments,
+            interestRate: Number(l.loan.interest_rate),
+            disbursedAt: l.loan.disbursed_at,
           }),
         }));
         const agg = books.reduce(
@@ -318,7 +321,7 @@ export function ExtractoView({ targetUserId }: ExtractoViewProps = {}) {
             acc.total_requested += b.book.summary.requested_amount;
             acc.total_paid_capital += b.book.summary.total_paid_capital;
             acc.total_paid_interest += b.book.summary.total_paid_interest;
-            acc.total_interest_debt += b.book.summary.total_interest_debt;
+            acc.total_interest_debt += b.book.summary.overdue_interest_debt;
             acc.current_capital_balance += b.book.summary.current_capital_balance;
             return acc;
           },
@@ -347,6 +350,7 @@ export function ExtractoView({ targetUserId }: ExtractoViewProps = {}) {
           next_installment_amount: nextSummary?.next_installment_amount ?? null,
           next_installment_month: nextSummary?.next_installment_month ?? null,
           loans: books.map((b) => ({
+            loan_number: b.loan.loan_number,
             disbursement_number: b.loan.disbursement_number,
             status: b.loan.status,
             disbursed_at: b.loan.disbursed_at,
@@ -354,7 +358,7 @@ export function ExtractoView({ targetUserId }: ExtractoViewProps = {}) {
             interest_rate: Number(b.loan.interest_rate),
             payment_plan_months: b.loan.payment_plan_months,
             current_capital_balance: b.book.summary.current_capital_balance,
-            total_interest_debt: b.book.summary.total_interest_debt,
+            total_interest_debt: b.book.summary.overdue_interest_debt,
             total_paid_capital: b.book.summary.total_paid_capital,
             total_paid_interest: b.book.summary.total_paid_interest,
           })),
@@ -1048,7 +1052,7 @@ export function ExtractoView({ targetUserId }: ExtractoViewProps = {}) {
                 {loanSummary.loans.map((l, i) => (
                   <tr key={i}>
                     <td className="px-4 py-2.5 font-medium text-[var(--color-text)]">
-                      {l.disbursement_number ?? '—'}
+                      Préstamo #{l.loan_number}{l.disbursement_number ? ` (${l.disbursement_number})` : ''}
                       {l.disbursed_at && (
                         <div className="text-[10px] text-[var(--color-text-subtle)] mt-0.5">
                           {new Date(l.disbursed_at).toLocaleDateString('es-CO', {

@@ -4,6 +4,9 @@ export const createLoanSchema = z.object({
   requested_amount: z.number().int().positive().min(500_000),
   payment_plan_months: z.number().int().min(1).max(60),
   loan_shares_paid_upfront: z.boolean().default(false),
+  deduct_obligations: z.boolean().default(false),
+  deducted_capital_amount: z.number().nonnegative().default(0),
+  deductions_detail: z.array(z.any()).default([]),
 });
 
 export const updatePaymentPlanSchema = z.object({
@@ -18,7 +21,16 @@ export const reviewPlanSchema = z.object({
 });
 
 export const disburseSchema = z.object({
-  disbursement_proof_path: z.string().min(1),
+  disbursement_proof_path: z.string().optional().nullable(),
+  payment_method: z.enum(['transfer', 'cash']).default('transfer'),
+}).refine((data) => {
+  if (data.payment_method === 'transfer') {
+    return !!data.disbursement_proof_path && data.disbursement_proof_path.trim().length > 0;
+  }
+  return true;
+}, {
+  message: 'Se requiere el comprobante de transferencia',
+  path: ['disbursement_proof_path'],
 });
 
 export const voteSchema = z.object({

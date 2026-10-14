@@ -44,6 +44,7 @@ export interface ExportMeta {
   // merge; para PDF va como header y metadata.
   title: string;
   subtitle?: string;
+  orientation?: 'portrait' | 'landscape';
   // "Generado: <fecha>" ya se agrega automáticamente.
 }
 
@@ -197,7 +198,7 @@ export async function exportToPdf(
   const autoTableModule = await import('jspdf-autotable');
   const autoTable = autoTableModule.default;
 
-  const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+  const doc = new jsPDF({ unit: 'pt', format: 'letter', orientation: meta.orientation || 'portrait' });
   const pageWidth = doc.internal.pageSize.getWidth();
 
   // Cabecera.

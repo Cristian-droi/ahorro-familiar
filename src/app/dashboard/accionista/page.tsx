@@ -36,6 +36,7 @@ import { getBogotaCurrentMonth } from '@/lib/fines';
 import type { ReceiptStatus } from '@/types/entities';
 import { SavingsGrowthChart } from '@/components/dashboard/DashboardCharts';
 import { AccionistaRealtime } from './AccionistaRealtime';
+import { NextYearCapitalizationWidget } from './NextYearCapitalizationWidget';
 
 export const metadata = {
   title: 'Dashboard Accionista',
@@ -78,6 +79,7 @@ export default async function AccionistaDashboardPage() {
     pendingLoanActive,
     pendingLoanShares,
     receipts,
+    settingsRes,
   ] = await Promise.all([
     // Aportes aprobados del año (acciones + acciones_prestamo + capitalizacion)
     supabase
@@ -97,17 +99,34 @@ export default async function AccionistaDashboardPage() {
     repo.countLoansActiveUnseenForUser(uid).catch(() => 0),
     repo.countMyPendingLoanSharePurchases().catch(() => 0),
     listReceiptsForUser(supabase, uid).catch(() => []),
+    supabase
+      .from('system_settings')
+      .select('key, value')
+      .in('key', ['resumen_next_year_shares_percentage', 'next_year_capitalization_active']),
   ]);
+
+  // Extract settings
+  const settingsList = settingsRes?.data || [];
+  const nextYearCapitalizationActive = settingsList.find(s => s.key === 'next_year_capitalization_active')?.value === true;
+  const nextYearSharesPercentage = Number(settingsList.find(s => s.key === 'resumen_next_year_shares_percentage')?.value ?? 0.30);
 
   // Calcular Capital y conteo de acciones
   let capitalAportes = 0;
   let capitalCount = 0;
+  let valorAcciones = 0;
+  let capitalizaciones = 0;
   for (const it of itemsRes.data ?? []) {
-    capitalAportes += Number(it.amount ?? 0);
+    const amt = Number(it.amount ?? 0);
+    capitalAportes += amt;
     if (it.concept === 'acciones' || it.concept === 'acciones_prestamo') {
       capitalCount += Number(it.share_count ?? 0);
+      valorAcciones += amt;
+    } else if (it.concept === 'capitalizacion') {
+      capitalizaciones += amt;
     }
   }
+
+  const initialCapitalization = Number(profile?.next_year_capitalization ?? 0);
 
   // Calcular utilidades totales del año
   const utilitiesYearTotal = utilities.reduce((s, u) => s + u.distribution, 0);
@@ -168,13 +187,9 @@ export default async function AccionistaDashboardPage() {
     }
   }
 
-  // Identificar el préstamo con el vencimiento más cercano o intereses pendientes
-  const nextPaymentLoan = loanDebts.length > 0
-    ? loanDebts.reduce((earliest, current) => {
-        if (!earliest) return current;
-        return new Date(current.next_due_month) < new Date(earliest.next_due_month) ? current : earliest;
-      }, null as typeof loanDebts[0] | null)
-    : null;
+  // Identificar los préstamos activos que tienen intereses pendientes o vencimientos
+  const loansWithInterest = loanDebts.filter((d) => d.interest_owed > 0);
+  const totalInterestOwedAllLoans = loansWithInterest.reduce((s, d) => s + d.interest_owed, 0);
 
   const greeting = firstName ? `Hola, ${firstName}` : 'Hola';
   const needsShareValue = shareValue === null;
@@ -232,44 +247,16 @@ export default async function AccionistaDashboardPage() {
         </Card>
       )}
 
-      {/* Tarjeta de Próximo Vencimiento destacada */}
-      {nextPaymentLoan && (
-        <Card
-          padding="md"
-          className="border-[var(--color-brand)]/30 bg-[var(--color-brand-soft)]/10 flex flex-col md:flex-row md:items-center justify-between gap-4"
-        >
-          <div className="flex items-start gap-3.5">
-            <div className="w-10 h-10 rounded-[10px] bg-[var(--color-brand-soft)] text-[var(--color-brand)] flex items-center justify-center shrink-0 mt-0.5">
-              <Calendar size={18} strokeWidth={2} />
-            </div>
-            <div className="flex-1 min-w-0 text-left">
-              <div className="text-[14px] font-bold tracking-tight text-[var(--color-text)]">
-                Próximo pago de intereses ({nextPaymentLoan.disbursement_number ?? 'Préstamo'})
-              </div>
-              <p className="text-[12px] text-[var(--color-text-subtle)] mt-1">
-                Tenés intereses pendientes de{' '}
-                <span className="font-bold text-[var(--color-text)]">
-                  {cop(nextPaymentLoan.interest_owed)}
-                </span>{' '}
-                a vencer el{' '}
-                <span className="font-semibold text-[var(--color-text)]">
-                  {new Date(nextPaymentLoan.next_due_month + 'T00:00:00').toLocaleDateString('es-CO', {
-                    day: 'numeric',
-                    month: 'long',
-                    year: 'numeric',
-                  })}
-                </span>
-                .
-              </p>
-            </div>
-          </div>
-          <Link href="/dashboard/compras" className="shrink-0">
-            <Button size="sm" className="w-full md:w-auto">
-              Pagar intereses
-              <ArrowRight size={14} strokeWidth={2} />
-            </Button>
-          </Link>
-        </Card>
+      {/* Widget de Capitalización del Siguiente Año */}
+      {nextYearCapitalizationActive && (
+        <NextYearCapitalizationWidget
+          userId={uid}
+          initialCapitalization={initialCapitalization}
+          valorAcciones={valorAcciones}
+          capitalizaciones={capitalizaciones}
+          nextYearSharesPercentage={nextYearSharesPercentage}
+          nextYear={year + 1}
+        />
       )}
 
       {/* KPIs principales */}
@@ -319,6 +306,112 @@ export default async function AccionistaDashboardPage() {
           href="/dashboard/extracto"
         />
       </div>
+
+      {/* Tarjeta de Próximo Vencimiento destacada (1 solo préstamo) */}
+      {loansWithInterest.length === 1 && (
+        <Card
+          padding="md"
+          className="border-[var(--color-warn)]/30 bg-[var(--color-warn-soft)]/10 flex flex-col md:flex-row md:items-center justify-between gap-4"
+        >
+          <div className="flex items-start gap-3.5">
+            <div className="w-10 h-10 rounded-[10px] bg-[var(--color-warn-soft)] text-[var(--color-warn)] flex items-center justify-center shrink-0 mt-0.5">
+              <Calendar size={18} strokeWidth={2} />
+            </div>
+            <div className="flex-1 min-w-0 text-left">
+              <div className="text-[14px] font-bold tracking-tight text-[var(--color-text)]">
+                Próximo pago de intereses (Préstamo #{loansWithInterest[0].loan_number}{loansWithInterest[0].disbursement_number ? ` · ${loansWithInterest[0].disbursement_number}` : ''})
+              </div>
+              <p className="text-[12px] text-[var(--color-text-subtle)] mt-1">
+                Tenés intereses pendientes de{' '}
+                <span className="font-bold text-[var(--color-warn)]">
+                  {cop(loansWithInterest[0].interest_owed)}
+                </span>{' '}
+                a vencer el{' '}
+                <span className="font-semibold text-[var(--color-text)]">
+                  {new Date(loansWithInterest[0].next_due_month + 'T00:00:00').toLocaleDateString('es-CO', {
+                    day: 'numeric',
+                    month: 'long',
+                    year: 'numeric',
+                  })}
+                </span>
+                .
+              </p>
+            </div>
+          </div>
+          <Link href="/dashboard/compras" className="shrink-0">
+            <Button size="sm" className="w-full md:w-auto">
+              Pagar intereses
+              <ArrowRight size={14} strokeWidth={2} />
+            </Button>
+          </Link>
+        </Card>
+      )}
+
+      {/* Tarjeta de Próximos Vencimientos destacada (Múltiples préstamos) */}
+      {loansWithInterest.length > 1 && (
+        <Card
+          padding="none"
+          className="border-[var(--color-warn)]/30 bg-[var(--color-warn-soft)]/10 overflow-hidden"
+        >
+          <div className="p-4 md:p-5 border-b border-[var(--color-warn)]/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-[10px] bg-[var(--color-warn-soft)] text-[var(--color-warn)] flex items-center justify-center shrink-0">
+                <Calendar size={18} strokeWidth={2} />
+              </div>
+              <div>
+                <div className="text-[14px] font-bold tracking-tight text-[var(--color-text)]">
+                  Próximos pagos de intereses ({loansWithInterest.length} préstamos activos)
+                </div>
+                <p className="text-[12px] text-[var(--color-text-subtle)] mt-0.5">
+                  Desglose de los intereses pendientes de pago por cada uno de tus créditos:
+                </p>
+              </div>
+            </div>
+            <Link href="/dashboard/compras" className="shrink-0">
+              <Button size="sm" className="w-full sm:w-auto">
+                Pagar intereses
+                <ArrowRight size={14} strokeWidth={2} />
+              </Button>
+            </Link>
+          </div>
+
+          <div className="divide-y divide-[var(--color-warn)]/15 bg-[var(--color-surface)]/60">
+            {loansWithInterest.map((l) => (
+              <div key={l.loan_id} className="flex items-center justify-between px-5 py-3.5 gap-3">
+                <div className="flex flex-col min-w-0 text-left">
+                  <span className="text-[13px] font-semibold tracking-tight text-[var(--color-text)]">
+                    Préstamo #{l.loan_number}{l.disbursement_number ? ` (${l.disbursement_number})` : ''}
+                  </span>
+                  <span className="text-[11px] text-[var(--color-text-subtle)] mt-0.5">
+                    Vence el{' '}
+                    {new Date(l.next_due_month + 'T00:00:00').toLocaleDateString('es-CO', {
+                      day: 'numeric',
+                      month: 'long',
+                      year: 'numeric',
+                    })}{' '}
+                    · Saldo capital: {cop(l.outstanding_capital)}
+                  </span>
+                </div>
+                <div className="text-right shrink-0">
+                  <span className="text-[13px] font-bold tabular text-[var(--color-warn)]">
+                    {cop(l.interest_owed)}
+                  </span>
+                  <div className="text-[10px] text-[var(--color-text-subtle)]">intereses pendientes</div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="p-3.5 px-5 bg-[var(--color-warn-soft)]/20 border-t border-[var(--color-warn)]/20 flex items-center justify-between">
+            <span className="text-[12px] font-semibold text-[var(--color-text-muted)]">
+              Total intereses pendientes acumulados
+            </span>
+            <span className="text-[14px] font-bold tabular text-[var(--color-warn)]">
+              {cop(totalInterestOwedAllLoans)}
+            </span>
+          </div>
+        </Card>
+      )}
 
       {/* Distribución de Contenido con Grilla de Dos Columnas */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6 items-start">

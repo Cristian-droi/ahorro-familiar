@@ -56,6 +56,16 @@ export default function AjustesPage() {
   const [allowedShares, setAllowedShares] = useState<number[]>([]);
   const [newShare, setNewShare] = useState('');
 
+  // Resumen & Next Year Capitalization Settings
+  const [expensesPercentage, setExpensesPercentage] = useState<number>(10);
+  const [nextYearSharesPercentage, setNextYearSharesPercentage] = useState<number>(30);
+  const [nextYearCapitalizationActive, setNextYearCapitalizationActive] = useState<boolean>(false);
+  const [fourPerThousandRate, setFourPerThousandRate] = useState<number>(0.4);
+  const [defaultInterestRate, setDefaultInterestRate] = useState<number>(2);
+  const [maxLoansEnabled, setMaxLoansEnabled] = useState<boolean>(true);
+  const [maxLoansPerUser, setMaxLoansPerUser] = useState<number>(2);
+  const [resumenSaving, setResumenSaving] = useState<boolean>(false);
+
   // User state (su propia selección + si puede cambiarla)
   const [selectedShare, setSelectedShare] = useState<number | null>(null);
   const [savedShare, setSavedShare] = useState<number | null>(null);
@@ -430,14 +440,44 @@ export default function AjustesPage() {
         }
       }
 
-      const { data: settings } = await supabase
+      const { data: settingsList } = await supabase
         .from('system_settings')
-        .select('value')
-        .eq('key', 'allowed_share_values')
-        .maybeSingle();
+        .select('key, value')
+        .in('key', [
+          'allowed_share_values',
+          'resumen_expenses_percentage',
+          'resumen_next_year_shares_percentage',
+          'next_year_capitalization_active',
+          'four_per_thousand_rate',
+          'default_loan_interest_rate',
+          'max_active_loans_enabled',
+          'max_active_loans_per_user'
+        ]);
 
-      if (!cancelled && settings?.value) {
-        setAllowedShares(settings.value as number[]);
+      if (!cancelled && settingsList) {
+        const shareValues = settingsList.find(s => s.key === 'allowed_share_values')?.value;
+        if (shareValues) setAllowedShares(shareValues as number[]);
+
+        const expPct = settingsList.find(s => s.key === 'resumen_expenses_percentage')?.value;
+        if (expPct !== undefined) setExpensesPercentage(Number(expPct) * 100);
+
+        const nextSharesPct = settingsList.find(s => s.key === 'resumen_next_year_shares_percentage')?.value;
+        if (nextSharesPct !== undefined) setNextYearSharesPercentage(Number(nextSharesPct) * 100);
+
+        const capActive = settingsList.find(s => s.key === 'next_year_capitalization_active')?.value;
+        if (capActive !== undefined) setNextYearCapitalizationActive(Boolean(capActive));
+
+        const fpt = settingsList.find(s => s.key === 'four_per_thousand_rate')?.value;
+        if (fpt !== undefined) setFourPerThousandRate(Number(fpt) * 100);
+
+        const dir = settingsList.find(s => s.key === 'default_loan_interest_rate')?.value;
+        if (dir !== undefined) setDefaultInterestRate(Number(dir) * 100);
+
+        const mle = settingsList.find(s => s.key === 'max_active_loans_enabled')?.value;
+        if (mle !== undefined) setMaxLoansEnabled(Boolean(mle));
+
+        const mlp = settingsList.find(s => s.key === 'max_active_loans_per_user')?.value;
+        if (mlp !== undefined) setMaxLoansPerUser(Number(mlp));
       }
 
 
@@ -658,6 +698,30 @@ export default function AjustesPage() {
       showToast('success', 'Configuración actualizada');
     }
     setSaving(false);
+  };
+
+  const saveResumenSettings = async () => {
+    setResumenSaving(true);
+    const updates = [
+      { key: 'resumen_expenses_percentage', value: Number(expensesPercentage) / 100 },
+      { key: 'resumen_next_year_shares_percentage', value: Number(nextYearSharesPercentage) / 100 },
+      { key: 'next_year_capitalization_active', value: Boolean(nextYearCapitalizationActive) },
+      { key: 'four_per_thousand_rate', value: Number(fourPerThousandRate) / 100 },
+      { key: 'default_loan_interest_rate', value: Number(defaultInterestRate) / 100 },
+      { key: 'max_active_loans_enabled', value: Boolean(maxLoansEnabled) },
+      { key: 'max_active_loans_per_user', value: Number(maxLoansPerUser) },
+    ];
+
+    const { error } = await supabase
+      .from('system_settings')
+      .upsert(updates);
+
+    if (error) {
+      showToast('error', 'Error al guardar la configuración del resumen');
+    } else {
+      showToast('success', 'Configuración de resumen y capitalización actualizada');
+    }
+    setResumenSaving(false);
   };
 
   const saveUserShare = async () => {
@@ -1114,6 +1178,155 @@ export default function AjustesPage() {
                 })()}
               </div>
             </Card>
+
+            {/* Configuración de Resumen y Capitalización del Siguiente Año */}
+            <div className="md:col-span-2">
+              <Card padding="none" className="flex flex-col overflow-hidden">
+                <div className="p-6 flex-1 flex flex-col gap-4">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-[10px] bg-[var(--color-brand-soft)] text-[var(--color-brand)] flex items-center justify-center shrink-0">
+                      <TrendingUp size={18} strokeWidth={1.75} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h2 className="text-[15px] font-semibold tracking-tight text-[var(--color-text)]">
+                        Resumen y Capitalización del Siguiente Año
+                      </h2>
+                      <p className="text-[var(--color-text-muted)] text-[13px] leading-[1.55] mt-1">
+                        Configura los porcentajes para el resumen de accionistas y habilita la ventana de capitalización para el próximo año.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[11px] font-semibold text-[var(--color-text-muted)] uppercase tracking-[0.12em]">
+                        Porcentaje de Gastos (%)
+                      </label>
+                      <Input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.1"
+                        value={expensesPercentage}
+                        onChange={(e) => setExpensesPercentage(Number(e.target.value))}
+                      />
+                      <span className="text-[11px] text-[var(--color-text-subtle)]">
+                        Se aplica sobre la distribución de utilidades de cada accionista.
+                      </span>
+                    </div>
+
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[11px] font-semibold text-[var(--color-text-muted)] uppercase tracking-[0.12em]">
+                        Porcentaje de Acciones Siguiente Año (%)
+                      </label>
+                      <Input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.1"
+                        value={nextYearSharesPercentage}
+                        onChange={(e) => setNextYearSharesPercentage(Number(e.target.value))}
+                      />
+                      <span className="text-[11px] text-[var(--color-text-subtle)]">
+                        Acciones para el año entrante (30% por defecto del valor de acciones actual).
+                      </span>
+                    </div>
+
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[11px] font-semibold text-[var(--color-text-muted)] uppercase tracking-[0.12em]">
+                        Gravamen 4×1000 (%)
+                      </label>
+                      <Input
+                        type="number"
+                        min="0"
+                        max="10"
+                        step="0.01"
+                        value={fourPerThousandRate}
+                        onChange={(e) => setFourPerThousandRate(Number(e.target.value))}
+                      />
+                      <span className="text-[11px] text-[var(--color-text-subtle)]">
+                        Descuento bancario en desembolsos (0.4% por defecto = 4×1000. Colocá 0 para eximir).
+                      </span>
+                    </div>
+
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[11px] font-semibold text-[var(--color-text-muted)] uppercase tracking-[0.12em]">
+                        Tasa Interés Préstamos por Defecto (%)
+                      </label>
+                      <Input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.1"
+                        value={defaultInterestRate}
+                        onChange={(e) => setDefaultInterestRate(Number(e.target.value))}
+                      />
+                      <span className="text-[11px] text-[var(--color-text-subtle)]">
+                        Tasa de interés mensual aplicada por defecto a las nuevas solicitudes.
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-3 pt-2 border-t border-[var(--color-border)] mt-2">
+                    <div className="flex items-center gap-2.5">
+                      <input
+                        type="checkbox"
+                        id="next_year_capitalization_active"
+                        checked={nextYearCapitalizationActive}
+                        onChange={(e) => setNextYearCapitalizationActive(e.target.checked)}
+                        className="rounded border-[var(--color-border)] text-[var(--color-brand)] focus:ring-[var(--color-ring)] h-4 w-4"
+                      />
+                      <label htmlFor="next_year_capitalization_active" className="text-xs font-semibold text-[var(--color-text)] uppercase tracking-wider cursor-pointer select-none">
+                        Habilitar capitalización próximo año (los accionistas podrán seleccionar su monto desde el dashboard)
+                      </label>
+                    </div>
+
+                    <div className="flex flex-col md:flex-row md:items-center gap-3 pt-1">
+                      <div className="flex items-center gap-2.5 shrink-0">
+                        <input
+                          type="checkbox"
+                          id="max_loans_enabled"
+                          checked={maxLoansEnabled}
+                          onChange={(e) => setMaxLoansEnabled(e.target.checked)}
+                          className="rounded border-[var(--color-border)] text-[var(--color-brand)] focus:ring-[var(--color-ring)] h-4 w-4"
+                        />
+                        <label htmlFor="max_loans_enabled" className="text-xs font-semibold text-[var(--color-text)] uppercase tracking-wider cursor-pointer select-none">
+                          Activar límite de créditos activos simultáneos por socio
+                        </label>
+                      </div>
+
+                      {maxLoansEnabled && (
+                        <div className="flex items-center gap-2 w-full md:w-auto">
+                          <label htmlFor="max_loans_per_user" className="text-xs font-medium text-[var(--color-text-muted)] shrink-0">
+                            Máximo:
+                          </label>
+                          <Input
+                            id="max_loans_per_user"
+                            type="number"
+                            min="1"
+                            max="20"
+                            className="w-20 text-center"
+                            value={maxLoansPerUser}
+                            onChange={(e) => setMaxLoansPerUser(Number(e.target.value))}
+                          />
+                          <span className="text-xs text-[var(--color-text-subtle)]">créditos</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="p-4 border-t border-[var(--color-border)] bg-[var(--color-surface-alt)]">
+                  <Button
+                    className="w-full"
+                    onClick={saveResumenSettings}
+                    disabled={resumenSaving}
+                  >
+                    <Save size={15} strokeWidth={1.75} />
+                    {resumenSaving ? 'Guardando...' : 'Guardar Ajustes de Resumen'}
+                  </Button>
+                </div>
+              </Card>
+            </div>
 
             {/* Capitalizaciones (solo admin). Ocupa el ancho completo. */}
             <div className="md:col-span-2">

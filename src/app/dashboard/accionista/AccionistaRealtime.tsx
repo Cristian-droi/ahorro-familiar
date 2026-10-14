@@ -27,7 +27,12 @@ export function AccionistaRealtime({ userId }: { userId: string }) {
       )
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'loans' },
+        {
+          event: '*',
+          schema: 'public',
+          table: 'loans',
+          filter: `user_id=eq.${userId}`,
+        },
         () => {
           router.refresh();
         }

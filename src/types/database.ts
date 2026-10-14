@@ -180,6 +180,7 @@ export type Database = {
           disbursed_amount: number | null
           disbursed_at: string | null
           disbursement_number: string | null
+          loan_number: number
           disbursement_proof_path: string | null
           four_per_thousand: number
           id: string
@@ -197,6 +198,12 @@ export type Database = {
           status: Database["public"]["Enums"]["loan_status"]
           updated_at: string
           user_id: string
+          deduct_obligations: boolean
+          deducted_shares_amount: number
+          deducted_fines_amount: number
+          deducted_interest_amount: number
+          deducted_capital_amount: number
+          deductions_detail: Json
         }
         Insert: {
           admin_notes?: string | null
@@ -205,6 +212,7 @@ export type Database = {
           disbursed_amount?: number | null
           disbursed_at?: string | null
           disbursement_number?: string | null
+          loan_number?: number
           disbursement_proof_path?: string | null
           four_per_thousand?: number
           id?: string
@@ -222,6 +230,12 @@ export type Database = {
           status?: Database["public"]["Enums"]["loan_status"]
           updated_at?: string
           user_id: string
+          deduct_obligations?: boolean
+          deducted_shares_amount?: number
+          deducted_fines_amount?: number
+          deducted_interest_amount?: number
+          deducted_capital_amount?: number
+          deductions_detail?: Json
         }
         Update: {
           admin_notes?: string | null
@@ -247,6 +261,12 @@ export type Database = {
           status?: Database["public"]["Enums"]["loan_status"]
           updated_at?: string
           user_id?: string
+          deduct_obligations?: boolean
+          deducted_shares_amount?: number
+          deducted_fines_amount?: number
+          deducted_interest_amount?: number
+          deducted_capital_amount?: number
+          deductions_detail?: Json
         }
         Relationships: [
           {

@@ -133,8 +133,26 @@ export interface Loan {
   rejection_reason: string | null;
   disbursement_proof_path: string | null;
   disbursement_number: string | null;
+  loan_number: number;
   created_at: string;
   updated_at: string;
+  deduct_obligations?: boolean;
+  deducted_shares_amount?: number;
+  deducted_fines_amount?: number;
+  deducted_interest_amount?: number;
+  deducted_capital_amount?: number;
+  deductions_detail?: DeductionDetail[] | null;
+}
+
+export interface DeductionDetail {
+  concept: 'acciones' | 'multa_acciones' | 'pago_intereses' | 'pago_capital';
+  target_month: string;
+  share_count?: number | null;
+  unit_value?: number | null;
+  amount: number;
+  loan_id?: string | null;
+  loan_number?: number | null;
+  disbursementNumber?: string | null;
 }
 
 export interface LoanPaymentPlanItem {

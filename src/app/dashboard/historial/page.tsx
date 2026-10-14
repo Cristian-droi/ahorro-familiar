@@ -127,7 +127,7 @@ export default function HistorialPage() {
       const { data, error } = await supabase
         .from('receipts')
         .select(
-          'id, receipt_number, user_id, status, submitted_at, reviewed_at, reviewed_by, rejection_reason, rejection_note, payment_proof_path, total_amount, created_at, updated_at, payment_method, bank_account_id, bank_accounts(bank_name, account_number, holder_name, account_type), receipt_items(*, loan:loans(disbursement_number))',
+          'id, receipt_number, user_id, status, submitted_at, reviewed_at, reviewed_by, rejection_reason, rejection_note, payment_proof_path, total_amount, created_at, updated_at, payment_method, bank_account_id, bank_accounts(bank_name, account_number, holder_name, account_type), receipt_items(*, loan:loans(loan_number, disbursement_number))',
         )
         .eq('user_id', uid)
         .order('submitted_at', { ascending: false });
@@ -273,31 +273,6 @@ export default function HistorialPage() {
   };
 
   // ===== Edición / reenvío =====
-
-  const startEdit = (r: ReceiptWithItems) => {
-    const acciones = r.items
-      .filter((it) => it.concept === 'acciones')
-      .map((it) => ({
-        uid: makeUid(),
-        target_month: it.target_month,
-        share_count: it.share_count ?? rules.min_shares_per_month,
-      }));
-    setEditing(r.id);
-    setEditLines(
-      acciones.length > 0
-        ? acciones
-        : [
-            {
-              uid: makeUid(),
-              target_month: currentMonth,
-              share_count: rules.min_shares_per_month,
-            },
-          ],
-    );
-    setEditFile(null);
-    setEditFileError(null);
-    if (editFileInputRef.current) editFileInputRef.current.value = '';
-  };
 
   const cancelEdit = () => {
     setEditing(null);
@@ -733,11 +708,16 @@ export default function HistorialPage() {
                       </div>
                       <div className="divide-y divide-[var(--color-border)] rounded-[10px] border border-[var(--color-border)] bg-[var(--color-surface)]">
                         {r.items.map((it) => {
-                          const itLoanNumber = (
+                          const loanObj = (
                             it as unknown as {
-                              loan?: { disbursement_number: string | null } | null;
+                              loan?: { loan_number?: number | null; disbursement_number: string | null } | null;
                             }
-                          ).loan?.disbursement_number;
+                          ).loan;
+                          const itLoanLabel = loanObj
+                            ? loanObj.loan_number
+                              ? `Préstamo #${loanObj.loan_number}${loanObj.disbursement_number ? ` (${loanObj.disbursement_number})` : ''}`
+                              : loanObj.disbursement_number
+                            : null;
                           return (
                             <div
                               key={it.id}
@@ -746,9 +726,9 @@ export default function HistorialPage() {
                               <div className="flex-1 min-w-0">
                                 <div className="font-semibold text-[var(--color-text)] flex items-center gap-2 flex-wrap">
                                   {conceptLabel(it.concept)}
-                                  {itLoanNumber && (
+                                  {itLoanLabel && (
                                     <span className="text-[10px] font-semibold text-[var(--color-brand)] bg-[var(--color-brand-soft)] px-1.5 py-0.5 rounded uppercase tracking-wider">
-                                      {itLoanNumber}
+                                      {itLoanLabel}
                                     </span>
                                   )}
                                   {it.auto_generated && (

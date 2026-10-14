@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -26,6 +26,7 @@ import {
   FileCheck,
   Download,
   FileText,
+  Landmark,
 } from 'lucide-react';
 import { getLoanWithDetails, getCashBalance } from '@/lib/data/loans';
 import type { LoanWithDetails } from '@/types/entities';
@@ -46,7 +47,6 @@ function extensionFromMime(mime: string) {
 
 export default function AdminLoanDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const router = useRouter();
   const [loan, setLoan] = useState<LoanWithDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [cashBalance, setCashBalance] = useState<number | null>(null);
@@ -56,12 +56,12 @@ export default function AdminLoanDetailPage() {
   const [submitting, setSubmitting] = useState(false);
 
   // Comprobante de desembolso
-  const [proofFile, setProofFile] = useState<File | null>(null);
   const [proofPath, setProofPath] = useState<string | null>(null);
   const [uploadingProof, setUploadingProof] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState<'transfer' | 'cash'>('transfer');
   const proofInputRef = useRef<HTMLInputElement>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     const [data, balance] = await Promise.all([
       getLoanWithDetails(supabase, id),
       getCashBalance(supabase).catch(() => null),
@@ -70,9 +70,9 @@ export default function AdminLoanDetailPage() {
     setCashBalance(balance);
     if (data?.admin_notes) setAdminNotes(data.admin_notes);
     setLoading(false);
-  };
+  }, [id]);
 
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => { load(); }, [id, load]);
 
   const call = async (path: string, method: string, body?: object) => {
     setSubmitting(true);
@@ -152,11 +152,14 @@ export default function AdminLoanDetailPage() {
   };
 
   const disburse = async () => {
-    if (!proofPath) {
+    if (paymentMethod === 'transfer' && !proofPath) {
       showToast('error', 'Debés subir el comprobante de transferencia primero');
       return;
     }
-    const ok = await call('disburse', 'POST', { disbursement_proof_path: proofPath });
+    const ok = await call('disburse', 'POST', {
+      disbursement_proof_path: paymentMethod === 'cash' ? 'cash' : proofPath,
+      payment_method: paymentMethod,
+    });
     if (ok) showToast('success', 'Préstamo desembolsado. Número CE- asignado.');
   };
 
@@ -224,9 +227,9 @@ export default function AdminLoanDetailPage() {
             <Badge tone={tone}>{LOAN_STATUS_LABELS[loan.status]}</Badge>
           </div>
           <div className="text-xs text-[var(--color-text-muted)] mt-0.5">
-            Solicitado el {new Date(loan.created_at).toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' })}
+            Préstamo #{loan.loan_number} · Solicitado el {new Date(loan.created_at).toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' })}
             {loan.disbursement_number && (
-              <span className="ml-2 font-semibold text-[var(--color-brand)]">{loan.disbursement_number}</span>
+              <span className="ml-2 font-semibold text-[var(--color-brand)]">· Comprobante: {loan.disbursement_number}</span>
             )}
           </div>
         </div>
@@ -291,6 +294,23 @@ export default function AdminLoanDetailPage() {
                 <>
                   <Stat label="Saldo pendiente" value={cop(Number(loan.outstanding_balance))} tone="warn" />
                   <Stat label="Intereses acumulados" value={cop(accruedInterest)} tone="danger" />
+                </>
+              )}
+              {loan.deduct_obligations && (
+                <>
+                  <Stat label="Descontar deudas" value="Sí" />
+                  {Number(loan.deducted_shares_amount || 0) > 0 && (
+                    <Stat label="Acciones vencidas desc." value={cop(Number(loan.deducted_shares_amount))} tone="danger" />
+                  )}
+                  {Number(loan.deducted_fines_amount || 0) > 0 && (
+                    <Stat label="Multas desc." value={cop(Number(loan.deducted_fines_amount))} tone="danger" />
+                  )}
+                  {Number(loan.deducted_interest_amount || 0) > 0 && (
+                    <Stat label="Intereses desc." value={cop(Number(loan.deducted_interest_amount))} tone="danger" />
+                  )}
+                  {Number(loan.deducted_capital_amount || 0) > 0 && (
+                    <Stat label="Abonos a capital desc." value={cop(Number(loan.deducted_capital_amount))} tone="danger" />
+                  )}
                 </>
               )}
             </div>
@@ -371,7 +391,7 @@ export default function AdminLoanDetailPage() {
                     })}
                   </div>
                 </div>
-                {loan.disbursement_proof_path && (
+                {loan.disbursement_proof_path && loan.disbursement_proof_path !== 'cash' && (
                   <Button
                     variant="secondary"
                     size="sm"
@@ -420,6 +440,62 @@ export default function AdminLoanDetailPage() {
                     </div>
                   </div>
                 )}
+                {loan.deduct_obligations && (
+                  <>
+                    {Number(loan.deducted_shares_amount || 0) > 0 && (
+                      <div className="flex items-center gap-3 px-3.5 py-2.5">
+                        <div className="flex-1">
+                          <div className="font-semibold">Acciones en mora descontadas</div>
+                          <div className="text-[11px] text-[var(--color-text-subtle)]">
+                            Descontado de deudas
+                          </div>
+                        </div>
+                        <div className="font-semibold tabular text-[var(--color-danger)]">
+                          − {cop(Number(loan.deducted_shares_amount))}
+                        </div>
+                      </div>
+                    )}
+                    {Number(loan.deducted_fines_amount || 0) > 0 && (
+                      <div className="flex items-center gap-3 px-3.5 py-2.5">
+                        <div className="flex-1">
+                          <div className="font-semibold">Multas descontadas</div>
+                          <div className="text-[11px] text-[var(--color-text-subtle)]">
+                            Descontado de deudas
+                          </div>
+                        </div>
+                        <div className="font-semibold tabular text-[var(--color-danger)]">
+                          − {cop(Number(loan.deducted_fines_amount))}
+                        </div>
+                      </div>
+                    )}
+                    {Number(loan.deducted_interest_amount || 0) > 0 && (
+                      <div className="flex items-center gap-3 px-3.5 py-2.5">
+                        <div className="flex-1">
+                          <div className="font-semibold">Intereses descontados</div>
+                          <div className="text-[11px] text-[var(--color-text-subtle)]">
+                            Descontado de préstamos activos
+                          </div>
+                        </div>
+                        <div className="font-semibold tabular text-[var(--color-danger)]">
+                          − {cop(Number(loan.deducted_interest_amount))}
+                        </div>
+                      </div>
+                    )}
+                    {Number(loan.deducted_capital_amount || 0) > 0 && (
+                      <div className="flex items-center gap-3 px-3.5 py-2.5">
+                        <div className="flex-1">
+                          <div className="font-semibold">Abonos a capital descontados</div>
+                          <div className="text-[11px] text-[var(--color-text-subtle)]">
+                            Descontado de préstamos activos
+                          </div>
+                        </div>
+                        <div className="font-semibold tabular text-[var(--color-danger)]">
+                          − {cop(Number(loan.deducted_capital_amount))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
                 {Number(loan.four_per_thousand) > 0 && (
                   <div className="flex items-center gap-3 px-3.5 py-2.5">
                     <div className="flex-1">
@@ -447,6 +523,12 @@ export default function AdminLoanDetailPage() {
                 <div className="mt-3 flex items-start gap-2 text-[12px] text-[var(--color-warn)]">
                   <FileText size={13} strokeWidth={1.75} className="mt-px shrink-0" />
                   No hay comprobante adjunto para este desembolso.
+                </div>
+              )}
+              {loan.disbursement_proof_path === 'cash' && (
+                <div className="mt-3 flex items-center gap-2 text-[12px] text-[var(--color-success)] font-semibold bg-[var(--color-success-soft)] px-3 py-2 rounded-[10px]">
+                  <Banknote size={14} strokeWidth={1.75} />
+                  Desembolsado en efectivo
                 </div>
               )}
             </Card>
@@ -572,10 +654,16 @@ export default function AdminLoanDetailPage() {
             // Monto neto que va a salir de caja. Debe coincidir con lo que
             // calcula el backend (calcDisbursedAmount) y lo que mostramos
             // en "El accionista recibirá".
-            const netAmount =
-              loanAmount -
-              (loan.loan_shares_paid_upfront ? 0 : Number(loan.loan_shares_amount)) -
-              Number(loan.four_per_thousand);
+            const deductedShares = Number(loan.deducted_shares_amount || 0);
+            const deductedFines = Number(loan.deducted_fines_amount || 0);
+            const deductedInterest = Number(loan.deducted_interest_amount || 0);
+            const deductedCapital = Number(loan.deducted_capital_amount || 0);
+
+            const netBeforeTax = loanAmount -
+              (loan.loan_shares_paid_upfront ? 0 : Number(loan.loan_shares_amount || 0)) -
+              (loan.deduct_obligations ? (deductedShares + deductedFines + deductedInterest + deductedCapital) : 0);
+
+            const netAmount = Math.max(0, netBeforeTax - Number(loan.four_per_thousand || 0));
             const cashShort =
               cashBalance !== null && netAmount > cashBalance;
             return (
@@ -593,6 +681,34 @@ export default function AdminLoanDetailPage() {
                     <span className="font-semibold tabular">− {cop(Number(loan.loan_shares_amount))}</span>
                   </div>
                 )}
+                {loan.deduct_obligations && (
+                  <>
+                    {deductedShares > 0 && (
+                      <div className="flex justify-between text-[var(--color-danger)]">
+                        <span>Acciones vencidas desc.</span>
+                        <span className="font-semibold tabular">− {cop(deductedShares)}</span>
+                      </div>
+                    )}
+                    {deductedFines > 0 && (
+                      <div className="flex justify-between text-[var(--color-danger)]">
+                        <span>Multas desc.</span>
+                        <span className="font-semibold tabular">− {cop(deductedFines)}</span>
+                      </div>
+                    )}
+                    {deductedInterest > 0 && (
+                      <div className="flex justify-between text-[var(--color-danger)]">
+                        <span>Intereses desc.</span>
+                        <span className="font-semibold tabular">− {cop(deductedInterest)}</span>
+                      </div>
+                    )}
+                    {deductedCapital > 0 && (
+                      <div className="flex justify-between text-[var(--color-danger)]">
+                        <span>Abonos a capital desc.</span>
+                        <span className="font-semibold tabular">− {cop(deductedCapital)}</span>
+                      </div>
+                    )}
+                  </>
+                )}
                 <div className="flex justify-between text-[var(--color-danger)]">
                   <span className="text-[var(--color-text-muted)]">Retención 4×1000</span>
                   <span className="font-semibold tabular">− {cop(Number(loan.four_per_thousand))}</span>
@@ -601,11 +717,7 @@ export default function AdminLoanDetailPage() {
                 <div className="flex justify-between">
                   <span className="font-semibold">El accionista recibirá</span>
                   <span className="font-semibold tabular text-[var(--color-success)]">
-                    {cop(
-                      loanAmount -
-                        (loan.loan_shares_paid_upfront ? 0 : Number(loan.loan_shares_amount)) -
-                        Number(loan.four_per_thousand),
-                    )}
+                    {cop(netAmount)}
                   </span>
                 </div>
               </div>
@@ -648,51 +760,85 @@ export default function AdminLoanDetailPage() {
                 )}
               </div>
 
-              {/* Comprobante de transferencia */}
+              {/* Método de desembolso */}
               <div className="mb-4">
                 <div className="text-[11px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase mb-2">
-                  Comprobante de transferencia (requerido)
+                  Método de desembolso
                 </div>
-                {proofPath ? (
-                  <div className="flex items-center gap-2 p-3 rounded-[10px] bg-[var(--color-success-soft)] text-[13px]">
-                    <FileCheck size={15} strokeWidth={1.75} className="text-[var(--color-success)]" />
-                    <span className="font-semibold text-[var(--color-success)]">Comprobante cargado</span>
-                    <button
-                      onClick={() => { setProofPath(null); setProofFile(null); }}
-                      className="ml-auto text-[11px] text-[var(--color-text-subtle)] hover:text-[var(--color-danger)]"
-                    >
-                      Cambiar
-                    </button>
-                  </div>
-                ) : (
-                  <div>
-                    <input
-                      ref={proofInputRef}
-                      type="file"
-                      accept="image/jpeg,image/png,application/pdf"
-                      className="hidden"
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-                        setProofFile(file);
-                        const path = await uploadProof(file);
-                        if (path) setProofPath(path);
-                      }}
-                    />
-                    <button
-                      onClick={() => proofInputRef.current?.click()}
-                      disabled={uploadingProof}
-                      className="w-full flex items-center justify-center gap-2 h-10 rounded-[9px] border-2 border-dashed border-[var(--color-border)] text-[13px] text-[var(--color-text-muted)] hover:border-[var(--color-brand)] hover:text-[var(--color-brand)] transition-colors"
-                    >
-                      <Upload size={14} strokeWidth={1.75} />
-                      {uploadingProof ? 'Subiendo…' : 'Subir comprobante'}
-                    </button>
-                    <p className="mt-1.5 text-[11px] text-[var(--color-text-subtle)]">
-                      JPG, PNG o PDF. Este comprobante queda registrado como respaldo del desembolso.
-                    </p>
-                  </div>
-                )}
+                <div className="grid grid-cols-2 gap-2 bg-[var(--color-surface-alt)] p-1 rounded-[10px]">
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod('transfer')}
+                    className={`flex items-center justify-center gap-2 py-2 text-xs font-semibold rounded-[8px] transition-all ${
+                      paymentMethod === 'transfer'
+                        ? 'bg-[var(--color-surface)] text-[var(--color-brand)] shadow-sm border border-[var(--color-border)]/50'
+                        : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                    }`}
+                  >
+                    <Landmark size={14} strokeWidth={2} />
+                    Transferencia
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod('cash')}
+                    className={`flex items-center justify-center gap-2 py-2 text-xs font-semibold rounded-[8px] transition-all ${
+                      paymentMethod === 'cash'
+                        ? 'bg-[var(--color-surface)] text-[var(--color-success)] shadow-sm border border-[var(--color-border)]/50'
+                        : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                    }`}
+                  >
+                    <Banknote size={14} strokeWidth={2} />
+                    Efectivo
+                  </button>
+                </div>
               </div>
+
+              {/* Comprobante de transferencia */}
+              {paymentMethod === 'transfer' && (
+                <div className="mb-4">
+                  <div className="text-[11px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase mb-2">
+                    Comprobante de transferencia (requerido)
+                  </div>
+                  {proofPath ? (
+                    <div className="flex items-center gap-2 p-3 rounded-[10px] bg-[var(--color-success-soft)] text-[13px]">
+                      <FileCheck size={15} strokeWidth={1.75} className="text-[var(--color-success)]" />
+                      <span className="font-semibold text-[var(--color-success)]">Comprobante cargado</span>
+                      <button
+                        onClick={() => { setProofPath(null); }}
+                        className="ml-auto text-[11px] text-[var(--color-text-subtle)] hover:text-[var(--color-danger)]"
+                      >
+                        Cambiar
+                      </button>
+                    </div>
+                  ) : (
+                    <div>
+                      <input
+                        ref={proofInputRef}
+                        type="file"
+                        accept="image/jpeg,image/png,application/pdf"
+                        className="hidden"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          const path = await uploadProof(file);
+                          if (path) setProofPath(path);
+                        }}
+                      />
+                      <button
+                        onClick={() => proofInputRef.current?.click()}
+                        disabled={uploadingProof}
+                        className="w-full flex items-center justify-center gap-2 h-10 rounded-[9px] border-2 border-dashed border-[var(--color-border)] text-[13px] text-[var(--color-text-muted)] hover:border-[var(--color-brand)] hover:text-[var(--color-brand)] transition-colors"
+                      >
+                        <Upload size={14} strokeWidth={1.75} />
+                        {uploadingProof ? 'Subiendo…' : 'Subir comprobante'}
+                      </button>
+                      <p className="mt-1.5 text-[11px] text-[var(--color-text-subtle)]">
+                        JPG, PNG o PDF. Este comprobante queda registrado como respaldo del desembolso.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Saldo en caja vs monto a entregar */}
               <div
@@ -728,8 +874,8 @@ export default function AdminLoanDetailPage() {
                 className="w-full"
                 disabled={
                   submitting ||
-                  uploadingProof ||
-                  !proofPath ||
+                  (paymentMethod === 'transfer' && uploadingProof) ||
+                  (paymentMethod === 'transfer' && !proofPath) ||
                   (loan.loan_shares_paid_upfront && !loan.has_upfront_shares_receipt) ||
                   cashShort
                 }
@@ -739,7 +885,7 @@ export default function AdminLoanDetailPage() {
                 Confirmar desembolso
               </Button>
 
-              {!proofPath && (
+              {paymentMethod === 'transfer' && !proofPath && (
                 <p className="mt-2 text-[11px] text-[var(--color-text-subtle)] text-center">
                   Subí el comprobante antes de confirmar.
                 </p>

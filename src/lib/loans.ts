@@ -15,8 +15,8 @@ export function calcLoanShares(requestedAmount: number, shareValue: number) {
   return { count, amount: count * shareValue };
 }
 
-export function calcFourPerThousand(amount: number): number {
-  return Math.round(amount * 0.004);
+export function calcFourPerThousand(amount: number, rate: number = 0.004): number {
+  return Math.round(amount * rate);
 }
 
 export function calcDisbursedAmount(
@@ -27,6 +27,30 @@ export function calcDisbursedAmount(
 ): number {
   const sharesDiscount = paidUpfront ? 0 : sharesAmount;
   return requestedAmount - sharesDiscount - fourPerThousand;
+}
+
+export function calcLoanDeductionsAndNet(params: {
+  requestedAmount: number;
+  sharesAmount: number;
+  paidUpfront: boolean;
+  deductedShares: number;
+  deductedFines: number;
+  deductedInterest: number;
+  deductedCapital: number;
+  fourPerThousandRate?: number;
+}) {
+  const rate = params.fourPerThousandRate ?? 0.004;
+  const sharesDiscount = params.paidUpfront ? 0 : params.sharesAmount;
+  const netBeforeTax =
+    params.requestedAmount -
+    sharesDiscount -
+    params.deductedShares -
+    params.deductedFines -
+    params.deductedInterest -
+    params.deductedCapital;
+  const fourPerThousand = netBeforeTax <= 0 ? 0 : Math.round(netBeforeTax * rate);
+  const netDisbursed = Math.max(0, netBeforeTax - fourPerThousand);
+  return { netDisbursed, fourPerThousand };
 }
 
 export function buildPaymentPlan(params: {
@@ -211,6 +235,7 @@ export interface LoanBookSummary {
   total_paid_capital: number;
   total_paid_interest: number;
   total_interest_debt: number;
+  overdue_interest_debt: number;
   current_capital_balance: number;
   next_installment_amount: number | null;
   next_installment_month: string | null;
@@ -226,6 +251,17 @@ function monthKey(isoDate: string): string {
   return isoDate.slice(0, 7);
 }
 
+function getBogotaCurrentMonthKey(): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Bogota',
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(new Date());
+  const year = parts.find((p) => p.type === 'year')?.value;
+  const month = parts.find((p) => p.type === 'month')?.value;
+  return `${year}-${month}`;
+}
+
 // Calcula el libro mensual de un préstamo:
 //   - Plan teórico (loan_payment_plan_items)
 //   - Pagos reales (receipt_items con loan_id y recibo aprobado)
@@ -234,8 +270,12 @@ export function computeLoanBook(params: {
   requestedAmount: number;
   plan: PlanRow[];
   payments: LoanBookPayment[];
+  interestRate?: number;
+  disbursedAt?: string | null;
 }): LoanBook {
   const { requestedAmount, plan, payments } = params;
+
+  const currentMonthKey = getBogotaCurrentMonthKey();
 
   const paidCapitalByMonth = new Map<string, number>();
   const paidInterestByMonth = new Map<string, number>();
@@ -266,6 +306,7 @@ export function computeLoanBook(params: {
   let totalPaidCapital = 0;
   let totalPaidInterest = 0;
   let totalInterestDebt = 0;
+  let overdueInterestDebt = 0;
   let nextFound = false;
   let nextInstallmentAmount: number | null = null;
   let nextInstallmentMonth: string | null = null;
@@ -274,11 +315,21 @@ export function computeLoanBook(params: {
     const key = monthKey(row.due_date);
     const paidCapital = paidCapitalByMonth.get(key) ?? 0;
     const paidInterest = paidInterestByMonth.get(key) ?? 0;
-    const interestDebt = Math.max(0, row.estimated_interest - paidInterest);
+
+    // Deuda de intereses generada este mes (solo acumulamos mora de meses anteriores al actual)
+    const interestDebt =
+      key < currentMonthKey
+        ? Math.max(0, row.estimated_interest - paidInterest)
+        : 0;
+
     runningBalance = Math.max(0, runningBalance - paidCapital);
     totalPaidCapital += paidCapital;
     totalPaidInterest += paidInterest;
     totalInterestDebt += interestDebt;
+
+    if (key < currentMonthKey) {
+      overdueInterestDebt += interestDebt;
+    }
 
     // Próxima cuota = primer mes cuyo capital aún no cubre lo planeado.
     const isNext =
@@ -309,6 +360,7 @@ export function computeLoanBook(params: {
       total_paid_capital: totalPaidCapital,
       total_paid_interest: totalPaidInterest,
       total_interest_debt: totalInterestDebt,
+      overdue_interest_debt: overdueInterestDebt,
       current_capital_balance: Math.max(0, requestedAmount - totalPaidCapital),
       next_installment_amount: nextInstallmentAmount,
       next_installment_month: nextInstallmentMonth,
@@ -348,6 +400,7 @@ export interface UnifiedLoanBookSummary {
   total_paid_capital: number;
   total_paid_interest: number;
   total_interest_debt: number;
+  overdue_interest_debt: number;
   current_capital_balance: number;
 }
 
@@ -412,7 +465,9 @@ export function computeUnifiedLoanBook(
         // después del último mes: el saldo ya cerró en el último plan,
         // así que tomamos el último saldo.
         const lastRow = b.book.months[b.book.months.length - 1];
-        if (lastRow) capital_balance_after += lastRow.capital_balance_after;
+        if (lastRow) {
+          capital_balance_after += lastRow.capital_balance_after;
+        }
       }
     }
 
@@ -438,6 +493,8 @@ export function computeUnifiedLoanBook(
         acc.total_paid_interest + b.book.summary.total_paid_interest,
       total_interest_debt:
         acc.total_interest_debt + b.book.summary.total_interest_debt,
+      overdue_interest_debt:
+        acc.overdue_interest_debt + b.book.summary.overdue_interest_debt,
       current_capital_balance:
         acc.current_capital_balance + b.book.summary.current_capital_balance,
     }),
@@ -446,6 +503,7 @@ export function computeUnifiedLoanBook(
       total_paid_capital: 0,
       total_paid_interest: 0,
       total_interest_debt: 0,
+      overdue_interest_debt: 0,
       current_capital_balance: 0,
     },
   );

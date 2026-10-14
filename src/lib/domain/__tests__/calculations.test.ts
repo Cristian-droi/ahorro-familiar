@@ -3,6 +3,7 @@ import {
   calcLoanShares,
   calcFourPerThousand,
   calcDisbursedAmount,
+  calcLoanDeductionsAndNet,
   buildPaymentPlan,
   calcAccruedInterest,
 } from '@/lib/loans';
@@ -38,6 +39,72 @@ describe('Financial Calculations', () => {
     it('only deducts 4x1000 when paid upfront is true', () => {
       const disbursed = calcDisbursedAmount(1_000_000, 20_000, true, 4_000);
       expect(disbursed).toBe(996_000); // 1,000,000 - 4,000
+    });
+  });
+
+  describe('calcLoanDeductionsAndNet', () => {
+    it('calculates net and 4x1000 correctly when paid upfront is false and net > 0', () => {
+      const result = calcLoanDeductionsAndNet({
+        requestedAmount: 2_000_000,
+        sharesAmount: 40_000,
+        paidUpfront: false,
+        deductedShares: 50_000,
+        deductedFines: 10_000,
+        deductedInterest: 30_000,
+        deductedCapital: 500_000,
+      });
+      // netBeforeTax = 2,000,000 - 40,000 (shares) - 50,000 - 10,000 - 30,000 - 500,000 = 1,370,000
+      // 4x1000 = 1,370,000 * 0.004 = 5,480
+      // netDisbursed = 1,370,000 - 5,480 = 1,364,520
+      expect(result.fourPerThousand).toBe(5_480);
+      expect(result.netDisbursed).toBe(1_364_520);
+    });
+
+    it('calculates net and 4x1000 correctly when paid upfront is true and net > 0', () => {
+      const result = calcLoanDeductionsAndNet({
+        requestedAmount: 2_000_000,
+        sharesAmount: 40_000,
+        paidUpfront: true,
+        deductedShares: 50_000,
+        deductedFines: 10_000,
+        deductedInterest: 30_000,
+        deductedCapital: 500_000,
+      });
+      // netBeforeTax = 2,000,000 - 0 (upfront) - 50,000 - 10,000 - 30,000 - 500,000 = 1,410,000
+      // 4x1000 = 1,410,000 * 0.004 = 5,640
+      // netDisbursed = 1,410,000 - 5,640 = 1,404,360
+      expect(result.fourPerThousand).toBe(5_640);
+      expect(result.netDisbursed).toBe(1_404_360);
+    });
+
+    it('returns 0 for both 4x1000 and net disbursed when net before tax is 0', () => {
+      const result = calcLoanDeductionsAndNet({
+        requestedAmount: 1_000_000,
+        sharesAmount: 20_000,
+        paidUpfront: false,
+        deductedShares: 50_000,
+        deductedFines: 30_000,
+        deductedInterest: 100_000,
+        deductedCapital: 800_000,
+      });
+      // netBeforeTax = 1,000,000 - 20,000 - 50,000 - 30,000 - 100,000 - 800,000 = 0
+      expect(result.fourPerThousand).toBe(0);
+      expect(result.netDisbursed).toBe(0);
+    });
+
+    it('returns 0 for both 4x1000 and net disbursed when net before tax is negative', () => {
+      const result = calcLoanDeductionsAndNet({
+        requestedAmount: 1_000_000,
+        sharesAmount: 20_000,
+        paidUpfront: false,
+        deductedShares: 50_000,
+        deductedFines: 30_000,
+        deductedInterest: 100_000,
+        deductedCapital: 900_000,
+      });
+      // netBeforeTax = 1,000,000 - 20,000 - 50,000 - 30,000 - 100,000 - 900,000 = -100,000 => <= 0
+      expect(result.fourPerThousand).toBe(0);
+      expect(result.netDisbursed).toBe(0);
     });
   });
 

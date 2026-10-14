@@ -40,6 +40,7 @@ export function useTheme() {
   useEffect(() => {
     // Sincronizamos el state con lo que el script inline ya aplicó al
     // <html>. Si el user tenía dark guardado, esto baja 'dark' al state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setThemeState(readThemeFromDom());
     setMounted(true);
 

@@ -25,7 +25,7 @@ import { getProfile, listProfilesWithNames } from '@/lib/data/profiles';
 import { listAllReceiptsWithItems, countPendingReceipts } from '@/lib/data/receipts';
 import { countPendingMembershipRequests } from '@/lib/data/membership-requests';
 import {
-  computeFineDetail,
+  computeFineForMonth,
   DEFAULT_PURCHASE_RULES,
   getBogotaCurrentMonth,
   getBogotaToday,
@@ -48,8 +48,9 @@ type ProfileLite = {
 
 type OverdueRow = {
   user: ProfileLite;
-  amount: number;
-  daysLate: number;
+  monthsCount: number;
+  monthsNames: string[];
+  totalFineAmount: number;
 };
 
 export default async function AdminDashboardPage() {
@@ -167,38 +168,95 @@ export default async function AdminDashboardPage() {
       }
     : DEFAULT_PURCHASE_RULES;
 
-  const monthFirst = `${ym}-01`;
+  const currentYearNum = Number(ym.slice(0, 4));
+  const currMonthNum = Number(ym.slice(5, 7));
 
-  const { data: itemsThisMonth } = await supabase
+  // Determinar meses a validar en el año en curso
+  const monthsToValidate: string[] = [];
+  for (let m = 1; m <= currMonthNum; m++) {
+    monthsToValidate.push(`${currentYearNum}-${String(m).padStart(2, '0')}-01`);
+  }
+
+  // Si hoy aún está en periodo de gracia del mes actual, no exigimos el mes actual todavía
+  const graceEnd = new Date(Date.UTC(currentYearNum, currMonthNum - 1, rules.grace_period_days));
+  if (today.getTime() <= graceEnd.getTime() && monthsToValidate.length > 0) {
+    monthsToValidate.pop();
+  }
+
+  // Consultar recibos aprobados de acciones y multas de todo el año
+  const startOfYear = `${currentYearNum}-01-01`;
+  const endOfYear = `${currentYearNum + 1}-01-01`;
+
+  const { data: allApprovedItems } = await supabase
     .from('receipt_items')
-    .select('receipt_id, target_month, receipts!inner(user_id, status)')
-    .eq('concept', 'acciones')
-    .eq('target_month', monthFirst)
-    .in('receipts.status', ['pending', 'approved']);
+    .select('concept, target_month, share_count, receipts!inner(status, user_id)')
+    .eq('receipts.status', 'approved')
+    .gte('target_month', startOfYear)
+    .lt('target_month', endOfYear);
 
-  const usersWithActivity = new Set(
-    (itemsThisMonth ?? [])
-      .map((r) => (r as any).receipts?.user_id)
-      .filter(Boolean),
-  );
+  const sharesByUserAndMonth = new Map<string, Map<string, number>>();
+  const finesPaidByUserAndMonth = new Map<string, Set<string>>();
 
-  const fineDetail = computeFineDetail(monthFirst, today, rules);
+  for (const item of allApprovedItems || []) {
+    const receipts = item.receipts as unknown as { user_id: string } | null;
+    const uid = receipts?.user_id;
+    if (!uid) continue;
+
+    if (item.concept === 'acciones') {
+      if (!sharesByUserAndMonth.has(uid)) sharesByUserAndMonth.set(uid, new Map());
+      sharesByUserAndMonth.get(uid)!.set(item.target_month, (sharesByUserAndMonth.get(uid)!.get(item.target_month) || 0) + (item.share_count || 0));
+    } else if (item.concept === 'multa_acciones') {
+      if (!finesPaidByUserAndMonth.has(uid)) finesPaidByUserAndMonth.set(uid, new Set());
+      finesPaidByUserAndMonth.get(uid)!.add(item.target_month);
+    }
+  }
+
+  const monthNamesEs = [
+    'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+    'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
+  ];
+
   const overdueList: OverdueRow[] = [];
-  if (fineDetail.amount > 0) {
-    for (const p of profiles) {
-      if (usersWithActivity.has(p.id)) continue;
+
+  for (const p of profiles) {
+    const uShares = sharesByUserAndMonth.get(p.id) || new Map();
+    const uFinesPaid = finesPaidByUserAndMonth.get(p.id) || new Set();
+
+    let totalFineAmount = 0;
+    const overdueMonths: string[] = [];
+
+    for (const monthStr of monthsToValidate) {
+      const approvedShares = uShares.get(monthStr) || 0;
+      const sharesOwed = Math.max(0, rules.min_shares_per_month - approvedShares);
+
+      if (sharesOwed > 0) {
+        const mIdx = Number(monthStr.split('-')[1]) - 1;
+        overdueMonths.push(monthNamesEs[mIdx]);
+
+        // Si pasamos el periodo de gracia del mes y no se ha pagado la multa, se calcula la multa
+        const [y, m] = monthStr.split('-').map(Number);
+        const limitDate = new Date(Date.UTC(y, m - 1, rules.grace_period_days));
+        if (today.getTime() > limitDate.getTime()) {
+          const finePaid = uFinesPaid.has(monthStr);
+          if (!finePaid) {
+            const fineOwed = computeFineForMonth(monthStr, today, rules);
+            totalFineAmount += fineOwed;
+          }
+        }
+      }
+    }
+
+    if (overdueMonths.length > 0) {
       overdueList.push({
         user: p,
-        amount: fineDetail.amount,
-        daysLate: fineDetail.chargedDays,
+        monthsCount: overdueMonths.length,
+        monthsNames: overdueMonths,
+        totalFineAmount,
       });
     }
   }
-  overdueList.sort((a, b) =>
-    `${a.user.first_name} ${a.user.last_name}`.localeCompare(
-      `${b.user.first_name} ${b.user.last_name}`,
-    ),
-  );
+
+  overdueList.sort((a, b) => b.totalFineAmount - a.totalFineAmount);
 
   const greeting = firstName ? `Buen día, ${firstName}` : 'Buen día';
   const monthLabelEs = new Date().toLocaleDateString('es-CO', { month: 'long', year: 'numeric' });
@@ -265,17 +323,16 @@ export default async function AdminDashboardPage() {
             </div>
             <div className="flex-1 min-w-0 text-left">
               <h2 className="text-[14px] font-semibold tracking-tight">
-                Multas pendientes este mes
+                Accionistas con mora / multas pendientes
               </h2>
               <p className="text-[11px] text-[var(--color-text-subtle)] mt-0.5">
-                Accionistas que aún no han comprado acciones de{' '}
-                <span className="capitalize">{monthLabelEs}</span>.
+                Socios con meses en mora o multas por no comprar acciones a tiempo en {currentYear}.
               </p>
             </div>
             {overdueList.length > 0 && (
               <Badge tone="warn">
                 {overdueList.length}{' '}
-                {overdueList.length === 1 ? 'pendiente' : 'pendientes'}
+                {overdueList.length === 1 ? 'en mora' : 'en mora'}
               </Badge>
             )}
           </div>
@@ -291,8 +348,7 @@ export default async function AdminDashboardPage() {
                 Todos al día por ahora
               </p>
               <p className="text-[11px] text-[var(--color-text-subtle)] max-w-xs">
-                Aún no hay accionistas con multa proyectada este mes (o nadie
-                pasó el período de gracia).
+                No hay accionistas con meses pendientes ni multas por mora en lo que va del año.
               </p>
             </div>
           ) : (
@@ -307,27 +363,28 @@ export default async function AdminDashboardPage() {
                     <div className="text-[13px] font-semibold tracking-tight truncate">
                       {o.user.first_name} {o.user.last_name}
                     </div>
-                    <div className="text-[11px] text-[var(--color-text-subtle)]">
-                      CC {o.user.identity_document} · {o.daysLate}{' '}
-                      {o.daysLate === 1 ? 'día' : 'días'} de mora
+                    <div className="text-[11px] text-[var(--color-text-subtle)] truncate">
+                      CC {o.user.identity_document} · {o.monthsCount}{' '}
+                      {o.monthsCount === 1 ? 'mes debiendo' : 'meses debiendo'}{' '}
+                      <span className="text-[var(--color-text-muted)] font-medium">({o.monthsNames.join(', ')})</span>
                     </div>
                   </div>
                   <div className="text-right shrink-0">
                     <div className="text-[13px] font-semibold tabular text-[var(--color-warn)]">
-                      {cop(o.amount)}
+                      {cop(o.totalFineAmount)}
                     </div>
                     <div className="text-[10px] text-[var(--color-text-subtle)]">
-                      proyectada
+                      multas acumuladas
                     </div>
                   </div>
                 </div>
               ))}
               <div className="px-5 py-3 bg-[var(--color-surface-alt)] flex items-center justify-between">
                 <span className="text-[12px] font-semibold text-[var(--color-text-muted)]">
-                  Total proyectado
+                  Total multas acumuladas en mora
                 </span>
                 <span className="text-[14px] font-semibold tabular text-[var(--color-warn)]">
-                  {cop(overdueList.reduce((s, o) => s + o.amount, 0))}
+                  {cop(overdueList.reduce((s, o) => s + o.totalFineAmount, 0))}
                 </span>
               </div>
             </div>
