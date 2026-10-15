@@ -80,6 +80,8 @@ Reemplazar el Google Sheet por una aplicación web que:
 - F1.18 Gestión de miembros y solicitudes de ingreso.
 - F1.19 Gastos puntuales con foto por accionista.
 
+> **Fase 1b (enero–febrero de 2027):** de la lista anterior, la doble firma (parte de F1.4 y de RN-9.4), F1.19 (gastos puntuales), la interfaz de parámetros (F1.3) y la vista de auditoría salen **después** del lanzamiento, con mitigaciones temporales (ver `roadmap.md`). La **escritura** de la auditoría sí está en la fase 1.
+
 ### Fase 2: cierre de periodo (antes de diciembre de 2027)
 - F2.1 **Liquidación anual** en el servidor, con el invariante de intereses en 0 y el ejemplo de Juan como test.
 - F2.2 Capitalización voluntaria con reserva.
@@ -110,7 +112,7 @@ Reemplazar el Google Sheet por una aplicación web que:
 
 ## 6. Restricciones
 
-- **Capacidad:** Cris dedica **unas 12 horas por semana**, lo que da cerca de 96 horas hasta la demo de diciembre.
+- **Capacidad:** Cris dedica **unas 8 horas por semana** (replanificado el 2026-10-15, porque comparte el tiempo con el Trabajo Integrador de la maestría), lo que da cerca de 72 horas hasta la demo. Parte de la fase 1 pasa a la **fase 1b** (enero–febrero de 2027). Ver `roadmap.md`.
 - **Datos reales:** el Sheet es **solo lectura**. El desarrollo usa datos de prueba.
 - **Stack existente:** Next.js 16, React 19, Supabase, Zod, Tailwind 4 y Vitest. Se conserva (ver `arquitectura.md`).
 - **Costo:** debe funcionar con los planes gratuitos o de bajo costo de Supabase y del hosting.
@@ -119,7 +121,7 @@ Reemplazar el Google Sheet por una aplicación web que:
 
 | Riesgo | Impacto | Mitigación |
 |---|---|---|
-| No llegar a la demo con 12 h/semana | Alto | Priorizar F1 sin piedad; la fase 2 tiene un año de margen |
+| No llegar a la demo con 8 h/semana | Alto | Fase 1b para lo no esencial, lista de recorte y plan B (ver `roadmap.md`) |
 | Saldos iniciales mal importados | Crítico | Validación automática contra los totales del Sheet antes de abrir 2027 |
 | Accionistas que no adoptan la app | Medio | Demo en la liquidación, UI simple, el administrador puede registrar por ellos |
 | Reglas 🟡 sin validar con el gerente | Medio | Validar antes de implementar esas reglas |
