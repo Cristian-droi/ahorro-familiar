@@ -16,6 +16,8 @@ import {
   LOAN_STATUS_LABELS,
   LOAN_STATUS_TONE,
   requiredVotes,
+  computeLoanBook,
+  type LoanBook,
 } from '@/lib/loans';
 
 export default function LoanDetailPage() {
@@ -31,6 +33,7 @@ export default function LoanDetailPage() {
   // INICIO de cada mes vencido — la lógica correcta a "mes vencido"). Solo
   // aplica para el dueño del préstamo cuando está activo.
   const [accruedInterest, setAccruedInterest] = useState<number>(0);
+  const [loanBook, setLoanBook] = useState<LoanBook | null>(null);
 
   const load = async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -38,6 +41,50 @@ export default function LoanDetailPage() {
     setCurrentUserId(user.id);
     const data = await getLoanWithDetails(supabase, id);
     setLoan(data);
+
+    if (data) {
+      // Traer pagos reales (receipt_items aprobados)
+      try {
+        const { data: paymentData, error: paymentErr } = await supabase
+          .from('receipt_items')
+          .select('concept, amount, target_month, receipts!inner(status)')
+          .eq('loan_id', id)
+          .in('concept', ['pago_capital', 'pago_intereses']);
+        
+        if (paymentErr) throw paymentErr;
+
+        interface ReceiptItemRow {
+          concept: string;
+          amount: number | string;
+          target_month: string | null;
+          receipts: { status: string } | { status: string }[] | null;
+        }
+
+        const approvedPayments = (paymentData as unknown as ReceiptItemRow[] ?? [])
+          .filter((r) => {
+            const status = Array.isArray(r.receipts)
+              ? r.receipts[0]?.status
+              : r.receipts?.status;
+            return status === 'approved';
+          })
+          .map((r) => ({
+            target_month: r.target_month,
+            concept: r.concept as 'pago_capital' | 'pago_intereses',
+            amount: Number(r.amount),
+          }));
+
+        const book = computeLoanBook({
+          requestedAmount: Number(data.requested_amount),
+          plan: data.payment_plan,
+          payments: approvedPayments,
+          interestRate: Number(data.interest_rate),
+          disbursedAt: data.disbursed_at,
+        });
+        setLoanBook(book);
+      } catch (err) {
+        console.error('Error calculando conciliación del préstamo:', err);
+      }
+    }
 
     // Si soy el dueño y el préstamo está activo, traemos el interest_owed
     // desde el RPC get_user_active_loans_debt — calcula sobre el saldo
@@ -58,6 +105,7 @@ export default function LoanDetailPage() {
     setLoading(false);
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [id]);
 
   const handleVote = async () => {
@@ -165,6 +213,12 @@ export default function LoanDetailPage() {
                   <Stat label="Desembolsado" value={loan.disbursed_amount ? cop(Number(loan.disbursed_amount)) : '—'} />
                 </>
               )}
+              {loanBook && (loan.status === 'active' || loan.status === 'paid') && (
+                <>
+                  <Stat label="Capital pagado" value={cop(loanBook.summary.total_paid_capital)} tone="success" />
+                  <Stat label="Intereses pagados" value={cop(loanBook.summary.total_paid_interest)} tone="success" />
+                </>
+              )}
               {loan.status !== 'draft' && loan.status !== 'pending_review' && (
                 <>
                   <Stat
@@ -174,6 +228,38 @@ export default function LoanDetailPage() {
                   <Stat label="4×1000" value={cop(Number(loan.four_per_thousand))} />
                 </>
               )}
+              {loan.deduct_obligations && (
+                <>
+                  <Stat label="Descontar deudas" value="Sí" />
+                  {Number(loan.deducted_shares_amount || 0) > 0 && (
+                    <Stat label="Acciones vencidas desc." value={cop(Number(loan.deducted_shares_amount))} tone="danger" />
+                  )}
+                  {Number(loan.deducted_fines_amount || 0) > 0 && (
+                    <Stat label="Multas desc." value={cop(Number(loan.deducted_fines_amount))} tone="danger" />
+                  )}
+                  {Number(loan.deducted_interest_amount || 0) > 0 && (
+                    <Stat label="Intereses desc." value={cop(Number(loan.deducted_interest_amount))} tone="danger" />
+                  )}
+                  {Number(loan.deducted_capital_amount || 0) > 0 && (
+                    <Stat label="Abonos a capital desc." value={cop(Number(loan.deducted_capital_amount))} tone="danger" />
+                  )}
+                </>
+              )}
+              {loan.disbursed_amount === null && !['draft', 'rejected_by_admin', 'rejected_by_shareholders'].includes(loan.status) && (() => {
+                const requested = Number(loan.requested_amount);
+                const shares = loan.loan_shares_paid_upfront ? 0 : Number(loan.loan_shares_amount || 0);
+                const deducted = loan.deduct_obligations
+                  ? Number(loan.deducted_shares_amount || 0) +
+                    Number(loan.deducted_fines_amount || 0) +
+                    Number(loan.deducted_interest_amount || 0) +
+                    Number(loan.deducted_capital_amount || 0)
+                  : 0;
+                const fourK = Number(loan.four_per_thousand || 0);
+                const netToReceive = Math.max(0, requested - shares - deducted - fourK);
+                return (
+                  <Stat label="Neto a recibir (estimado)" value={cop(netToReceive)} tone="success" />
+                );
+              })()}
             </div>
 
             {loan.status === 'active' && accruedInterest > 0 && (
@@ -202,9 +288,8 @@ export default function LoanDetailPage() {
               </div>
             ) : null}
           </Card>
-
           {/* Plan de pagos */}
-          {loan.payment_plan.length > 0 && (
+          {loanBook && loanBook.months.length > 0 && (
             <Card padding="none">
               <div className="px-[22px] pt-[18px] pb-3.5">
                 <div className="text-[14px] font-semibold tracking-tight">Plan de pagos</div>
@@ -213,29 +298,120 @@ export default function LoanDetailPage() {
                 </div>
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full text-[13px]">
+                <table className="w-full text-[13px] tabular">
                   <thead>
                     <tr className="border-t border-[var(--color-border)] bg-[var(--color-surface-alt)]">
-                      {['Cuota', 'Vencimiento', 'Capital', 'Intereses', 'Saldo'].map((h) => (
-                        <th key={h} className="text-left px-4 py-2.5 text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase">
-                          {h}
+                      {[
+                        { name: 'Cuota', align: 'left' },
+                        { name: 'Vencimiento', align: 'left' },
+                        { name: 'Capital Plan', align: 'right' },
+                        { name: 'Interés Plan', align: 'right' },
+                        { name: 'Cuota Total', align: 'right' },
+                        ...(loan.status === 'active' || loan.status === 'paid'
+                          ? [
+                              { name: 'Abono Capital', align: 'right' },
+                              { name: 'Abono Interés', align: 'right' },
+                              { name: 'Mora Interés', align: 'right' },
+                            ]
+                          : []),
+                        { name: 'Saldo Capital', align: 'right' },
+                      ].map((h) => (
+                        <th
+                          key={h.name}
+                          className={`px-4 py-2.5 text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase ${
+                            h.align === 'right' ? 'text-right' : 'text-left'
+                          }`}
+                        >
+                          {h.name}
                         </th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {loan.payment_plan.map((row) => (
-                      <tr key={row.month_number} className="border-t border-[var(--color-border)]">
-                        <td className="px-4 py-3 text-[var(--color-text-muted)] font-semibold">#{row.month_number}</td>
-                        <td className="px-4 py-3 text-[var(--color-text-muted)]">
-                          {new Date(row.due_date + 'T12:00:00').toLocaleDateString('es-CO', { month: 'short', year: 'numeric' })}
-                        </td>
-                        <td className="px-4 py-3 font-semibold tabular">{cop(Number(row.capital_amount))}</td>
-                        <td className="px-4 py-3 text-[var(--color-text-muted)] tabular">{cop(Number(row.estimated_interest))}</td>
-                        <td className="px-4 py-3 tabular">{cop(Number(row.estimated_balance_after))}</td>
-                      </tr>
-                    ))}
+                    {loanBook.months.map((row) => {
+                      const showPayments = loan.status === 'active' || loan.status === 'paid';
+                      const hasDebt = row.interest_debt > 0;
+                      return (
+                        <tr key={row.month_number} className="border-t border-[var(--color-border)]">
+                          <td className="px-4 py-3 text-[var(--color-text-muted)] font-semibold text-left">
+                            #{row.month_number}
+                          </td>
+                          <td className="px-4 py-3 text-[var(--color-text-muted)] text-left">
+                            {new Date(row.due_date + 'T12:00:00').toLocaleDateString('es-CO', {
+                              month: 'short',
+                              year: 'numeric',
+                            })}
+                          </td>
+                          <td className="px-4 py-3 font-semibold text-right">
+                            {row.plan_capital > 0 ? cop(row.plan_capital) : '—'}
+                          </td>
+                          <td className="px-4 py-3 text-[var(--color-text-muted)] text-right">
+                            {row.plan_interest > 0 ? cop(row.plan_interest) : '—'}
+                          </td>
+                          <td className="px-4 py-3 font-semibold text-right">
+                            {row.installment_value > 0 ? cop(row.installment_value) : '—'}
+                          </td>
+                          {showPayments && (
+                            <>
+                              <td className="px-4 py-3 text-[var(--color-success)] text-right">
+                                {row.paid_capital > 0 ? cop(row.paid_capital) : '—'}
+                              </td>
+                              <td className="px-4 py-3 text-[var(--color-success)] text-right">
+                                {row.paid_interest > 0 ? cop(row.paid_interest) : '—'}
+                              </td>
+                              <td
+                                className={`px-4 py-3 text-right ${
+                                  hasDebt ? 'text-[var(--color-danger)] font-semibold' : 'text-[var(--color-text-subtle)]'
+                                }`}
+                              >
+                                {hasDebt ? cop(row.interest_debt) : '—'}
+                              </td>
+                            </>
+                          )}
+                          <td className="px-4 py-3 text-right font-semibold">
+                            {cop(row.capital_balance_after)}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
+                  <tfoot className="bg-[var(--color-surface-alt)]/60 text-[11px] font-semibold border-t border-[var(--color-border)]">
+                    <tr>
+                      <td colSpan={2} className="px-4 py-3 text-left">
+                        Totales
+                      </td>
+                      <td className="px-4 py-3 text-right text-[var(--color-text-muted)]">
+                        {cop(loanBook.months.reduce((s, r) => s + r.plan_capital, 0))}
+                      </td>
+                      <td className="px-4 py-3 text-right text-[var(--color-text-muted)]">
+                        {cop(loanBook.months.reduce((s, r) => s + r.plan_interest, 0))}
+                      </td>
+                      <td className="px-4 py-3 text-right font-semibold">
+                        {cop(loanBook.months.reduce((s, r) => s + r.installment_value, 0))}
+                      </td>
+                      {/* Si se muestran los pagos, agregamos los totales de los abonos */}
+                      {(loan.status === 'active' || loan.status === 'paid') && (
+                        <>
+                          <td className="px-4 py-3 text-right text-[var(--color-success)] font-semibold">
+                            {cop(loanBook.summary.total_paid_capital)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-[var(--color-success)] font-semibold">
+                            {cop(loanBook.summary.total_paid_interest)}
+                          </td>
+                          <td
+                            className={`px-4 py-3 text-right font-semibold ${
+                              loanBook.summary.overdue_interest_debt > 0 ? 'text-[var(--color-danger)]' : ''
+                            }`}
+                          >
+                            {loanBook.summary.overdue_interest_debt > 0 ? cop(loanBook.summary.overdue_interest_debt) : '—'}
+                          </td>
+                        </>
+                      )}
+                      <td className="px-4 py-3 text-right font-bold">
+                        {cop(loanBook.summary.current_capital_balance)}
+                      </td>
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
             </Card>

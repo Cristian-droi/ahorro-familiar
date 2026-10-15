@@ -36,6 +36,9 @@ import {
   ArrowUp,
   ArrowDown,
   TrendingUp,
+  DollarSign,
+  Landmark,
+  Banknote,
 } from 'lucide-react';
 import { exportToExcel, exportToPdf, type ExportSection } from '@/lib/exports';
 import { getProfileRole, listProfilesWithNames } from '@/lib/data/profiles';
@@ -126,6 +129,11 @@ export default function LibroCajaPage() {
   const [rejectReason, setRejectReason] =
     useState<ReceiptRejectionReason>('amount_mismatch');
   const [rejectNote, setRejectNote] = useState('');
+
+  // Selección y Aprobación Masiva
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkApproving, setBulkApproving] = useState<boolean>(false);
+  const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null);
 
   const currentYear = Number(getBogotaCurrentMonth().slice(0, 4));
   const monthOptions = useMemo(
@@ -383,6 +391,61 @@ export default function LibroCajaPage() {
     } finally {
       setActionId(null);
     }
+  };
+
+  const toggleSelectAllPending = (pendingItems: MovementItem[]) => {
+    const pendingReceiptIds = pendingItems
+      .filter((m): m is MovementItem & { kind: 'receipt' } => m.kind === 'receipt' && m.receipt.status === 'pending')
+      .map(m => m.receipt.id);
+
+    if (selectedIds.length > 0 && selectedIds.length === pendingReceiptIds.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(pendingReceiptIds);
+    }
+  };
+
+  const toggleSelectId = (id: string) => {
+    setSelectedIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  const bulkApprove = async () => {
+    if (selectedIds.length === 0) return;
+    setBulkApproving(true);
+    setBulkProgress({ current: 0, total: selectedIds.length });
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < selectedIds.length; i++) {
+      const id = selectedIds[i];
+      setBulkProgress({ current: i + 1, total: selectedIds.length });
+      try {
+        const res = await fetch(`/api/receipts/${id}/approve`, { method: 'POST' });
+        if (res.ok) {
+          successCount++;
+        } else {
+          failCount++;
+        }
+      } catch (err) {
+        console.error('Error al aprobar recibo masivo:', id, err);
+        failCount++;
+      }
+    }
+
+    if (successCount > 0) {
+      showToast('success', `${successCount} recibo(s) aprobado(s) correctamente.`);
+    }
+    if (failCount > 0) {
+      showToast('error', `${failCount} recibo(s) no pudieron ser aprobados.`);
+    }
+
+    setSelectedIds([]);
+    setBulkApproving(false);
+    setBulkProgress(null);
+    await fetchAll();
   };
 
   const openReject = (r: ReceiptRow) => {
@@ -745,6 +808,46 @@ export default function LibroCajaPage() {
         </div>
       </Card>
 
+      {/* Barra de Aprobación Masiva */}
+      {(status === 'pending' || status === 'all') && (
+        <Card padding="md" className="bg-[var(--color-brand-soft)]/30 border-[var(--color-brand)]/20">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <input
+                type="checkbox"
+                id="select_all_pending"
+                checked={
+                  selectedIds.length > 0 &&
+                  selectedIds.length ===
+                    filteredMovements.filter((m): m is MovementItem & { kind: 'receipt' } => m.kind === 'receipt' && m.receipt.status === 'pending').length
+                }
+                onChange={() =>
+                  toggleSelectAllPending(filteredMovements)
+                }
+                className="rounded border-[var(--color-border)] text-[var(--color-brand)] focus:ring-[var(--color-ring)] h-4 w-4 cursor-pointer"
+              />
+              <label htmlFor="select_all_pending" className="text-xs font-semibold text-[var(--color-text)] cursor-pointer select-none">
+                Seleccionar todos los recibos pendientes de esta vista ({selectedIds.length} seleccionados)
+              </label>
+            </div>
+
+            {selectedIds.length > 0 && (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={bulkApprove}
+                disabled={bulkApproving}
+              >
+                <CheckCircle2 size={15} strokeWidth={2} />
+                {bulkApproving
+                  ? `Aprobando (${bulkProgress?.current}/${bulkProgress?.total})...`
+                  : `Aprobar ${selectedIds.length} Recibo(s) Seleccionado(s)`}
+              </Button>
+            )}
+          </div>
+        </Card>
+      )}
+
       {/* Lista */}
       {filteredMovements.length === 0 ? (
         <Card padding="lg" className="text-center py-10">
@@ -881,14 +984,21 @@ export default function LibroCajaPage() {
                       {/* Comprobante */}
                       {d.disbursement_proof_path && (
                         <div className="mt-4 flex items-center gap-2 flex-wrap">
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => openProof(d.disbursement_proof_path)}
-                          >
-                            <Download size={14} strokeWidth={1.75} />
-                            Ver comprobante de transferencia
-                          </Button>
+                          {d.disbursement_proof_path === 'cash' ? (
+                            <span className="text-[11px] text-[var(--color-success)] font-semibold bg-[var(--color-success-soft)] px-2.5 py-1 rounded-full flex items-center gap-1.5 animate-in fade-in duration-300">
+                              <Banknote size={13} strokeWidth={2} />
+                              Desembolsado en efectivo
+                            </span>
+                          ) : (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => openProof(d.disbursement_proof_path)}
+                            >
+                              <Download size={14} strokeWidth={1.75} />
+                              Ver comprobante de transferencia
+                            </Button>
+                          )}
                         </div>
                       )}
                     </div>
@@ -914,6 +1024,14 @@ export default function LibroCajaPage() {
             return (
               <Card key={m.id} padding="none" className="overflow-hidden">
                 <div className="flex items-center gap-4 px-5 py-4">
+                  {r.status === 'pending' && (
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.includes(r.id)}
+                      onChange={() => toggleSelectId(r.id)}
+                      className="rounded border-[var(--color-border)] text-[var(--color-brand)] focus:ring-[var(--color-ring)] h-4 w-4 shrink-0 cursor-pointer"
+                    />
+                  )}
                   <button
                     type="button"
                     onClick={() => toggleExpand(r.id)}
@@ -1055,11 +1173,16 @@ export default function LibroCajaPage() {
                       </div>
                       <div className="divide-y divide-[var(--color-border)] rounded-[10px] border border-[var(--color-border)] bg-[var(--color-surface)]">
                         {r.items.map((it) => {
-                          const itLoanNumber = (
+                          const loanObj = (
                             it as unknown as {
-                              loan?: { disbursement_number: string | null } | null;
+                              loan?: { loan_number?: number | null; disbursement_number: string | null } | null;
                             }
-                          ).loan?.disbursement_number;
+                          ).loan;
+                          const itLoanLabel = loanObj
+                            ? loanObj.loan_number
+                              ? `Préstamo #${loanObj.loan_number}${loanObj.disbursement_number ? ` (${loanObj.disbursement_number})` : ''}`
+                              : loanObj.disbursement_number
+                            : null;
                           return (
                             <div
                               key={it.id}
@@ -1068,9 +1191,9 @@ export default function LibroCajaPage() {
                               <div className="flex-1 min-w-0">
                                 <div className="font-semibold text-[var(--color-text)] flex items-center gap-2 flex-wrap">
                                   {conceptLabel(it.concept)}
-                                  {itLoanNumber && (
+                                  {itLoanLabel && (
                                     <span className="text-[10px] font-semibold text-[var(--color-brand)] bg-[var(--color-brand-soft)] px-1.5 py-0.5 rounded uppercase tracking-wider">
-                                      {itLoanNumber}
+                                      {itLoanLabel}
                                     </span>
                                   )}
                                   {it.auto_generated && (
@@ -1100,6 +1223,32 @@ export default function LibroCajaPage() {
                           <span className="font-semibold tabular">
                             {cop(Number(r.total_amount))}
                           </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Método de pago */}
+                    <div className="mt-4 animate-in fade-in duration-200">
+                      <div className="text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase mb-1.5">
+                        Método de pago
+                      </div>
+                      <div className="p-3.5 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-surface)] flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-[8px] bg-[var(--color-surface-alt)] border border-[var(--color-border)] flex items-center justify-center text-[var(--color-text-muted)] shrink-0">
+                          {r.payment_method === 'transfer' ? (
+                            <Landmark size={14} strokeWidth={1.75} />
+                          ) : (
+                            <DollarSign size={14} strokeWidth={1.75} />
+                          )}
+                        </div>
+                        <div className="flex-1 text-[13px] min-w-0">
+                          <p className="font-semibold text-[var(--color-text)]">
+                            {r.payment_method === 'transfer' ? 'Transferencia Bancaria' : 'Pago en Efectivo'}
+                          </p>
+                          {r.payment_method === 'transfer' && r.bank_accounts && (
+                            <p className="text-[11px] text-[var(--color-text-subtle)] mt-0.5 truncate">
+                              Destino: <span className="font-medium text-[var(--color-text)]">{r.bank_accounts.bank_name}</span> · Nº <span className="font-medium text-[var(--color-text)]">{r.bank_accounts.account_number}</span> ({r.bank_accounts.holder_name})
+                            </p>
+                          )}
                         </div>
                       </div>
                     </div>

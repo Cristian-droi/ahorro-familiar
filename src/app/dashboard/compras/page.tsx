@@ -34,9 +34,11 @@ import {
   TrendingUp,
   Lock,
   Landmark,
+  QrCode,
 } from 'lucide-react';
 import { getProfile } from '@/lib/data/profiles';
 import { listReceiptsForUser } from '@/lib/data/receipts';
+import { BankAccount } from '@/types/entities';
 import {
   getMyCapitalizationState,
   type MyCapState,
@@ -69,6 +71,44 @@ type CartLine = {
 
 function makeUid() {
   return Math.random().toString(36).slice(2, 10);
+}
+
+function buildDefaultLines(
+  currentMonthStr: string,
+  sharesBoughtMap: Map<string, number>,
+  minSharesRule: number,
+): CartLine[] {
+  const currentYearNum = Number(currentMonthStr.slice(0, 4));
+  const currMonthNum = Number(currentMonthStr.slice(5, 7));
+  const defaultLines: CartLine[] = [];
+
+  // 1. Pre-cargar meses en mora del año en curso
+  for (let m = 1; m < currMonthNum; m++) {
+    const mStr = `${currentYearNum}-${String(m).padStart(2, '0')}-01`;
+    const bought = sharesBoughtMap.get(mStr) ?? 0;
+    if (bought < minSharesRule) {
+      defaultLines.push({
+        uid: makeUid(),
+        target_month: mStr,
+        share_count: Math.max(1, minSharesRule - bought),
+      });
+    }
+  }
+
+  // 2. Pre-cargar el mes actual
+  const currentBought = sharesBoughtMap.get(currentMonthStr) ?? 0;
+  const alreadyInList = defaultLines.some((l) => l.target_month === currentMonthStr);
+  if (!alreadyInList && (currentBought < minSharesRule || defaultLines.length === 0)) {
+    defaultLines.push({
+      uid: makeUid(),
+      target_month: currentMonthStr,
+      share_count: Math.max(1, minSharesRule - currentBought),
+    });
+  }
+
+  return defaultLines.length > 0
+    ? defaultLines
+    : [{ uid: makeUid(), target_month: currentMonthStr, share_count: 1 }];
 }
 
 function extensionFromMime(mime: string): string {
@@ -152,6 +192,12 @@ export default function ComprasPage() {
   const [fileError, setFileError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Método de pago y cuentas bancarias
+  const [paymentMethod, setPaymentMethod] = useState<'transfer' | 'cash'>('transfer');
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [selectedBankAccountId, setSelectedBankAccountId] = useState<string | null>(null);
+  const [selectedQrPath, setSelectedQrPath] = useState<string | null>(null);
+
   const [submitting, setSubmitting] = useState(false);
 
   // Meses seleccionables: todos los meses del año en curso. El trigger de DB
@@ -196,6 +242,7 @@ export default function ComprasPage() {
         showToast('error', 'No se pudo cargar tu perfil.');
       }
 
+      let loadedMinShares = DEFAULT_PURCHASE_RULES.min_shares_per_month;
       // Reglas.
       try {
         const { data } = await supabase
@@ -205,10 +252,11 @@ export default function ComprasPage() {
           .maybeSingle();
         if (!cancelled && data?.value) {
           const v = data.value as Partial<PurchaseRules>;
+          loadedMinShares =
+            v.min_shares_per_month ??
+            DEFAULT_PURCHASE_RULES.min_shares_per_month;
           setRules({
-            min_shares_per_month:
-              v.min_shares_per_month ??
-              DEFAULT_PURCHASE_RULES.min_shares_per_month,
+            min_shares_per_month: loadedMinShares,
             max_shares_per_month:
               v.max_shares_per_month ??
               DEFAULT_PURCHASE_RULES.max_shares_per_month,
@@ -229,6 +277,7 @@ export default function ComprasPage() {
       // Para el preview: meses en los que el usuario ya tiene multa
       // pending/approved (en otro recibo). RLS filtra a sus propios
       // recibos al hacer el select anidado.
+      const boughtMap = new Map<string, number>();
       try {
         const receipts = await listReceiptsForUser(supabase, user.id);
         const activeReceiptIds = receipts
@@ -249,9 +298,6 @@ export default function ComprasPage() {
           }
 
           // Totales de acciones previas (pending + approved) por mes.
-          // El trigger max_shares_per_month_exceeded usa exactamente esta
-          // misma suma + lo nuevo; aquí replicamos el cálculo para poder
-          // avisar en vivo.
           const { data: shareItems } = await supabase
             .from('receipt_items')
             .select('target_month, share_count')
@@ -259,16 +305,25 @@ export default function ComprasPage() {
             .in('receipt_id', activeReceiptIds);
 
           if (!cancelled && shareItems) {
-            const map = new Map<string, number>();
             for (const it of shareItems) {
-              const prev = map.get(it.target_month) ?? 0;
-              map.set(it.target_month, prev + (it.share_count ?? 0));
+              const prev = boughtMap.get(it.target_month) ?? 0;
+              boughtMap.set(it.target_month, prev + (it.share_count ?? 0));
             }
-            setSharesAlreadyBoughtByMonth(map);
+            setSharesAlreadyBoughtByMonth(boughtMap);
           }
         }
       } catch (err) {
         console.error('Error cargando multas previas:', err);
+      }
+
+      // Pre-cargar por defecto 1 acción por cada mes en mora + 1 acción para el mes actual
+      if (!cancelled && !resubmitId) {
+        const defaultLines = buildDefaultLines(
+          currentMonth,
+          boughtMap,
+          loadedMinShares,
+        );
+        setLines(defaultLines);
       }
 
       // Estado de capitalización para este accionista (no bloqueante).
@@ -300,13 +355,31 @@ export default function ComprasPage() {
         console.error('Error cargando acciones por préstamo:', err);
       }
 
+      // Cargar cuentas bancarias activas
+      try {
+        const { data, error } = await supabase
+          .from('bank_accounts')
+          .select('*')
+          .eq('is_active', true)
+          .order('bank_name', { ascending: true });
+        if (!cancelled) {
+          if (error) throw error;
+          setBankAccounts(data || []);
+          if (data && data.length > 0) {
+            setSelectedBankAccountId(data[0].id);
+          }
+        }
+      } catch (err) {
+        console.error('Error cargando cuentas bancarias:', err);
+      }
+
       if (!cancelled) setLoading(false);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [router]);
+  }, [router, currentMonth, resubmitId]);
 
   // Precarga del recibo a reenviar cuando viene `?resubmit=<id>` en URL.
   // Cargamos el recibo completo + sus items y mapeamos cada concepto al
@@ -321,7 +394,7 @@ export default function ComprasPage() {
       const { data: receipt, error } = await supabase
         .from('receipts')
         .select(
-          'id, receipt_number, status, receipt_items(concept, target_month, share_count, amount, loan_id)',
+          'id, receipt_number, status, payment_method, bank_account_id, receipt_items(concept, target_month, share_count, amount, loan_id)',
         )
         .eq('id', resubmitId)
         .maybeSingle();
@@ -336,6 +409,12 @@ export default function ComprasPage() {
         return;
       }
       setResubmitNumber(receipt.receipt_number ?? null);
+      if (receipt.payment_method) {
+        setPaymentMethod(receipt.payment_method as 'transfer' | 'cash');
+      }
+      if (receipt.bank_account_id) {
+        setSelectedBankAccountId(receipt.bank_account_id);
+      }
 
       const items = (receipt.receipt_items ?? []) as Array<{
         concept: string;
@@ -591,11 +670,12 @@ export default function ComprasPage() {
     }
     // Pagos de préstamo: validar capital ≤ saldo.
     for (const p of loanPaymentBreakdown) {
+      const pName = `Préstamo #${p.loan.loan_number}${p.loan.disbursement_number ? ` (${p.loan.disbursement_number})` : ''}`;
       if (p.capital > p.loan.outstanding_capital) {
-        return `El abono a capital del préstamo ${p.loan.disbursement_number ?? ''} excede el saldo (${cop(p.loan.outstanding_capital)}).`;
+        return `El abono a capital del ${pName} excede el saldo (${cop(p.loan.outstanding_capital)}).`;
       }
       if (p.interests <= 0 && p.capital <= 0) {
-        return `El préstamo ${p.loan.disbursement_number ?? ''} no tiene intereses adeudados ni abono — quítalo del recibo.`;
+        return `El ${pName} no tiene intereses adeudados ni abono — quítalo del recibo.`;
       }
     }
     return null;
@@ -684,28 +764,38 @@ export default function ComprasPage() {
       }
       return;
     }
-    if (!file) {
-      showToast('error', 'Adjunta el comprobante de pago.');
-      return;
+    if (paymentMethod === 'transfer') {
+      if (!selectedBankAccountId) {
+        showToast('error', 'Por favor selecciona la cuenta bancaria de destino.');
+        return;
+      }
+      if (!file) {
+        showToast('error', 'Adjunta el comprobante de pago.');
+        return;
+      }
     }
 
     setSubmitting(true);
     try {
-      // 1) Subir comprobante.
-      const ext = extensionFromMime(file.type);
-      const path = `${userId}/${crypto.randomUUID()}.${ext}`;
-      const { error: uploadError } = await supabase.storage
-        .from('payment-proofs')
-        .upload(path, file, {
-          contentType: file.type,
-          upsert: false,
-        });
+      let path: string | null = null;
 
-      if (uploadError) {
-        console.error('Upload error:', uploadError);
-        showToast('error', 'No se pudo subir el comprobante.');
-        setSubmitting(false);
-        return;
+      if (paymentMethod === 'transfer' && file) {
+        // 1) Subir comprobante.
+        const ext = extensionFromMime(file.type);
+        path = `${userId}/${crypto.randomUUID()}.${ext}`;
+        const { error: uploadError } = await supabase.storage
+          .from('payment-proofs')
+          .upload(path, file, {
+            contentType: file.type,
+            upsert: false,
+          });
+
+        if (uploadError) {
+          console.error('Upload error:', uploadError);
+          showToast('error', 'No se pudo subir el comprobante.');
+          setSubmitting(false);
+          return;
+        }
       }
 
       // 2) Crear recibo. Se pueden mezclar líneas 'acciones' con una única
@@ -779,6 +869,8 @@ export default function ComprasPage() {
 
       const payload = {
         items,
+        payment_method: paymentMethod,
+        bank_account_id: paymentMethod === 'transfer' ? selectedBankAccountId : null,
         payment_proof_path: path,
       };
 
@@ -797,7 +889,9 @@ export default function ComprasPage() {
       if (!res.ok) {
         // Si falló, intentamos borrar el archivo recién subido para no
         // dejar huérfanos.
-        await supabase.storage.from('payment-proofs').remove([path]);
+        if (path) {
+          await supabase.storage.from('payment-proofs').remove([path]);
+        }
         showToast('error', json?.error ?? 'No se pudo registrar la compra.');
         setSubmitting(false);
         return;
@@ -1160,79 +1254,209 @@ export default function ComprasPage() {
           )}
 
           {/* Las multas por mora se muestran inline dentro de cada línea
-              de acciones (debajo del input + del subtotal) — ya no hay
-              card separada. Igual siguen entrando al receipt vía el
-              builder del backend. */}
-
-          {/* Subida de comprobante */}
-          <Card padding="lg">
-            <div className="flex items-center gap-2 mb-4">
-              <div className="w-8 h-8 rounded-lg bg-[var(--color-info-soft)] text-[var(--color-info)] flex items-center justify-center">
-                <Upload size={16} strokeWidth={1.75} />
+              de          {/* Método de Pago y Comprobante */}
+          <Card padding="lg" className="flex flex-col gap-5">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-lg bg-[var(--color-brand-soft)] text-[var(--color-brand)] flex items-center justify-center">
+                <Landmark size={16} strokeWidth={1.75} />
               </div>
               <div>
                 <h2 className="text-[15px] font-semibold tracking-tight">
-                  Comprobante de pago
+                  Método de pago
                 </h2>
                 <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
-                  JPG, PNG o PDF. Máximo 5 MB.
+                  Selecciona cómo realizarás el pago de tu compra.
                 </p>
               </div>
             </div>
 
-            {!file ? (
-              <label
-                htmlFor="payment-proof-input"
-                className={`flex flex-col items-center justify-center gap-2 h-36 rounded-[12px] border border-dashed cursor-pointer transition-colors ${
-                  fileError
-                    ? 'border-[var(--color-danger)] bg-[var(--color-danger-soft)]/30'
-                    : 'border-[var(--color-border)] bg-[var(--color-surface-alt)] hover:bg-[var(--color-surface)]'
+            {/* Selector de tipo de pago */}
+            <div className="grid grid-cols-2 gap-3 p-1 bg-[var(--color-surface-alt)] rounded-[12px] border border-[var(--color-border)]">
+              <button
+                type="button"
+                onClick={() => setPaymentMethod('transfer')}
+                className={`py-2 px-3 rounded-[9px] text-[13px] font-semibold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                  paymentMethod === 'transfer'
+                    ? 'bg-[var(--color-surface)] text-[var(--color-brand)] shadow-sm border border-[var(--color-border)]'
+                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] border border-transparent'
                 }`}
               >
-                <Upload size={22} strokeWidth={1.5} className="text-[var(--color-text-subtle)]" />
-                <span className="text-[13px] font-semibold text-[var(--color-text)]">
-                  Haz clic para seleccionar un archivo
-                </span>
-                <span className="text-[11px] text-[var(--color-text-subtle)]">
-                  o arrástralo aquí
-                </span>
-                <input
-                  id="payment-proof-input"
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/jpeg,image/png,application/pdf"
-                  className="hidden"
-                  onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
-                />
-              </label>
-            ) : (
-              <div className="flex items-center gap-3 p-3.5 rounded-[12px] border border-[var(--color-border)] bg-[var(--color-surface-alt)]">
-                <div className="w-10 h-10 rounded-[8px] bg-[var(--color-surface)] border border-[var(--color-border)] flex items-center justify-center text-[var(--color-text-muted)] shrink-0">
-                  <FileText size={18} strokeWidth={1.75} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-[13px] font-semibold text-[var(--color-text)] truncate">
-                    {file.name}
-                  </div>
-                  <div className="text-[11px] text-[var(--color-text-subtle)]">
-                    {(file.size / 1024).toFixed(0)} KB · {file.type || 'archivo'}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={clearFile}
-                  className="w-8 h-8 rounded-[8px] flex items-center justify-center text-[var(--color-text-subtle)] hover:text-[var(--color-danger)] hover:bg-[var(--color-danger-soft)] cursor-pointer transition-colors"
-                  aria-label="Quitar archivo"
-                >
-                  <X size={16} strokeWidth={1.75} />
-                </button>
-              </div>
-            )}
+                <Landmark size={14} />
+                Transferencia
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaymentMethod('cash')}
+                className={`py-2 px-3 rounded-[9px] text-[13px] font-semibold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                  paymentMethod === 'cash'
+                    ? 'bg-[var(--color-surface)] text-[var(--color-brand)] shadow-sm border border-[var(--color-border)]'
+                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] border border-transparent'
+                }`}
+              >
+                <CheckCircle2 size={14} />
+                Efectivo
+              </button>
+            </div>
 
-            {fileError && (
-              <div className="mt-2 flex items-center gap-2 text-[12px] font-medium text-[var(--color-danger)]">
-                <AlertTriangle size={13} strokeWidth={2} />
-                {fileError}
+            {paymentMethod === 'transfer' ? (
+              <div className="flex flex-col gap-4 animate-in fade-in duration-200">
+                {bankAccounts.length === 0 ? (
+                  <div className="p-4 rounded-[12px] bg-[var(--color-warning-soft)]/20 border border-[var(--color-warning-soft)] text-xs text-[var(--color-warning)] font-medium">
+                    No hay cuentas bancarias activas registradas por el administrador. Contacta al soporte.
+                  </div>
+                ) : (
+                  <>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-[var(--color-text-muted)] uppercase tracking-[0.12em] mb-2">
+                        Selecciona la cuenta de destino:
+                      </label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {bankAccounts.map((account) => {
+                          const isSelected = selectedBankAccountId === account.id;
+                          return (
+                            <button
+                              key={account.id}
+                              type="button"
+                              onClick={() => setSelectedBankAccountId(account.id)}
+                              className={`p-3.5 rounded-[12px] border text-left flex flex-col gap-1 transition-all cursor-pointer ${
+                                isSelected
+                                  ? 'border-[var(--color-brand)] bg-[var(--color-brand-soft)]/10 ring-2 ring-[var(--color-ring)]'
+                                  : 'border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-alt)]'
+                              }`}
+                            >
+                              <span className="text-[13px] font-bold text-[var(--color-text)]">
+                                {account.bank_name}
+                              </span>
+                              <span className="text-xs text-[var(--color-text-muted)] font-medium">
+                                {account.account_number}
+                              </span>
+                              <span className="text-[10px] text-[var(--color-brand)] uppercase font-semibold tracking-wider mt-1">
+                                {account.account_type} · {account.holder_name}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Detalles de la cuenta seleccionada y QR */}
+                    {(() => {
+                      const activeAcc = bankAccounts.find(a => a.id === selectedBankAccountId);
+                      if (!activeAcc) return null;
+                      return (
+                        <div className="p-4 rounded-[12px] border border-[var(--color-border)] bg-[var(--color-surface-alt)]/40 flex flex-col sm:flex-row gap-4 items-center justify-between">
+                          <div className="flex-1">
+                            <h3 className="text-xs font-bold text-[var(--color-text)] uppercase tracking-wider mb-2">
+                              Datos de Transferencia
+                            </h3>
+                            <div className="text-[13px] space-y-1 text-[var(--color-text-muted)] font-medium">
+                              <p><strong className="text-[var(--color-text)]">Banco:</strong> {activeAcc.bank_name}</p>
+                              <p><strong className="text-[var(--color-text)]">Titular:</strong> {activeAcc.holder_name}</p>
+                              <p><strong className="text-[var(--color-text)]">Número:</strong> {activeAcc.account_number}</p>
+                              <p><strong className="text-[var(--color-text)]">Tipo:</strong> {activeAcc.account_type === 'ahorros' ? 'Ahorros' : 'Corriente'}</p>
+                            </div>
+                          </div>
+                          {activeAcc.qr_path && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const url = supabase.storage.from('bank-qrs').getPublicUrl(activeAcc.qr_path!).data.publicUrl;
+                                setSelectedQrPath(url);
+                              }}
+                              className="flex flex-col items-center gap-1.5 bg-white p-2 rounded-[12px] border border-[var(--color-border)] shadow-sm shrink-0 cursor-zoom-in hover:scale-[1.03] transition-all duration-200 active:scale-95 focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)]/40"
+                              title="Hacé clic para ampliar el QR"
+                            >
+                              <div className="w-28 h-28 relative flex items-center justify-center overflow-hidden">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={supabase.storage.from('bank-qrs').getPublicUrl(activeAcc.qr_path).data.publicUrl}
+                                  alt="QR de cuenta bancaria"
+                                  className="max-w-full max-h-full object-contain"
+                                />
+                              </div>
+                              <span className="text-[9px] font-bold text-gray-500 uppercase tracking-wide flex items-center gap-1">
+                                <QrCode size={10} /> Escanear / Ampliar
+                              </span>
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })()}
+
+                    {/* Uploader del comprobante */}
+                    <div>
+                      <label className="block text-[11px] font-semibold text-[var(--color-text-muted)] uppercase tracking-[0.12em] mb-2">
+                        Comprobante de pago *
+                      </label>
+                      {!file ? (
+                        <label
+                          htmlFor="payment-proof-input"
+                          className={`flex flex-col items-center justify-center gap-2 h-32 rounded-[12px] border border-dashed cursor-pointer transition-colors ${
+                            fileError
+                              ? 'border-[var(--color-danger)] bg-[var(--color-danger-soft)]/30'
+                              : 'border-[var(--color-border)] bg-[var(--color-surface-alt)] hover:bg-[var(--color-surface)]'
+                          }`}
+                        >
+                          <Upload size={20} strokeWidth={1.5} className="text-[var(--color-text-subtle)]" />
+                          <span className="text-xs font-semibold text-[var(--color-text)]">
+                            Haz clic para seleccionar un comprobante
+                          </span>
+                          <span className="text-[10px] text-[var(--color-text-subtle)]">
+                            JPG, PNG o PDF · Máximo 5 MB
+                          </span>
+                          <input
+                            id="payment-proof-input"
+                            ref={fileInputRef}
+                            type="file"
+                            accept="image/jpeg,image/png,application/pdf"
+                            className="hidden"
+                            onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
+                          />
+                        </label>
+                      ) : (
+                        <div className="flex items-center gap-3 p-3 rounded-[12px] border border-[var(--color-border)] bg-[var(--color-surface)]">
+                          <div className="w-9 h-9 rounded-[8px] bg-[var(--color-surface-alt)] border border-[var(--color-border)] flex items-center justify-center text-[var(--color-text-muted)] shrink-0">
+                            <FileText size={16} strokeWidth={1.75} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs font-semibold text-[var(--color-text)] truncate">
+                              {file.name}
+                            </div>
+                            <div className="text-[10px] text-[var(--color-text-subtle)]">
+                              {(file.size / 1024).toFixed(0)} KB · {file.type || 'archivo'}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={clearFile}
+                            className="w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--color-text-subtle)] hover:text-[var(--color-danger)] hover:bg-[var(--color-danger-soft)] cursor-pointer transition-colors"
+                            aria-label="Quitar archivo"
+                          >
+                            <X size={14} strokeWidth={1.75} />
+                          </button>
+                        </div>
+                      )}
+                      {fileError && (
+                        <div className="mt-2 flex items-center gap-1.5 text-[11px] font-medium text-[var(--color-danger)] animate-in slide-in-from-top-1 duration-200">
+                          <AlertTriangle size={13} strokeWidth={2} />
+                          {fileError}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : (
+              <div className="p-4 rounded-[12px] border border-dashed border-[var(--color-success-soft)] bg-[var(--color-success-soft)]/10 text-xs text-[var(--color-success)] leading-[1.55] font-semibold flex items-start gap-2.5 animate-in fade-in duration-200">
+                <CheckCircle2 size={16} strokeWidth={2} className="shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-[13px] text-[var(--color-success)] font-bold mb-1">
+                    Pago en efectivo seleccionado
+                  </p>
+                  <p className="font-medium text-[var(--color-text-muted)]">
+                    No necesitas subir ningún comprobante de pago. Al enviar esta solicitud, confirmas que estás entregando el dinero físico al administrador. El recibo quedará en estado pendiente hasta que el administrador verifique el dinero en físico y lo apruebe.
+                  </p>
+                </div>
               </div>
             )}
           </Card>
@@ -1323,7 +1547,7 @@ export default function ComprasPage() {
               variant="primary"
               size="lg"
               className="w-full mt-5"
-              disabled={submitting || validationError != null || !file}
+              disabled={submitting || validationError != null || (paymentMethod === 'transfer' && !file)}
               onClick={handleSubmit}
             >
               {submitting ? (
@@ -1351,6 +1575,42 @@ export default function ComprasPage() {
           </div>
         </aside>
       </div>
+
+      {/* Modal para ampliar el QR */}
+      {selectedQrPath && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md transition-opacity duration-300"
+          onClick={() => setSelectedQrPath(null)}
+        >
+          <div
+            className="relative max-w-sm w-full mx-4 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[20px] shadow-2xl p-6 flex flex-col items-center gap-4 animate-in fade-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              className="absolute top-4 right-4 text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors p-1.5 rounded-full hover:bg-[var(--color-surface-hover)]"
+              onClick={() => setSelectedQrPath(null)}
+              aria-label="Cerrar modal"
+            >
+              <X size={18} strokeWidth={2} />
+            </button>
+            <h3 className="text-sm font-bold text-[var(--color-text)] uppercase tracking-wider text-center mt-2">
+              Código QR de Pago
+            </h3>
+            <div className="w-64 h-64 relative flex items-center justify-center bg-white p-3 rounded-[16px] border border-[var(--color-border)] shadow-inner">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={selectedQrPath}
+                alt="QR ampliado"
+                className="max-w-full max-h-full object-contain"
+              />
+            </div>
+            <p className="text-xs text-[var(--color-text-muted)] font-medium text-center px-2">
+              Escaneá este código QR desde la app de tu banco para realizar la transferencia de manera rápida y segura.
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1644,7 +1904,7 @@ function LoanPaymentsSection({
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-[13px] font-semibold tracking-tight">
-                      {debt.disbursement_number ?? 'Préstamo'}
+                      Préstamo #{debt.loan_number}{debt.disbursement_number ? ` (${debt.disbursement_number})` : ''}
                     </span>
                     <span className="text-[11px] text-[var(--color-text-subtle)]">
                       Pedido {cop(debt.requested_amount)}

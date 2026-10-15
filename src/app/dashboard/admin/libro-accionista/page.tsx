@@ -63,6 +63,8 @@ function computeBookedEntries(entries: LibroAccionistaEntry[]): BookedEntry[] {
         requestedAmount: Number(l.loan.requested_amount),
         plan: l.plan,
         payments: l.payments,
+        interestRate: Number(l.loan.interest_rate),
+        disbursedAt: l.loan.disbursed_at ?? null,
       }),
     }));
     const totals = loans.reduce(
@@ -70,7 +72,7 @@ function computeBookedEntries(entries: LibroAccionistaEntry[]): BookedEntry[] {
         requested: acc.requested + bl.book.summary.requested_amount,
         paid_capital: acc.paid_capital + bl.book.summary.total_paid_capital,
         paid_interest: acc.paid_interest + bl.book.summary.total_paid_interest,
-        interest_debt: acc.interest_debt + bl.book.summary.total_interest_debt,
+        interest_debt: acc.interest_debt + bl.book.summary.overdue_interest_debt,
         current_balance:
           acc.current_balance + bl.book.summary.current_capital_balance,
       }),
@@ -375,7 +377,7 @@ export default function LibroAccionistaPage() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-[14px] font-semibold tracking-tight">
-                            {l.disbursement_number ?? 'Sin número'}
+                            Préstamo #{l.loan_number}{l.disbursement_number ? ` (${l.disbursement_number})` : ''}
                           </span>
                           <Badge
                             tone={l.status === 'paid' ? 'success' : 'brand'}
@@ -383,7 +385,7 @@ export default function LibroAccionistaPage() {
                           >
                             {statusLabel}
                           </Badge>
-                          {bl.book.summary.total_interest_debt > 0 && (
+                          {bl.book.summary.overdue_interest_debt > 0 && (
                             <Badge tone="danger">Intereses en mora</Badge>
                           )}
                         </div>
@@ -425,7 +427,10 @@ export default function LibroAccionistaPage() {
                             <tr>
                               <th className="text-left font-semibold px-4 py-2.5">Mes</th>
                               <th className="text-right font-semibold px-4 py-2.5">
-                                Cuota plan
+                                Capital plan
+                              </th>
+                              <th className="text-right font-semibold px-4 py-2.5">
+                                Interés plan
                               </th>
                               <th className="text-right font-semibold px-4 py-2.5">
                                 Capital pagado
@@ -467,7 +472,10 @@ export default function LibroAccionistaPage() {
                                     </div>
                                   </td>
                                   <td className="px-4 py-2.5 text-right text-[var(--color-text-muted)]">
-                                    {cop(row.installment_value)}
+                                    {row.plan_capital > 0 ? cop(row.plan_capital) : '—'}
+                                  </td>
+                                  <td className="px-4 py-2.5 text-right text-[var(--color-text-muted)]">
+                                    {row.plan_interest > 0 ? cop(row.plan_interest) : '—'}
                                   </td>
                                   <td className="px-4 py-2.5 text-right text-[var(--color-success)]">
                                     {row.paid_capital > 0
@@ -501,7 +509,15 @@ export default function LibroAccionistaPage() {
                               <td className="px-4 py-2.5 text-right text-[var(--color-text-muted)]">
                                 {cop(
                                   bl.book.months.reduce(
-                                    (s, r) => s + r.installment_value,
+                                    (s, r) => s + r.plan_capital,
+                                    0,
+                                  ),
+                                )}
+                              </td>
+                              <td className="px-4 py-2.5 text-right text-[var(--color-text-muted)]">
+                                {cop(
+                                  bl.book.months.reduce(
+                                    (s, r) => s + r.plan_interest,
                                     0,
                                   ),
                                 )}
@@ -514,13 +530,13 @@ export default function LibroAccionistaPage() {
                               </td>
                               <td
                                 className={`px-4 py-2.5 text-right ${
-                                  bl.book.summary.total_interest_debt > 0
+                                  bl.book.summary.overdue_interest_debt > 0
                                     ? 'text-[var(--color-danger)]'
                                     : 'text-[var(--color-text-subtle)]'
                                 }`}
                               >
-                                {bl.book.summary.total_interest_debt > 0
-                                  ? cop(bl.book.summary.total_interest_debt)
+                                {bl.book.summary.overdue_interest_debt > 0
+                                  ? cop(bl.book.summary.overdue_interest_debt)
                                   : '—'}
                               </td>
                               <td className="px-4 py-2.5 text-right">
@@ -564,7 +580,7 @@ function UnifiedBookCard({ unified }: { unified: UnifiedLoanBook }) {
   const totalCuota = totalPlanCapital + totalPlanInterest;
   const totalPaidCapital = unified.summary.total_paid_capital;
   const totalPaidInterest = unified.summary.total_paid_interest;
-  const totalInterestDebt = unified.summary.total_interest_debt;
+  const totalInterestDebt = unified.summary.overdue_interest_debt;
   const finalBalance = unified.summary.current_capital_balance;
 
   return (

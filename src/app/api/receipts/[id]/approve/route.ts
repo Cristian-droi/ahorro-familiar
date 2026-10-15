@@ -128,26 +128,7 @@ export async function POST(
 
     // Post-aprobación: actualizar préstamos afectados
     for (const item of loanItems) {
-      if (item.concept === 'pago_capital') {
-        // Descontar del saldo del préstamo
-        const { data: loan } = await admin
-          .from('loans')
-          .select('outstanding_balance')
-          .eq('id', item.loan_id)
-          .maybeSingle();
-
-        if (loan) {
-          const newBalance = Math.max(0, Number(loan.outstanding_balance) - Number(item.amount));
-          await admin
-            .from('loans')
-            .update({
-              outstanding_balance: newBalance,
-              status: newBalance === 0 ? 'paid' : undefined,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', item.loan_id);
-        }
-      } else if (item.concept === 'pago_intereses') {
+      if (item.concept === 'pago_intereses') {
         // Marcar hasta qué fecha están pagados los intereses (primer día del mes actual)
         const today = new Date();
         const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1)

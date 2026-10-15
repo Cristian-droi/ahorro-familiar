@@ -54,13 +54,15 @@ export async function POST(
         { status: 400 },
       );
     }
-    const { items, payment_proof_path } = parsed.data;
+    const { items, payment_method, bank_account_id, payment_proof_path } = parsed.data;
 
-    if (!payment_proof_path.startsWith(`${user.id}/`)) {
-      return NextResponse.json(
-        { error: 'Ruta de comprobante inválida' },
-        { status: 400 },
-      );
+    if (payment_method === 'transfer') {
+      if (!payment_proof_path || !payment_proof_path.startsWith(`${user.id}/`)) {
+        return NextResponse.json(
+          { error: 'Ruta de comprobante inválida o faltante para transferencia' },
+          { status: 400 },
+        );
+      }
     }
 
     const admin = createSupabaseAdminClient();
@@ -149,7 +151,9 @@ export async function POST(
         reviewed_by: null,
         rejection_reason: null,
         rejection_note: null,
-        payment_proof_path,
+        payment_method,
+        bank_account_id: payment_method === 'transfer' ? bank_account_id : null,
+        payment_proof_path: payment_method === 'transfer' ? payment_proof_path : null,
       })
       .eq('id', receiptId);
 

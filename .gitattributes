@@ -1,0 +1,12 @@
+# Saltos de línea LF en el repositorio para todos los archivos de texto
+* text=auto eol=lf
+
+# Binarios
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary

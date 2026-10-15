@@ -13,7 +13,6 @@ import {
   Wallet,
   MoreHorizontal,
   LogOut,
-  CheckCircle2,
   ShoppingCart,
   Receipt,
   BookOpen,
@@ -41,6 +40,7 @@ import {
   type AdminPendingLoanCounts,
 } from '@/lib/data/loans';
 import type { TopNavNotificationItem } from '@/components/ui/TopNav';
+import { cop } from '@/lib/format';
 
 type DashboardUser = {
   first: string;
@@ -67,6 +67,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [pendingLoanActive, setPendingLoanActive] = useState<number>(0);
   const [pendingLoanShares, setPendingLoanShares] = useState<number>(0);
 
+  // Utilidades (intereses cobrados)
+  const [totalInterest, setTotalInterest] = useState<number>(0);
+  const [interestGrowth, setInterestGrowth] = useState<number>(0);
+
   // Sidebar abrible/cerrable. En desktop arranca abierto; en mobile cerrado.
   // Usamos un state único: sidebarOpen. El layout aplica clases distintas
   // para overlay (mobile) o slot (desktop).
@@ -83,7 +87,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     if (typeof window !== 'undefined' && window.innerWidth < 768) {
       setSidebarOpen(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname]);
 
   useEffect(() => {
@@ -117,6 +120,75 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       }
     };
 
+    const fetchInterestStats = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('receipt_items')
+          .select('amount, receipts!inner(submitted_at, status)')
+          .eq('concept', 'pago_intereses')
+          .eq('receipts.status', 'approved');
+
+        if (error) throw error;
+        if (cancelled) return;
+
+        const now = new Date();
+        const currentYear = now.getFullYear();
+        const currentMonth = now.getMonth();
+
+        const prevYear = currentMonth === 0 ? currentYear - 1 : currentYear;
+        const prevMonth = currentMonth === 0 ? 11 : currentMonth - 1;
+
+        let total = 0;
+        let thisMonthTotal = 0;
+        let prevMonthTotal = 0;
+
+        interface ReceiptItemWithReceipt {
+          amount: number | string;
+          receipts: {
+            submitted_at: string;
+            status: string;
+          } | {
+            submitted_at: string;
+            status: string;
+          }[] | null;
+        }
+
+        const typedData = (data as unknown) as ReceiptItemWithReceipt[];
+
+        for (const item of typedData ?? []) {
+          const amountVal = parseFloat(item.amount as string) || 0;
+          total += amountVal;
+
+          const receipt = Array.isArray(item.receipts) ? item.receipts[0] : item.receipts;
+          const dateStr = receipt?.submitted_at;
+          if (dateStr) {
+            const d = new Date(dateStr);
+            const itemYear = d.getFullYear();
+            const itemMonth = d.getMonth();
+
+            if (itemYear === currentYear && itemMonth === currentMonth) {
+              thisMonthTotal += amountVal;
+            } else if (itemYear === prevYear && itemMonth === prevMonth) {
+              prevMonthTotal += amountVal;
+            }
+          }
+        }
+
+        setTotalInterest(total);
+
+        if (prevMonthTotal > 0) {
+          const growth = ((thisMonthTotal - prevMonthTotal) / prevMonthTotal) * 100;
+          setInterestGrowth(growth);
+        } else if (thisMonthTotal > 0) {
+          setInterestGrowth(100);
+        } else {
+          setInterestGrowth(0);
+        }
+      } catch (err) {
+        console.error('Error calculando utilidades:', err);
+      }
+    };
+
     (async () => {
       const { data } = await supabase.auth.getUser();
       if (!data.user || cancelled) return;
@@ -139,6 +211,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         fetchPendingCount();
         fetchPendingReceipts();
         fetchPendingLoans();
+        fetchInterestStats();
         const channel = supabase
           .channel('dashboard-pending-counts')
           .on(
@@ -149,7 +222,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           .on(
             'postgres_changes',
             { event: '*', schema: 'public', table: 'receipts' },
-            () => fetchPendingReceipts(),
+            () => {
+              fetchPendingReceipts();
+              fetchInterestStats();
+            },
           )
           .on(
             'postgres_changes',
@@ -299,6 +375,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       label: 'Extractos',
       href: '/dashboard/admin/extractos',
       icon: ClipboardList,
+    },
+    {
+      key: 'resumen',
+      label: 'Resumen',
+      href: '/dashboard/admin/resumen',
+      icon: TrendingUp,
     },
     { key: 'ajustes', label: 'Ajustes', href: '/dashboard/ajustes', icon: Settings },
   ];
@@ -491,28 +573,31 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           })}
         </nav>
 
-        {/* Admin: fund snapshot pill (solo cuando tengamos datos reales; por ahora placeholder) */}
+        {/* Admin: fund snapshot pill (Utilidades de intereses cobrados) */}
         {role === 'admin' && (
           <div className="mt-auto mx-1.5 mb-3 p-3.5 rounded-[12px] bg-[var(--color-surface-alt)] dark:bg-[var(--color-surface)] border border-[var(--color-border)]">
             <div className="flex items-center gap-2 mb-2.5">
               <span
-                className="w-2 h-2 rounded-full bg-[var(--color-success)]"
+                className="w-2.5 h-2.5 rounded-full bg-[var(--color-success)] animate-pulse"
                 aria-hidden
               />
               <span className="text-[11px] font-semibold text-[var(--color-text-muted)] tracking-wider uppercase">
-                Fondo activo
+                Utilidades
               </span>
             </div>
-            <div className="text-[20px] font-semibold tracking-[-0.02em] tabular">
-              $ 48.720.500
+            <div className="text-[20px] font-semibold tracking-[-0.02em] tabular text-[var(--color-text)]">
+              {cop(totalInterest)}
             </div>
-            <div className="text-xs text-[var(--color-text-muted)] mt-1 flex items-center gap-1">
-              <CheckCircle2
+            <div className="text-xs text-[var(--color-text-muted)] mt-1 flex items-center gap-1.5 flex-wrap">
+              <TrendingUp
                 size={12}
                 strokeWidth={1.75}
-                className="text-[var(--color-success)]"
+                className={interestGrowth >= 0 ? "text-[var(--color-success)]" : "text-[var(--color-danger)]"}
               />
-              +2.4% este mes
+              <span className={interestGrowth >= 0 ? "text-[var(--color-success)] font-semibold" : "text-[var(--color-danger)] font-semibold"}>
+                {interestGrowth >= 0 ? '+' : ''}{interestGrowth.toFixed(1)}%
+              </span>{' '}
+              vs mes ant.
             </div>
           </div>
         )}

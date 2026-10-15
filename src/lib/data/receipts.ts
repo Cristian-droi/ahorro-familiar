@@ -51,7 +51,7 @@ export async function listReceiptsForUser(
   const { data, error } = await client
     .from('receipts')
     .select(
-      'id, receipt_number, user_id, status, submitted_at, reviewed_at, rejection_reason, rejection_note, payment_proof_path, total_amount',
+      'id, receipt_number, user_id, status, submitted_at, reviewed_at, rejection_reason, rejection_note, payment_proof_path, total_amount, payment_method, bank_account_id, bank_accounts(bank_name, account_number)',
     )
     .eq('user_id', userId)
     .order('submitted_at', { ascending: false });
@@ -67,7 +67,7 @@ export async function listAllReceipts(
   let query = client
     .from('receipts')
     .select(
-      'id, receipt_number, user_id, status, submitted_at, reviewed_at, reviewed_by, rejection_reason, rejection_note, payment_proof_path, total_amount',
+      'id, receipt_number, user_id, status, submitted_at, reviewed_at, reviewed_by, rejection_reason, rejection_note, payment_proof_path, total_amount, payment_method, bank_account_id, bank_accounts(bank_name, account_number)',
     )
     .order('submitted_at', { ascending: false });
 
@@ -80,7 +80,7 @@ export async function listAllReceipts(
 
 // Variante con items embebidos. Útil para el Libro de caja del admin, donde
 // expandimos cada recibo en la misma pantalla y queremos evitar N+1.
-// El embed `loan:loans(disbursement_number)` trae el CE-XXXXX del préstamo
+// El embed `loan:loans(loan_number, disbursement_number)` trae el consecutivo y CE-XXXXX del préstamo
 // asociado en items de pago_capital, pago_intereses y acciones_prestamo.
 export async function listAllReceiptsWithItems(
   client: TypedSupabaseClient,
@@ -89,7 +89,7 @@ export async function listAllReceiptsWithItems(
   let query = client
     .from('receipts')
     .select(
-      'id, receipt_number, user_id, status, submitted_at, reviewed_at, reviewed_by, rejection_reason, rejection_note, payment_proof_path, total_amount, created_at, updated_at, receipt_items(*, loan:loans(disbursement_number))',
+      'id, receipt_number, user_id, status, submitted_at, reviewed_at, reviewed_by, rejection_reason, rejection_note, payment_proof_path, total_amount, created_at, updated_at, payment_method, bank_account_id, bank_accounts(bank_name, account_number, holder_name, account_type), receipt_items(*, loan:loans(loan_number, disbursement_number))',
     )
     .order('submitted_at', { ascending: false });
 
@@ -107,7 +107,7 @@ export async function getReceiptWithItems(
   const { data, error } = await client
     .from('receipts')
     .select(
-      'id, receipt_number, user_id, status, submitted_at, reviewed_at, reviewed_by, rejection_reason, rejection_note, payment_proof_path, total_amount, created_at, updated_at, receipt_items(*, loan:loans(disbursement_number))',
+      'id, receipt_number, user_id, status, submitted_at, reviewed_at, reviewed_by, rejection_reason, rejection_note, payment_proof_path, total_amount, created_at, updated_at, payment_method, bank_account_id, bank_accounts(bank_name, account_number, holder_name, account_type), receipt_items(*, loan:loans(loan_number, disbursement_number))',
     )
     .eq('id', id)
     .maybeSingle();

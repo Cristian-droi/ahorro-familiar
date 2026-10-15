@@ -97,7 +97,7 @@ export async function POST(
       await admin
         .from('loans')
         .update({
-          status: newStatus,
+          status: newStatus as 'pending_disbursement' | 'rejected_by_shareholders',
           rejection_reason: newStatus === 'rejected_by_shareholders' ? 'No se alcanzó el quórum de aprobación' : null,
           updated_at: new Date().toISOString(),
         })

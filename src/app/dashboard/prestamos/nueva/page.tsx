@@ -22,9 +22,12 @@ import {
   calcLoanShares,
   calcFourPerThousand,
   calcDisbursedAmount,
+  calcLoanDeductionsAndNet,
   buildPaymentPlan,
   type PlanRow,
 } from '@/lib/loans';
+import { checkUserObligations, type UserObligationsStatus } from '@/lib/obligations';
+import { DeductionDetail } from '@/types/entities';
 
 export default function NuevaSolicitudPage() {
   const router = useRouter();
@@ -32,12 +35,15 @@ export default function NuevaSolicitudPage() {
   const [shareValue, setShareValue] = useState<number | null>(null);
   const [interestRate, setInterestRate] = useState(0.02);
   const [cashBalance, setCashBalance] = useState<number | null>(null);
+  const [obligations, setObligations] = useState<UserObligationsStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
   const [amountInput, setAmountInput] = useState('');
   const [months, setMonths] = useState(12);
   const [paidUpfront, setPaidUpfront] = useState(false);
+  const [deductObligations, setDeductObligations] = useState(false);
+  const [capitalAbonos, setCapitalAbonos] = useState<Record<string, number>>({});
 
   const [capitalOverrides, setCapitalOverrides] = useState<Record<number, number>>({});
   const [editingMonth, setEditingMonth] = useState<number | null>(null);
@@ -49,16 +55,18 @@ export default function NuevaSolicitudPage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.replace('/login'); return; }
 
-      const [profile, rateSetting, balance] = await Promise.all([
+      const [profile, rateSetting, balance, obligationsStatus] = await Promise.all([
         getProfile(supabase, user.id),
         supabase.from('system_settings').select('value').eq('key', 'loan_interest_rate').maybeSingle(),
         getCashBalance(supabase).catch(() => null),
+        checkUserObligations(supabase, user.id).catch(() => null),
       ]);
 
       if (cancelled) return;
       setShareValue(profile.selected_share_value ?? null);
       if (rateSetting.data?.value) setInterestRate(Number(rateSetting.data.value));
       setCashBalance(balance);
+      setObligations(obligationsStatus);
       setLoading(false);
     })();
     return () => { cancelled = true; };
@@ -74,12 +82,50 @@ export default function NuevaSolicitudPage() {
     [requestedAmount, shareValue],
   );
 
-  const fourPerThousand = useMemo(() => calcFourPerThousand(requestedAmount), [requestedAmount]);
+  const deductedShares = useMemo(() => {
+    return deductObligations && obligations ? obligations.sharesOwedAmount : 0;
+  }, [deductObligations, obligations]);
 
-  const disbursedAmount = useMemo(
-    () => calcDisbursedAmount(requestedAmount, sharesAmount, paidUpfront, fourPerThousand),
-    [requestedAmount, sharesAmount, paidUpfront, fourPerThousand],
-  );
+  const deductedFines = useMemo(() => {
+    return deductObligations && obligations ? obligations.finesOwedAmount : 0;
+  }, [deductObligations, obligations]);
+
+  const deductedInterest = useMemo(() => {
+    return deductObligations && obligations ? obligations.interestOwedAmount : 0;
+  }, [deductObligations, obligations]);
+
+  const deductedCapital = useMemo(() => {
+    if (!deductObligations) return 0;
+    return Object.values(capitalAbonos).reduce((sum, val) => sum + val, 0);
+  }, [deductObligations, capitalAbonos]);
+
+  const { netDisbursed, finalFourPerThousand } = useMemo(() => {
+    if (deductObligations) {
+      const { netDisbursed, fourPerThousand } = calcLoanDeductionsAndNet({
+        requestedAmount,
+        sharesAmount,
+        paidUpfront,
+        deductedShares,
+        deductedFines,
+        deductedInterest,
+        deductedCapital,
+      });
+      return { netDisbursed, finalFourPerThousand: fourPerThousand };
+    } else {
+      const ft = calcFourPerThousand(requestedAmount);
+      const nd = calcDisbursedAmount(requestedAmount, sharesAmount, paidUpfront, ft);
+      return { netDisbursed: nd, finalFourPerThousand: ft };
+    }
+  }, [
+    requestedAmount,
+    sharesAmount,
+    paidUpfront,
+    deductObligations,
+    deductedShares,
+    deductedFines,
+    deductedInterest,
+    deductedCapital,
+  ]);
 
   const plan: PlanRow[] = useMemo(() => {
     if (requestedAmount < 500_000 || months < 1) return [];
@@ -98,8 +144,17 @@ export default function NuevaSolicitudPage() {
     if (requestedAmount < 500_000) return 'El monto mínimo es $500.000';
     if (!shareValue) return 'Debes definir tu valor de acción en Ajustes';
     if (months < 1 || months > 60) return 'Los meses deben estar entre 1 y 60';
+    if (deductObligations && netDisbursed < 0) {
+      return 'Las deducciones no pueden superar el monto solicitado.';
+    }
     return null;
-  }, [requestedAmount, shareValue, months]);
+  }, [requestedAmount, shareValue, months, deductObligations, netDisbursed]);
+
+  const canSubmit = useMemo(() => {
+    if (submitting || !!validationError || requestedAmount === 0) return false;
+    if (obligations?.isUpToDate) return true;
+    return deductObligations;
+  }, [submitting, validationError, requestedAmount, obligations, deductObligations]);
 
   const startEdit = (row: PlanRow) => {
     setEditingMonth(row.month_number);
@@ -118,9 +173,62 @@ export default function NuevaSolicitudPage() {
   );
 
   const handleSubmit = async () => {
-    if (validationError || submitting) return;
+    if (!canSubmit) return;
     setSubmitting(true);
     try {
+      const detail: DeductionDetail[] = [];
+      if (deductObligations && obligations) {
+        const today = new Date();
+        const currentMonthStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
+
+        // Acciones y multas
+        for (const o of obligations.overdueMonthsDetails) {
+          if (o.sharesOwed > 0) {
+            detail.push({
+              concept: 'acciones',
+              target_month: o.month,
+              share_count: o.sharesOwed,
+              unit_value: o.shareValue,
+              amount: o.sharesOwed * o.shareValue,
+            });
+          }
+          if (o.fineOwed > 0) {
+            detail.push({
+              concept: 'multa_acciones',
+              target_month: o.month,
+              amount: o.fineOwed,
+            });
+          }
+        }
+
+        // Intereses
+        for (const l of obligations.activeLoansDetails) {
+          if (l.interestOwed > 0) {
+            detail.push({
+              concept: 'pago_intereses',
+              target_month: currentMonthStr,
+              amount: l.interestOwed,
+              loan_id: l.loanId,
+              disbursementNumber: l.disbursementNumber,
+            });
+          }
+        }
+
+        // Capital
+        for (const [loanId, amount] of Object.entries(capitalAbonos)) {
+          if (amount > 0) {
+            const l = obligations.activeLoansDetails.find(active => active.loanId === loanId);
+            detail.push({
+              concept: 'pago_capital',
+              target_month: currentMonthStr,
+              amount,
+              loan_id: loanId,
+              disbursementNumber: l?.disbursementNumber ?? null,
+            });
+          }
+        }
+      }
+
       const res = await fetch('/api/prestamos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -128,6 +236,9 @@ export default function NuevaSolicitudPage() {
           requested_amount: requestedAmount,
           payment_plan_months: months,
           loan_shares_paid_upfront: paidUpfront,
+          deduct_obligations: deductObligations,
+          deducted_capital_amount: deductedCapital,
+          deductions_detail: detail,
         }),
       });
       const json = await res.json();
@@ -173,6 +284,26 @@ export default function NuevaSolicitudPage() {
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
         {/* Columna principal */}
         <div className="flex flex-col gap-5">
+          {/* Alerta de obligaciones pendientes */}
+          {obligations && !obligations.isUpToDate && (
+            <div className="p-4 rounded-[10px] bg-[var(--color-danger-soft)] border border-[var(--color-danger)]/30 text-[var(--color-danger)] flex flex-col gap-2">
+              <div className="flex items-center gap-2 font-semibold text-[14px]">
+                <AlertTriangle size={16} strokeWidth={2} className="shrink-0" />
+                No podés solicitar un préstamo porque tenés obligaciones pendientes:
+              </div>
+              <ul className="list-disc pl-5 text-[13px] flex flex-col gap-1">
+                {obligations.reasons.map((reason, idx) => (
+                  <li key={idx}>{reason}</li>
+                ))}
+              </ul>
+              <p className="text-[12px] opacity-90 mt-1">
+                {deductObligations 
+                  ? 'Como seleccionaste la opción de descuento, podés enviar la solicitud y estas deudas se descontarán de tu desembolso.'
+                  : 'Por favor, ponete al día en el módulo correspondiente o selecciona la opción para descontar deudas del monto del préstamo.'}
+              </p>
+            </div>
+          )}
+
           {/* Monto y meses */}
           <Card padding="lg">
             <h2 className="text-[15px] font-semibold tracking-tight mb-4">Detalles del préstamo</h2>
@@ -251,13 +382,155 @@ export default function NuevaSolicitudPage() {
                     Quiero pagar las {sharesCount} acciones por préstamo ({cop(sharesAmount)}) por adelantado
                   </div>
                   <div className="text-[12px] text-[var(--color-text-muted)] mt-0.5">
-                    Si marcás esta opción, recibirás {cop(calcDisbursedAmount(requestedAmount, sharesAmount, true, fourPerThousand))} en vez de {cop(calcDisbursedAmount(requestedAmount, sharesAmount, false, fourPerThousand))}.
+                    Si marcás esta opción, recibirás {cop(calcDisbursedAmount(requestedAmount, sharesAmount, true, finalFourPerThousand))} en vez de {cop(calcDisbursedAmount(requestedAmount, sharesAmount, false, finalFourPerThousand))}.
                     Deberás comprarlas en el módulo de compras antes del desembolso.
                   </div>
                 </div>
               </div>
             )}
+
+            {/* Opción de descuento de obligaciones y abono a capital */}
+            {obligations && (!obligations.isUpToDate || obligations.activeLoansDetails.some(l => l.outstandingBalance > 0)) && (
+              <div
+                className={`mt-4 flex items-start gap-3 p-3.5 rounded-[10px] border cursor-pointer transition-colors ${
+                  deductObligations
+                    ? 'border-[var(--color-brand)] bg-[var(--color-brand-soft)]'
+                    : 'border-[var(--color-border)] bg-[var(--color-surface-alt)]'
+                }`}
+                onClick={() => setDeductObligations((d) => !d)}
+              >
+                <div
+                  className={`w-5 h-5 rounded-[5px] border-2 flex items-center justify-center shrink-0 mt-px transition-colors ${
+                    deductObligations
+                      ? 'bg-[var(--color-brand)] border-[var(--color-brand)]'
+                      : 'border-[var(--color-border)]'
+                  }`}
+                >
+                  {deductObligations && <Check size={12} strokeWidth={2.5} className="text-white" />}
+                </div>
+                <div>
+                  <div className="text-[13px] font-semibold">
+                    ¿Querés descontar tus deudas y/o abonar a capital de préstamos activos del monto de este préstamo?
+                  </div>
+                  <div className="text-[12px] text-[var(--color-text-muted)] mt-0.5">
+                    Permite saldar tus deudas actuales de acciones, multas e intereses, o realizar abonos a capital a tus préstamos activos, descontándolo directamente del desembolso de esta solicitud.
+                  </div>
+                </div>
+              </div>
+            )}
           </Card>
+
+          {/* Desglose de deducciones si la opción está activa */}
+          {deductObligations && obligations && (
+            <Card padding="lg" className="flex flex-col gap-4">
+              <h3 className="text-[15px] font-semibold tracking-tight text-[var(--color-text)]">
+                Detalle de deudas a descontar
+              </h3>
+              
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* Tarjeta de Acciones vencidas */}
+                <div className="p-4 rounded-[10px] bg-[var(--color-surface-alt)] border border-[var(--color-border)] flex flex-col gap-1">
+                  <span className="text-[11px] font-semibold text-[var(--color-text-subtle)] uppercase tracking-wider">Acciones en mora</span>
+                  <span className="text-lg font-bold tabular text-[var(--color-text)]">
+                    {cop(obligations.sharesOwedAmount)}
+                  </span>
+                  <span className="text-[11px] text-[var(--color-text-muted)]">
+                    {obligations.sharesOwedCount > 0 ? `${obligations.sharesOwedCount} acción(es) pendiente(s)` : 'Al día'}
+                  </span>
+                </div>
+
+                {/* Tarjeta de Multas */}
+                <div className="p-4 rounded-[10px] bg-[var(--color-surface-alt)] border border-[var(--color-border)] flex flex-col gap-1">
+                  <span className="text-[11px] font-semibold text-[var(--color-text-subtle)] uppercase tracking-wider">Multas por mora</span>
+                  <span className="text-lg font-bold tabular text-[var(--color-text)]">
+                    {cop(obligations.finesOwedAmount)}
+                  </span>
+                  <span className="text-[11px] text-[var(--color-text-muted)]">
+                    {obligations.finesOwedAmount > 0 ? 'Faltas en el año' : 'Sin multas'}
+                  </span>
+                </div>
+
+                {/* Tarjeta de Intereses */}
+                <div className="p-4 rounded-[10px] bg-[var(--color-surface-alt)] border border-[var(--color-border)] flex flex-col gap-1">
+                  <span className="text-[11px] font-semibold text-[var(--color-text-subtle)] uppercase tracking-wider">Intereses de préstamos</span>
+                  <span className="text-lg font-bold tabular text-[var(--color-text)]">
+                    {cop(obligations.interestOwedAmount)}
+                  </span>
+                  <span className="text-[11px] text-[var(--color-text-muted)]">
+                    {obligations.interestOwedAmount > 0 ? 'Préstamos activos' : 'Al día'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Sección de Abonos a Capital */}
+              {obligations.activeLoansDetails.some(l => l.outstandingBalance > 0) && (
+                <div className="flex flex-col gap-3 mt-2 border-t border-[var(--color-border)] pt-4">
+                  <div>
+                    <h4 className="text-[13px] font-semibold text-[var(--color-text)]">
+                      Abonar a capital de préstamos activos
+                    </h4>
+                    <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
+                      Ingresá cuánto querés destinar al saldo de capital de cada préstamo activo.
+                    </p>
+                  </div>
+                  
+                  <div className="flex flex-col gap-3">
+                    {obligations.activeLoansDetails
+                      .filter(l => l.outstandingBalance > 0)
+                      .map((loan) => (
+                        <div key={loan.loanId} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-[9px] bg-[var(--color-surface)] border border-[var(--color-border)]">
+                          <div>
+                            <span className="text-[13px] font-semibold text-[var(--color-text)]">
+                              Préstamo #{loan.disbursementNumber || loan.loanId.slice(0, 8)}
+                            </span>
+                            <div className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
+                              Saldo capital: {cop(loan.outstandingBalance)}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[13px] text-[var(--color-text-subtle)] font-medium">$</span>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              placeholder="Ej. 100.000"
+                              value={
+                                capitalAbonos[loan.loanId] !== undefined
+                                  ? new Intl.NumberFormat('es-CO').format(capitalAbonos[loan.loanId])
+                                  : ''
+                              }
+                              onChange={(e) => {
+                                const digits = e.target.value.replace(/[^\d]/g, '');
+                                const numericValue = digits ? Number(digits) : 0;
+                                const validValue = Math.min(numericValue, loan.outstandingBalance);
+                                setCapitalAbonos((prev) => ({
+                                  ...prev,
+                                  [loan.loanId]: validValue,
+                                }));
+                              }}
+                              className="w-32 h-9 rounded-[8px] bg-[var(--color-surface-alt)] border border-[var(--color-border)] px-2.5 text-right text-[13px] font-semibold text-[var(--color-text)] focus:outline-none focus:border-[var(--color-brand)] tabular"
+                            />
+                            {capitalAbonos[loan.loanId] > 0 && (
+                              <button
+                                onClick={() => {
+                                  setCapitalAbonos((prev) => {
+                                    const copy = { ...prev };
+                                    delete copy[loan.loanId];
+                                    return copy;
+                                  });
+                                }}
+                                className="text-[var(--color-danger)] hover:opacity-75"
+                              >
+                                <X size={14} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+            </Card>
+          )}
 
           {/* Tabla del plan de pagos */}
           {plan.length > 0 && (
@@ -389,14 +662,32 @@ export default function NuevaSolicitudPage() {
                 value={paidUpfront ? 'Pagarás por adelantado' : `− ${cop(sharesAmount)}`}
                 tone={paidUpfront ? 'muted' : sharesAmount > 0 ? 'danger' : undefined}
               />
-              <Row label="Retención 4×1000" value={`− ${cop(fourPerThousand)}`} tone="danger" />
+
+              {deductObligations && (
+                <>
+                  {deductedShares > 0 && (
+                    <Row label="Acciones vencidas desc." value={`− ${cop(deductedShares)}`} tone="danger" />
+                  )}
+                  {deductedFines > 0 && (
+                    <Row label="Multas desc." value={`− ${cop(deductedFines)}`} tone="danger" />
+                  )}
+                  {deductedInterest > 0 && (
+                    <Row label="Intereses desc." value={`− ${cop(deductedInterest)}`} tone="danger" />
+                  )}
+                  {deductedCapital > 0 && (
+                    <Row label="Abonos a capital" value={`− ${cop(deductedCapital)}`} tone="danger" />
+                  )}
+                </>
+              )}
+
+              <Row label="Retención 4×1000" value={`− ${cop(finalFourPerThousand)}`} tone="danger" />
               <div className="h-px bg-[var(--color-border)] my-1" />
               <div className="flex items-end justify-between">
                 <span className="text-[12px] font-semibold text-[var(--color-text-muted)] tracking-wider uppercase">
                   Recibirás
                 </span>
                 <span className="text-[22px] font-semibold tracking-[-0.02em] tabular text-[var(--color-success)]">
-                  {requestedAmount > 0 ? cop(disbursedAmount) : '—'}
+                  {requestedAmount > 0 ? cop(netDisbursed) : '—'}
                 </span>
               </div>
               <p className="text-[11px] text-[var(--color-text-subtle)] leading-snug">
@@ -408,7 +699,7 @@ export default function NuevaSolicitudPage() {
               variant="primary"
               size="lg"
               className="w-full mt-5"
-              disabled={submitting || !!validationError || requestedAmount === 0}
+              disabled={!canSubmit}
               onClick={handleSubmit}
             >
               {submitting ? 'Enviando…' : (
