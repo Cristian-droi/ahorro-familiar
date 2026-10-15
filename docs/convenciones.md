@@ -48,7 +48,7 @@
 
 - El dominio devuelve `Result<T, ErrorDeDominio>` para los errores esperados (por ejemplo, "intereses pendientes", "sin caja suficiente"). No lanza excepciones para reglas de negocio.
 - Las excepciones se reservan para fallos inesperados: red, base de datos o bugs.
-- Los mensajes de error que ve el usuario van en **español claro, sin jerga**: "Primero debés pagar los intereses de este préstamo (20.000)".
+- Los mensajes de error que ve el usuario van en **español claro, sin jerga**: "Primero debes pagar los intereses de este préstamo (20.000)".
 - **Nunca** se traga un error con `console.error` y se sigue como si nada en una operación de dinero.
 
 ## 5. Testing (TDD estricto en el dominio)
