@@ -46,6 +46,6 @@ npm run gen:types  # regenerar tipos de Supabase
 
 ## Estado actual (2026-10-14)
 
-- Rama de trabajo: `wip/respaldo-2026-10`, todavía sin merge a `master`.
-- La documentación está lista. Falta el roadmap y empezar la migración incremental (arquitectura.md, sección 8).
+- `master` tiene todo el trabajo y la documentación (PR #1, 2026-10-14). El trabajo nuevo va en ramas `tipo/descripcion` con PR.
+- La semana S0 del [roadmap](docs/roadmap.md) está completa. Sigue la S1 (cimientos).
 - La estructura `src/modules/` todavía **no existe**: la lógica actual está en `src/lib/`.
