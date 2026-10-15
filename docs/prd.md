@@ -127,3 +127,4 @@ Reemplazar el Google Sheet por una aplicación web que:
 
 ## 8. Preguntas abiertas
 1. 🟡 Los dos temas del gerente, que están en `reglas-negocio.md`, sección 12.
+2. 🟡 Plan de producción (Supabase Pro o plan gratuito con backups propios) y quién lo paga. Ver `arquitectura.md`, sección 9.
