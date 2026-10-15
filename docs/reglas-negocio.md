@@ -80,6 +80,12 @@
 - **RN-4.7** Se aprueba con **⌊n/2⌋ + 1 votos A FAVOR**. Se cuentan votos a favor, no participación. Quien no vota acepta el resultado.
 - **RN-4.8** **Rechazo automático:** se rechaza apenas `votos_en_contra > n − (⌊n/2⌋ + 1)`, es decir, cuando ya es imposible aprobar. Queda una **observación registrada**, por ejemplo: *"Rechazado por votación: 10 en contra de 19 votantes"*.
 - **RN-4.9** No se desembolsa sin aprobación ni sin caja suficiente.
+- **RN-4.9b** ✅ **El voto es secreto.** Nadie ve quién votó qué, tampoco el gerente ni el tesorero. Cada votante ve su propio voto. Todos ven el **progreso** en totales:
+  - Votos a favor y en contra.
+  - Cuántos ya votaron, sobre el total de votantes.
+  - **No** se muestra la lista de quiénes ya votaron.
+
+**Ejemplo:** *"A favor 7 · En contra 3 · Votaron 10 de 19"*.
 
 **Ejemplo:** hay 20 accionistas, así que n = 19 votantes.
 - Se necesitan **10 votos a favor**.
