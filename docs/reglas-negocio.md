@@ -240,6 +240,10 @@ En diciembre las utilidades llegan a 10.000.000, pero el gasto **sigue siendo 20
 - **RN-9.1** Toda acción del administrador que cambie dinero, reglas o decisiones queda registrada. Esto incluye aprobaciones, rechazos, excepciones, cambios de parámetros, anulaciones, desbloqueos, gastos puntuales y liquidación.
 - **RN-9.2** Cada registro guarda: **quién, cuándo, qué, valor anterior, valor nuevo y motivo**.
 - **RN-9.3** El registro de auditoría es **solo de agregar**: nunca se edita ni se borra.
+- **RN-9.4** ✅ **Conflicto de interés.** Cuando un administrador actúa sobre sus **propios** movimientos:
+  - **Préstamos** (revisión y aprobación) **y desembolsos:** exigen **doble firma**, es decir, la aprobación del gerente.
+  - **Recibos** (acciones, multas, pagos): el administrador puede aprobarlos, pero quedan **marcados** en la auditoría y el gerente **recibe un aviso**.
+  - Todo queda en la auditoría de todas formas.
 
 ---
 
