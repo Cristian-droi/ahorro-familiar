@@ -70,6 +70,7 @@
 - Todo cambio de esquema es una **migración versionada** en `supabase/migrations/`, con el formato `YYYYMMDDHHMMSS_descripcion.sql` (14 dígitos).
 - **Nunca** se cambia el esquema a mano desde el panel de Supabase.
 - Toda tabla nueva tiene **RLS activado** y políticas explícitas en la misma migración.
+- Toda tabla nueva lleva sus **`grant` explícitos** en la misma migración: las tablas y secuencias nacen sin privilegios para `anon` ni `authenticated` (migración `20260809010000_revoke_default_privileges.sql`). Las funciones nuevas nacen sin `EXECUTE` para `anon`: si una RPC debe ser pública, se le da el `grant` a propósito.
 - Las migraciones ya aplicadas **no se editan**. Se corrigen con una migración nueva.
 - Cada migración se prueba primero en Supabase local.
 - Después de migrar, se regeneran los tipos: `npm run gen:types`.
