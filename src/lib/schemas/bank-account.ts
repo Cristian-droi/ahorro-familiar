@@ -17,7 +17,18 @@ export const bankAccountRow = z.object({
   updated_at: z.string(),
 }) satisfies z.ZodType<BankAccount>;
 
-// Throws if any row violates the expected shape (e.g. an unknown account type).
+// Drops (and logs) any row that violates the expected shape, so one bad row
+// does not hide the valid accounts from the list.
 export function parseBankAccounts(rows: unknown[] | null): BankAccount[] {
-  return z.array(bankAccountRow).parse(rows ?? []);
+  const accounts: BankAccount[] = [];
+  for (const row of rows ?? []) {
+    const result = bankAccountRow.safeParse(row);
+    if (result.success) {
+      accounts.push(result.data);
+    } else {
+      const id = (row as { id?: unknown } | null)?.id ?? 'unknown';
+      console.error(`Invalid bank_accounts row dropped (id: ${String(id)})`, result.error.issues);
+    }
+  }
+  return accounts;
 }
