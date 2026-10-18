@@ -1,0 +1,7 @@
+# Gentleman Guardian Angel: review on every commit (defense #6 in docs/arquitectura.md)
+PROVIDER="claude"
+FILE_PATTERNS="*.ts,*.tsx,*.js,*.mjs,*.sql"
+EXCLUDE_PATTERNS="*.test.*,*.spec.*,*.d.ts,src/types/database.ts,node_modules/*,.next/*"
+RULES_FILE="REVIEW.md"
+STRICT_MODE="true"
+TIMEOUT="300"
