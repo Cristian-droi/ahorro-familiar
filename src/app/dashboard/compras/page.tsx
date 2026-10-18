@@ -39,6 +39,7 @@ import {
 import { getProfile } from '@/lib/data/profiles';
 import { listReceiptsForUser } from '@/lib/data/receipts';
 import { BankAccount } from '@/types/entities';
+import { parseBankAccounts } from '@/lib/schemas/bank-account';
 import {
   getMyCapitalizationState,
   type MyCapState,
@@ -364,7 +365,7 @@ export default function ComprasPage() {
           .order('bank_name', { ascending: true });
         if (!cancelled) {
           if (error) throw error;
-          setBankAccounts(data || []);
+          setBankAccounts(parseBankAccounts(data));
           if (data && data.length > 0) {
             setSelectedBankAccountId(data[0].id);
           }
@@ -670,7 +671,7 @@ export default function ComprasPage() {
     }
     // Pagos de préstamo: validar capital ≤ saldo.
     for (const p of loanPaymentBreakdown) {
-      const pName = `Préstamo #${p.loan.loan_number}${p.loan.disbursement_number ? ` (${p.loan.disbursement_number})` : ''}`;
+      const pName = `Préstamo #${p.loan.loan_number ?? '—'}${p.loan.disbursement_number ? ` (${p.loan.disbursement_number})` : ''}`;
       if (p.capital > p.loan.outstanding_capital) {
         return `El abono a capital del ${pName} excede el saldo (${cop(p.loan.outstanding_capital)}).`;
       }
@@ -1904,7 +1905,7 @@ function LoanPaymentsSection({
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-[13px] font-semibold tracking-tight">
-                      Préstamo #{debt.loan_number}{debt.disbursement_number ? ` (${debt.disbursement_number})` : ''}
+                      Préstamo #{debt.loan_number ?? '—'}{debt.disbursement_number ? ` (${debt.disbursement_number})` : ''}
                     </span>
                     <span className="text-[11px] text-[var(--color-text-subtle)]">
                       Pedido {cop(debt.requested_amount)}

@@ -43,8 +43,7 @@ import {
 import { exportToExcel, exportToPdf, type ExportSection } from '@/lib/exports';
 import { getProfileRole, listProfilesWithNames } from '@/lib/data/profiles';
 import { listAllReceiptsWithItems } from '@/lib/data/receipts';
-import { getCashBalance, getLoansWithDisbursement } from '@/lib/data/loans';
-import type { Loan } from '@/types/entities';
+import { getCashBalance, getLoansWithDisbursement, type LoanWithBorrowerName } from '@/lib/data/loans';
 import {
   cop,
   conceptLabel,
@@ -79,7 +78,7 @@ type StatusFilter = 'all' | ReceiptStatus;
 // distinguir el tipo de movimiento.
 type Movement =
   | { kind: 'receipt'; id: string; dateIso: string; receipt: ReceiptRow }
-  | { kind: 'disbursement'; id: string; dateIso: string; loan: Loan };
+  | { kind: 'disbursement'; id: string; dateIso: string; loan: LoanWithBorrowerName };
 
 const STATUS_CHIPS: { value: StatusFilter; label: string }[] = [
   { value: 'pending', label: 'Pendientes' },
@@ -109,7 +108,7 @@ export default function LibroCajaPage() {
   const [receipts, setReceipts] = useState<ReceiptRow[]>([]);
   const [profiles, setProfiles] = useState<ProfileLite[]>([]);
   const [cashBalance, setCashBalance] = useState<number | null>(null);
-  const [disbursements, setDisbursements] = useState<Loan[]>([]);
+  const [disbursements, setDisbursements] = useState<LoanWithBorrowerName[]>([]);
 
   // Filtros
   // Default: 'all' — el admin pidió ver todos los movimientos al entrar.
@@ -147,7 +146,7 @@ export default function LibroCajaPage() {
         listAllReceiptsWithItems(supabase),
         listProfilesWithNames(supabase),
         getCashBalance(supabase).catch(() => null),
-        getLoansWithDisbursement(supabase).catch(() => [] as Loan[]),
+        getLoansWithDisbursement(supabase).catch(() => [] as LoanWithBorrowerName[]),
       ]);
 
       const byId = new Map(rawProfiles.map((p) => [p.id, p]));
@@ -287,7 +286,7 @@ export default function LibroCajaPage() {
       }
       if (search.trim()) {
         const q = search.trim().toLowerCase();
-        const borrower = (d as Record<string, unknown>).borrower as Record<string, string> | null;
+        const borrower = d.borrower;
         const name = borrower ? `${borrower.first_name} ${borrower.last_name}`.toLowerCase() : '';
         const num = (d.disbursement_number ?? '').toLowerCase();
         if (!name.includes(q) && !num.includes(q)) return false;
@@ -393,9 +392,9 @@ export default function LibroCajaPage() {
     }
   };
 
-  const toggleSelectAllPending = (pendingItems: MovementItem[]) => {
+  const toggleSelectAllPending = (pendingItems: Movement[]) => {
     const pendingReceiptIds = pendingItems
-      .filter((m): m is MovementItem & { kind: 'receipt' } => m.kind === 'receipt' && m.receipt.status === 'pending')
+      .filter((m): m is Movement & { kind: 'receipt' } => m.kind === 'receipt' && m.receipt.status === 'pending')
       .map(m => m.receipt.id);
 
     if (selectedIds.length > 0 && selectedIds.length === pendingReceiptIds.length) {
@@ -819,7 +818,7 @@ export default function LibroCajaPage() {
                 checked={
                   selectedIds.length > 0 &&
                   selectedIds.length ===
-                    filteredMovements.filter((m): m is MovementItem & { kind: 'receipt' } => m.kind === 'receipt' && m.receipt.status === 'pending').length
+                    filteredMovements.filter((m): m is Movement & { kind: 'receipt' } => m.kind === 'receipt' && m.receipt.status === 'pending').length
                 }
                 onChange={() =>
                   toggleSelectAllPending(filteredMovements)
@@ -867,7 +866,7 @@ export default function LibroCajaPage() {
             // ==== Fila de desembolso (salida de caja) ====
             if (m.kind === 'disbursement') {
               const d = m.loan;
-              const borrower = (d as Record<string, unknown>).borrower as Record<string, string> | null;
+              const borrower = d.borrower;
               const borrowerName = borrower
                 ? `${borrower.first_name} ${borrower.last_name}`.trim()
                 : 'Accionista';

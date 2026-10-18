@@ -319,7 +319,7 @@ export default async function AccionistaDashboardPage() {
             </div>
             <div className="flex-1 min-w-0 text-left">
               <div className="text-[14px] font-bold tracking-tight text-[var(--color-text)]">
-                Próximo pago de intereses (Préstamo #{loansWithInterest[0].loan_number}{loansWithInterest[0].disbursement_number ? ` · ${loansWithInterest[0].disbursement_number}` : ''})
+                Próximo pago de intereses (Préstamo #{loansWithInterest[0].loan_number ?? '—'}{loansWithInterest[0].disbursement_number ? ` · ${loansWithInterest[0].disbursement_number}` : ''})
               </div>
               <p className="text-[12px] text-[var(--color-text-subtle)] mt-1">
                 Tenés intereses pendientes de{' '}
@@ -380,7 +380,7 @@ export default async function AccionistaDashboardPage() {
               <div key={l.loan_id} className="flex items-center justify-between px-5 py-3.5 gap-3">
                 <div className="flex flex-col min-w-0 text-left">
                   <span className="text-[13px] font-semibold tracking-tight text-[var(--color-text)]">
-                    Préstamo #{l.loan_number}{l.disbursement_number ? ` (${l.disbursement_number})` : ''}
+                    Préstamo #{l.loan_number ?? '—'}{l.disbursement_number ? ` (${l.disbursement_number})` : ''}
                   </span>
                   <span className="text-[11px] text-[var(--color-text-subtle)] mt-0.5">
                     Vence el{' '}

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { calcDisbursedAmount, buildPaymentPlan, calcLoanDeductionsAndNet } from '@/lib/loans';
-import { disburseSchema } from '@/lib/schemas/loan';
+import { disburseSchema, deductionsDetailSchema } from '@/lib/schemas/loan';
 import { getCashBalance } from '@/lib/data/loans';
 import type { Database } from '@/types/database';
 
@@ -55,6 +55,17 @@ export async function POST(
     if (loan.status !== 'pending_disbursement') {
       return NextResponse.json({ error: `El préstamo no está listo para desembolso (estado: ${loan.status})` }, { status: 409 });
     }
+
+    // Validate the stored deductions before touching any money, so a malformed
+    // detail aborts the disbursement instead of leaving it half-applied.
+    const parsedDeductions = deductionsDetailSchema.safeParse(
+      loan.deduct_obligations ? (loan.deductions_detail ?? []) : [],
+    );
+    if (!parsedDeductions.success) {
+      console.error('disburse: deductions_detail inválido', parsedDeductions.error.issues);
+      return NextResponse.json({ error: 'El detalle de deducciones del préstamo es inválido' }, { status: 422 });
+    }
+    const deductionsDetail = parsedDeductions.data;
 
     // Cargar configuración del gravamen 4x1000 desde system_settings
     const { data: fptSetting } = await admin
@@ -240,15 +251,15 @@ export async function POST(
         }
 
         // B. Deducciones de obligaciones y capital
-        if (loan.deduct_obligations && Array.isArray(loan.deductions_detail)) {
-          for (const detail of loan.deductions_detail) {
+        if (loan.deduct_obligations) {
+          for (const detail of deductionsDetail) {
             itemsToInsert.push({
               receipt_id: createdReceipt.id,
               concept: detail.concept,
               target_month: detail.target_month,
               share_count: detail.share_count ?? null,
               unit_value: detail.unit_value ?? null,
-              amount: Number(detail.amount),
+              amount: detail.amount,
               loan_id: detail.loan_id ?? null,
               auto_generated: detail.concept === 'multa_acciones',
             });
@@ -275,7 +286,9 @@ export async function POST(
               console.error('disburse: no se pudo aprobar el recibo de deducciones', approveErr);
             } else {
               // Actualizar last_interest_payment_date de los préstamos cuyos intereses fueron descontados
-              const interestPaymentDetails = itemsToInsert.filter(it => it.concept === 'pago_intereses' && it.loan_id);
+              const interestPaymentDetails = itemsToInsert.filter(
+                (it): it is typeof it & { loan_id: string } => it.concept === 'pago_intereses' && !!it.loan_id,
+              );
               const firstOfMonth = new Date(disbursedAt.getFullYear(), disbursedAt.getMonth(), 1)
                 .toISOString()
                 .split('T')[0];

@@ -45,6 +45,7 @@ import {
 } from '@/lib/data/capitalization';
 import { showToast } from '@/components/ui/Toast';
 import { BankAccount } from '@/types/entities';
+import { parseBankAccounts } from '@/lib/schemas/bank-account';
 
 const cop = (n: number) => '$ ' + new Intl.NumberFormat('es-CO').format(n);
 
@@ -151,7 +152,7 @@ export default function AjustesPage() {
         .select('*')
         .order('created_at', { ascending: false });
       if (error) throw error;
-      setBankAccounts(data || []);
+      setBankAccounts(parseBankAccounts(data));
     } catch (err) {
       console.error('Error loading bank accounts:', err);
       showToast('error', 'No se pudieron cargar las cuentas de banco');

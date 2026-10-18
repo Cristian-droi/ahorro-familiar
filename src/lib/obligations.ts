@@ -199,7 +199,7 @@ export async function checkUserObligations(
   let interestOwedAmount = 0;
   const activeLoansDetails: Array<{
     loanId: string;
-    loanNumber: number;
+    loanNumber: number | null;
     disbursementNumber: string | null;
     outstandingBalance: number;
     interestOwed: number;

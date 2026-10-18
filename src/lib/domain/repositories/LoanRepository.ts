@@ -26,6 +26,7 @@ import {
   type MonthlyUtility,
   type PendingLoanSharePurchase,
   type ActiveLoanDebt,
+  type LoanWithBorrowerName,
   type LoanWithBorrower,
   type VoteHistoryItem,
   type LibroAccionistaEntry,
@@ -110,7 +111,7 @@ export class LoanRepository {
     return getMyVotingHistory(this.supabase, voterId);
   }
 
-  async getLoansWithDisbursement(): Promise<Loan[]> {
+  async getLoansWithDisbursement(): Promise<LoanWithBorrowerName[]> {
     return getLoansWithDisbursement(this.supabase);
   }
 
@@ -140,8 +141,8 @@ export class LoanRepository {
     for (const v of votes ?? []) {
       const s = map.get(v.loan_id);
       if (!s) continue;
-      if (v.vote === 'approve') s.approved += 1;
-      else if (v.vote === 'reject') s.rejected += 1;
+      if (v.vote === 'approved') s.approved += 1;
+      else if (v.vote === 'rejected') s.rejected += 1;
     }
     return map;
   }

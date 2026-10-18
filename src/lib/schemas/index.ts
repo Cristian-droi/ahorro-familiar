@@ -3,3 +3,4 @@ export * from './membership-request';
 export * from './profile';
 export * from './receipt';
 export * from './loan';
+export * from './bank-account';
