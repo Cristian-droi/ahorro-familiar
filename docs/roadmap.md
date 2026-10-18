@@ -44,6 +44,7 @@
 - [ ] `shared/domain`: `fechas.ts` (Bogotá) y `Result`.
 - [ ] Estructura `src/modules/` y regla de ESLint de fronteras entre capas.
 - [ ] Eliminar las credenciales fijas de `scripts/seed.mjs` y sacar `supabase/.temp` de Git.
+- [ ] **GGA (revisión automática en cada commit):** `gga install` en el repositorio y un `AGENTS.md` con las reglas clave de `convenciones.md` (dinero solo en el dominio, dominio puro, TDD, fechas en Bogotá, sin secretos). Es la defensa n.º 6 de `arquitectura.md`, ahora automatizada.
 
 ### S2 · Dominio I (26 oct – 1 nov)
 - [ ] `acciones/domain`: límites y multas (RN-3).
@@ -124,5 +125,5 @@ Se sacaron del plan hasta la demo por falta de capacidad. Ninguna es necesaria p
 
 | Semana | Horas planificadas | Horas reales | Estado | Notas |
 |---|---|---|---|---|
-| S0 | 10 | | ✅ | Terminada antes de lo previsto (14–15 oct) |
+| S0 | 10 | 6 | ✅ | Terminada antes de lo previsto (14–15 oct), con 4 h menos de lo estimado |
 | S1 | 8 | | ⏳ | |
