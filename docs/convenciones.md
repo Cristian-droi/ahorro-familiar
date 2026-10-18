@@ -118,6 +118,6 @@
 
 ## 10. Seguridad
 
-- Los secretos solo van en variables de entorno, nunca en el código ni en los scripts (`scripts/seed.mjs` tiene credenciales fijas que hay que eliminar).
+- Los secretos solo van en variables de entorno, nunca en el código ni en los scripts. Los scripts reciben los datos por argumentos o por `.env.local` (ver `scripts/seed-admin.mjs`).
 - La autorización siempre se valida en el servidor. Ocultar un botón **no** es seguridad.
 - Datos reales del Sheet: **solo lectura**. Desarrollo y tests usan datos ficticios.
