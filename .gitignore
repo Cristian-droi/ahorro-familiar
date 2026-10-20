@@ -42,3 +42,6 @@ next-env.d.ts
 
 # editor
 .claude/
+
+# gentle-ai skill registry (generated, machine-specific)
+.atl/
