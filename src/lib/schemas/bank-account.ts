@@ -32,3 +32,9 @@ export function parseBankAccounts(rows: unknown[] | null): BankAccount[] {
   }
   return accounts;
 }
+
+// Default selection must come from the parsed list, so it never points to a
+// dropped row the user cannot see.
+export function pickDefaultBankAccountId(accounts: BankAccount[]): string | null {
+  return accounts[0]?.id ?? null;
+}

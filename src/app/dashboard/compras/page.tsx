@@ -39,7 +39,7 @@ import {
 import { getProfile } from '@/lib/data/profiles';
 import { listReceiptsForUser } from '@/lib/data/receipts';
 import { BankAccount } from '@/types/entities';
-import { parseBankAccounts } from '@/lib/schemas/bank-account';
+import { parseBankAccounts, pickDefaultBankAccountId } from '@/lib/schemas/bank-account';
 import {
   getMyCapitalizationState,
   type MyCapState,
@@ -365,9 +365,11 @@ export default function ComprasPage() {
           .order('bank_name', { ascending: true });
         if (!cancelled) {
           if (error) throw error;
-          setBankAccounts(parseBankAccounts(data));
-          if (data && data.length > 0) {
-            setSelectedBankAccountId(data[0].id);
+          const accounts = parseBankAccounts(data);
+          setBankAccounts(accounts);
+          const defaultId = pickDefaultBankAccountId(accounts);
+          if (defaultId) {
+            setSelectedBankAccountId(defaultId);
           }
         }
       } catch (err) {

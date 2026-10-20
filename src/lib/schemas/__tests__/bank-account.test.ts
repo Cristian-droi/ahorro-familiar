@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { parseBankAccounts } from '@/lib/schemas/bank-account';
+import { parseBankAccounts, pickDefaultBankAccountId } from '@/lib/schemas/bank-account';
 
 const row = {
   id: 'a1',
@@ -41,6 +41,20 @@ describe('parseBankAccounts', () => {
     expect(errorSpy).toHaveBeenCalledTimes(2);
     expect(errorSpy.mock.calls[0][0]).toContain('bad1');
     expect(errorSpy.mock.calls[1][0]).toContain('unknown');
+    errorSpy.mockRestore();
+  });
+});
+
+describe('pickDefaultBankAccountId', () => {
+  it('returns null when there are no accounts', () => {
+    expect(pickDefaultBankAccountId([])).toBeNull();
+  });
+
+  it('picks the first account shown, never a dropped invalid row', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const shown = parseBankAccounts([{ ...row, id: 'bad1', account_type: 'nomina' }, { ...row, id: 'a2' }]);
+
+    expect(pickDefaultBankAccountId(shown)).toBe('a2');
     errorSpy.mockRestore();
   });
 });
