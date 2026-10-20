@@ -69,6 +69,7 @@
 - [ ] RLS: escrituras de dinero solo desde el servidor. Corregir `loans_update_own_draft`.
 - [ ] Restricción en la base: saldo e intereses de préstamos nunca negativos (RN-4.29).
 - [ ] `audit_log` inmutable, escrita por los casos de uso.
+- [ ] Subir a **error** la regla de ESLint del cliente admin fuera de `infra` (hoy es warning por el código legado).
 
 ### S5 · Préstamos (16–22 nov)
 - [ ] RPC `desembolsar_prestamo` atómica, con `cash_outflows` (CE) y bloqueo de acciones por adelantado.
@@ -89,6 +90,7 @@
 - [ ] Letra base de 16px y revisión de las pantallas.
 - [ ] Las 6 pantallas clave del design brief, revisadas en un celular real.
 - [ ] Datos ficticios para la demo.
+- [ ] En `ajustes`, mostrar las cuentas bancarias inválidas marcadas como tales, para que el tesorero pueda corregirlas o desactivarlas. Hoy se descartan en silencio. En `compras` siguen ocultas.
 
 ### S9 · Colchón y ensayo (14–19 dic)
 - [ ] Corrección de bugs. **Congelamiento del código el 18 de diciembre.**
