@@ -60,13 +60,14 @@
 
 ### S3 · Dominio II (2–8 nov)
 - [ ] Votación: mayoría sin el solicitante y rechazo automático (RN-4.6 a 4.8). Progreso con voto secreto (RN-4.9b).
-- [ ] Aplicación de pagos: intereses primero y abonos parciales (RN-4.24 y 4.25).
+- [ ] Aplicación de pagos: intereses primero y abonos parciales (RN-4.24 y 4.25). El abono a capital no supera el saldo y el excedente va a otro préstamo (RN-4.29; RN-4.29b 🟡).
 - [ ] Mover `src/lib/loans.ts`, `fines.ts` y `obligations.ts` al dominio y actualizar los callers.
 - [ ] Periodos y valor de acción por periodo (RN-2.2).
 
 ### S4 · Seguridad (9–15 nov)
 - [ ] `profiles.admin_role` (`gerente` o `tesorero`) y ajuste de `src/proxy.ts` y del menú en dos secciones.
 - [ ] RLS: escrituras de dinero solo desde el servidor. Corregir `loans_update_own_draft`.
+- [ ] Restricción en la base: saldo e intereses de préstamos nunca negativos (RN-4.29).
 - [ ] `audit_log` inmutable, escrita por los casos de uso.
 
 ### S5 · Préstamos (16–22 nov)
