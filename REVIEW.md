@@ -52,5 +52,6 @@ REJECT if:
 - Empty catch blocks.
 
 PREFER:
-- English for code identifiers in new modules; Spanish user-facing messages, clear and without jargon.
+- Domain names in Spanish (modules, use cases, domain functions and types: `calcularMulta`, `type Prestamo`); generic technical terms in English (`Result`, `Repository`, `handler`). See `docs/convenciones.md`, section 1.
+- User-facing messages in clear Spanish, without jargon.
 - Small pure functions with a verb name (`calcular…`, `validar…`, `aplicar…`).
