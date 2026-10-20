@@ -38,13 +38,13 @@
 ## Detalle por semana
 
 ### S1 · Cimientos (19–25 oct)
-- [ ] Supabase local (`supabase start`) con **todas** las migraciones aplicadas desde cero.
-- [ ] Migración de `system_settings` con RLS.
-- [ ] Revocar los *default privileges* amplios y eliminar `_test_anon_insert`.
-- [ ] `shared/domain`: `fechas.ts` (Bogotá) y `Result`.
-- [ ] Estructura `src/modules/` y regla de ESLint de fronteras entre capas.
-- [ ] Eliminar las credenciales fijas de `scripts/seed.mjs` y sacar `supabase/.temp` de Git.
-- [ ] **GGA (revisión automática en cada commit):** `gga install` en el repositorio y un `AGENTS.md` con las reglas clave de `convenciones.md` (dinero solo en el dominio, dominio puro, TDD, fechas en Bogotá, sin secretos). Es la defensa n.º 6 de `arquitectura.md`, ahora automatizada.
+- [x] Supabase local (`supabase start`) con **todas** las migraciones aplicadas desde cero.
+- [x] Migración de `system_settings` con RLS.
+- [x] Revocar los *default privileges* amplios y eliminar `_test_anon_insert`.
+- [x] `shared/domain`: `fechas.ts` (Bogotá) y `Result`.
+- [x] Estructura `src/modules/` y regla de ESLint de fronteras entre capas.
+- [x] Eliminar las credenciales fijas de `scripts/seed.mjs` y sacar `supabase/.temp` de Git.
+- [x] **GGA (revisión automática en cada commit):** `gga install` en el repositorio y un archivo de reglas con las reglas clave de `convenciones.md` (dinero solo en el dominio, dominio puro, TDD, fechas en Bogotá, sin secretos). Es la defensa n.º 6 de `arquitectura.md`, ahora automatizada. *(Las reglas quedaron en `REVIEW.md` para no mezclarlas con `AGENTS.md`.)*
 
 ### S2 · Dominio I (26 oct – 1 nov)
 - [ ] `acciones/domain`: límites y multas (RN-3).
@@ -129,4 +129,4 @@ Se sacaron del plan hasta la demo por falta de capacidad. Ninguna es necesaria p
 | Semana | Horas planificadas | Horas reales | Estado | Notas |
 |---|---|---|---|---|
 | S0 | 10 | 6 | ✅ | Terminada antes de lo previsto (14–15 oct), con 4 h menos de lo estimado |
-| S1 | 8 | | ⏳ | |
+| S1 | 8 | | 🔄 | Los 7 ítems están hechos (18–19 oct). Se cierra al mergear el PR. También se arreglaron 34 errores de `tsc` y se agregó RN-4.29 |
