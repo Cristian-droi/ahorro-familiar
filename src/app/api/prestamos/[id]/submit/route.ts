@@ -4,7 +4,9 @@ import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { checkUserObligations } from '@/lib/obligations';
 import { calcLoanDeductionsAndNet } from '@/lib/loans';
 import { getBogotaCurrentMonth } from '@/lib/fines';
-import { DeductionDetail } from '@/types/entities';
+import { deductionsDetailSchema } from '@/lib/schemas/loan';
+import type { DeductionDetail } from '@/types/entities';
+import type { Json } from '@/types/database';
 
 // POST /api/prestamos/[id]/submit — accionista envía el préstamo para revisión del admin.
 export async function POST(
@@ -23,7 +25,7 @@ export async function POST(
 
     const { data: loan, error: fetchError } = await admin
       .from('loans')
-      .select('id, user_id, status, payment_plan_months, requested_amount, loan_shares_amount, loan_shares_paid_upfront, deduct_obligations, deducted_capital_amount, deductions_detail')
+      .select('id, user_id, status, payment_plan_months, requested_amount, loan_shares_amount, loan_shares_paid_upfront, deduct_obligations, deducted_capital_amount, deductions_detail, four_per_thousand')
       .eq('id', id)
       .maybeSingle();
 
@@ -64,7 +66,7 @@ export async function POST(
     let deductedInterest = 0;
     let deductedCapital = 0;
     let finalFourPerThousand = Number(loan.four_per_thousand || 0);
-    let finalDeductionsDetail = loan.deductions_detail || [];
+    let finalDeductionsDetail: Json = loan.deductions_detail || [];
 
     if (loan.deduct_obligations) {
       deductedShares = obligations.sharesOwedAmount;
@@ -73,7 +75,12 @@ export async function POST(
       deductedCapital = Number(loan.deducted_capital_amount || 0);
 
       const currentMonthStr = getBogotaCurrentMonth();
-      const deductionsDetailList = (loan.deductions_detail as unknown as DeductionDetail[] | null) || [];
+      const parsedDetail = deductionsDetailSchema.safeParse(loan.deductions_detail ?? []);
+      if (!parsedDetail.success) {
+        console.error('submit: deductions_detail inválido', parsedDetail.error.issues);
+        return NextResponse.json({ error: 'El detalle de deducciones del préstamo es inválido' }, { status: 422 });
+      }
+      const deductionsDetailList = parsedDetail.data;
       const capitalDetails = deductionsDetailList.filter(
         (d) => d.concept === 'pago_capital'
       );
@@ -121,7 +128,7 @@ export async function POST(
       finalDeductionsDetail = newDeductionsDetail;
 
       // Validar abonos a capital contra saldos de préstamos activos
-      for (const detail of finalDeductionsDetail) {
+      for (const detail of newDeductionsDetail) {
         if (detail.concept === 'pago_capital') {
           const activeLoan = obligations.activeLoansDetails.find(l => l.loanId === detail.loan_id);
           if (!activeLoan) {

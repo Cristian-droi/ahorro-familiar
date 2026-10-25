@@ -128,7 +128,7 @@ export async function POST(
 
     // Post-aprobación: actualizar préstamos afectados
     for (const item of loanItems) {
-      if (item.concept === 'pago_intereses') {
+      if (item.concept === 'pago_intereses' && item.loan_id) {
         // Marcar hasta qué fecha están pagados los intereses (primer día del mes actual)
         const today = new Date();
         const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1)

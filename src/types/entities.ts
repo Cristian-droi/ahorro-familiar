@@ -144,7 +144,8 @@ export interface Loan {
   deductions_detail?: DeductionDetail[] | null;
 }
 
-export interface DeductionDetail {
+// Type alias (not interface) so it stays assignable to the `Json` column type.
+export type DeductionDetail = {
   concept: 'acciones' | 'multa_acciones' | 'pago_intereses' | 'pago_capital';
   target_month: string;
   share_count?: number | null;
@@ -153,7 +154,7 @@ export interface DeductionDetail {
   loan_id?: string | null;
   loan_number?: number | null;
   disbursementNumber?: string | null;
-}
+};
 
 export interface LoanPaymentPlanItem {
   id: string;

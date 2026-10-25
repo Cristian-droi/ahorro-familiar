@@ -38,12 +38,13 @@
 ## Detalle por semana
 
 ### S1 · Cimientos (19–25 oct)
-- [ ] Supabase local (`supabase start`) con **todas** las migraciones aplicadas desde cero.
-- [ ] Migración de `system_settings` con RLS.
-- [ ] Revocar los *default privileges* amplios y eliminar `_test_anon_insert`.
-- [ ] `shared/domain`: `fechas.ts` (Bogotá) y `Result`.
-- [ ] Estructura `src/modules/` y regla de ESLint de fronteras entre capas.
-- [ ] Eliminar las credenciales fijas de `scripts/seed.mjs` y sacar `supabase/.temp` de Git.
+- [x] Supabase local (`supabase start`) con **todas** las migraciones aplicadas desde cero.
+- [x] Migración de `system_settings` con RLS.
+- [x] Revocar los *default privileges* amplios y eliminar `_test_anon_insert`.
+- [x] `shared/domain`: `fechas.ts` (Bogotá) y `Result`.
+- [x] Estructura `src/modules/` y regla de ESLint de fronteras entre capas.
+- [x] Eliminar las credenciales fijas de `scripts/seed.mjs` y sacar `supabase/.temp` de Git.
+- [x] **GGA (revisión automática en cada commit):** `gga install` en el repositorio y un archivo de reglas con las reglas clave de `convenciones.md` (dinero solo en el dominio, dominio puro, TDD, fechas en Bogotá, sin secretos). Es la defensa n.º 6 de `arquitectura.md`, ahora automatizada. *(Las reglas quedaron en `REVIEW.md` para no mezclarlas con `AGENTS.md`.)*
 
 ### S2 · Dominio I (26 oct – 1 nov)
 - [ ] `acciones/domain`: límites y multas (RN-3).
@@ -59,14 +60,16 @@
 
 ### S3 · Dominio II (2–8 nov)
 - [ ] Votación: mayoría sin el solicitante y rechazo automático (RN-4.6 a 4.8). Progreso con voto secreto (RN-4.9b).
-- [ ] Aplicación de pagos: intereses primero y abonos parciales (RN-4.24 y 4.25).
+- [ ] Aplicación de pagos: intereses primero y abonos parciales (RN-4.24 y 4.25). El abono a capital no supera el saldo y el excedente va a otro préstamo (RN-4.29; RN-4.29b 🟡).
 - [ ] Mover `src/lib/loans.ts`, `fines.ts` y `obligations.ts` al dominio y actualizar los callers.
 - [ ] Periodos y valor de acción por periodo (RN-2.2).
 
 ### S4 · Seguridad (9–15 nov)
 - [ ] `profiles.admin_role` (`gerente` o `tesorero`) y ajuste de `src/proxy.ts` y del menú en dos secciones.
 - [ ] RLS: escrituras de dinero solo desde el servidor. Corregir `loans_update_own_draft`.
+- [ ] Restricción en la base: saldo e intereses de préstamos nunca negativos (RN-4.29).
 - [ ] `audit_log` inmutable, escrita por los casos de uso.
+- [ ] Subir a **error** la regla de ESLint del cliente admin fuera de `infra` (hoy es warning por el código legado).
 
 ### S5 · Préstamos (16–22 nov)
 - [ ] RPC `desembolsar_prestamo` atómica, con `cash_outflows` (CE) y bloqueo de acciones por adelantado.
@@ -87,6 +90,7 @@
 - [ ] Letra base de 16px y revisión de las pantallas.
 - [ ] Las 6 pantallas clave del design brief, revisadas en un celular real.
 - [ ] Datos ficticios para la demo.
+- [ ] En `ajustes`, mostrar las cuentas bancarias inválidas marcadas como tales, para que el tesorero pueda corregirlas o desactivarlas. Hoy se descartan en silencio. En `compras` siguen ocultas.
 
 ### S9 · Colchón y ensayo (14–19 dic)
 - [ ] Corrección de bugs. **Congelamiento del código el 18 de diciembre.**
@@ -124,5 +128,5 @@ Se sacaron del plan hasta la demo por falta de capacidad. Ninguna es necesaria p
 
 | Semana | Horas planificadas | Horas reales | Estado | Notas |
 |---|---|---|---|---|
-| S0 | 10 | | ✅ | Terminada antes de lo previsto (14–15 oct) |
-| S1 | 8 | | ⏳ | |
+| S0 | 10 | 6 | ✅ | Terminada antes de lo previsto (14–15 oct), con 4 h menos de lo estimado |
+| S1 | 8 | | 🔄 | Los 7 ítems están hechos (18–19 oct). Se cierra al mergear el PR. También se arreglaron 34 errores de `tsc` y se agregó RN-4.29 |

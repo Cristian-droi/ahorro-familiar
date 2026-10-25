@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from '@/types/database';
-import type { Loan, LoanVote, LoanWithDetails } from '@/types/entities';
+import type { Loan, LoanVote, LoanWithDetails, Profile } from '@/types/entities';
 
 type SB = SupabaseClient<Database>;
 
@@ -133,7 +133,7 @@ export async function countMyPendingLoanSharePurchases(
 // meses vencidos y target_month a usar para los receipt_items del pago.
 export type ActiveLoanDebt = {
   loan_id: string;
-  loan_number: number;
+  loan_number: number | null;
   disbursement_number: string | null;
   requested_amount: number;
   outstanding_capital: number;
@@ -147,9 +147,22 @@ export type ActiveLoanDebt = {
 export async function getMyActiveLoansDebt(supabase: SB): Promise<ActiveLoanDebt[]> {
   const { data, error } = await supabase.rpc('get_user_active_loans_debt');
   if (error) throw error;
-  return (data ?? []).map((row) => ({
+  const rows = data ?? [];
+
+  // The RPC does not return loan_number, so it is looked up separately.
+  const loanNumbers = new Map<string, number | null>();
+  if (rows.length > 0) {
+    const { data: loans, error: loansError } = await supabase
+      .from('loans')
+      .select('id, loan_number')
+      .in('id', rows.map((r) => r.loan_id));
+    if (loansError) throw loansError;
+    for (const l of loans ?? []) loanNumbers.set(l.id, l.loan_number);
+  }
+
+  return rows.map((row) => ({
     loan_id: row.loan_id,
-    loan_number: Number(row.loan_number ?? 0),
+    loan_number: loanNumbers.get(row.loan_id) ?? null,
     disbursement_number: row.disbursement_number,
     requested_amount: Number(row.requested_amount),
     outstanding_capital: Number(row.outstanding_capital),
@@ -436,7 +449,11 @@ export async function getMyVotingHistory(
   });
 }
 
-export async function getLoansWithDisbursement(supabase: SB): Promise<Loan[]> {
+export type LoanWithBorrowerName = Loan & {
+  borrower: Pick<Profile, 'first_name' | 'last_name'> | null;
+};
+
+export async function getLoansWithDisbursement(supabase: SB): Promise<LoanWithBorrowerName[]> {
   const { data, error } = await supabase
     .from('loans')
     .select(`*, borrower:profiles!loans_user_id_fkey(first_name, last_name)`)
@@ -444,7 +461,7 @@ export async function getLoansWithDisbursement(supabase: SB): Promise<Loan[]> {
     .not('disbursement_number', 'is', null)
     .order('disbursed_at', { ascending: false });
   if (error) throw error;
-  return (data ?? []) as Loan[];
+  return (data ?? []) as LoanWithBorrowerName[];
 }
 
 // ============================================================

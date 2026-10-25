@@ -136,6 +136,14 @@
 - **RN-4.26** El abono a capital es libre: puede ser igual, mayor o menor que la cuota pactada, o no hacerse.
 - **RN-4.27** Cada préstamo es independiente. Con varios préstamos, puede pagar uno y no los otros.
 - **RN-4.28** Un préstamo pasa a **pagado** cuando su saldo de capital y sus intereses llegan a cero.
+- **RN-4.29** 🔒 **El abono a capital no puede superar el saldo pendiente del préstamo.** El sistema rechaza el pago y muestra el saldo máximo. Si el accionista tiene más préstamos, el excedente se registra como **otro abono** al préstamo que él elija. Ningún préstamo puede quedar con saldo ni intereses negativos.
+  > ⚠️ En el Sheet pasó: el préstamo 27 de una accionista recibió en mayo un abono de 1.224.389, pero solo debía 1.200.000. Quedó con un saldo de −24.389 y "intereses negativos" de −488 por mes, y la factura dejó de coincidir con la hoja de la accionista.
+
+**Ejemplo:** el préstamo A debe 1.200.000 y el préstamo B debe 2.023.688. El accionista entrega 1.224.389 para capital:
+- Abono al préstamo A: **1.200.000**. Queda en cero y pasa a pagado.
+- Abono al préstamo B: **24.389**. Su saldo baja a **1.999.299**.
+
+- 🟡 **RN-4.29b** **Si el accionista no tiene otro préstamo** al que llevar el excedente: ¿se rechaza todo el pago o se acepta solo hasta el saldo? *Validar con el gerente.*
 
 ### 4.7 Las dos vistas del préstamo ✅
 | Vista | Quién la ve | Qué muestra |
@@ -300,6 +308,7 @@ En diciembre las utilidades llegan a 10.000.000, pero el gasto **sigue siendo 20
 | 14 | Zona horaria | Mezcla UTC y Bogotá | Todo en America/Bogota |
 | 15 | RN-9 auditoría | No existe | Implementar |
 | 16 | Seguridad | `loans_update_own_draft` permite editar la tasa; `system_settings` sin migración ni RLS | Corregir |
+| 17 | RN-4.29 abono mayor al saldo | Verificar | Validar en el dominio y proteger en la base (saldo ≥ 0) |
 
 ---
 
@@ -308,6 +317,7 @@ En diciembre las utilidades llegan a 10.000.000, pero el gasto **sigue siendo 20
 ### 🟡 Para validar con el gerente
 1. **RN-4.21:** interés de un préstamo desembolsado después del día 25.
 2. **RN-8.6:** capitalización reservada frente a intereses impagos al cierre.
+3. **RN-4.29b:** abono a capital mayor al saldo cuando el accionista no tiene otro préstamo.
 
 ### ❓ Abiertas
 Ninguna por ahora (cerradas el 2026-10-14).

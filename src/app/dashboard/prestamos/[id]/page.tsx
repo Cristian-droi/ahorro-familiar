@@ -56,7 +56,8 @@ export default function LoanDetailPage() {
         interface ReceiptItemRow {
           concept: string;
           amount: number | string;
-          target_month: string | null;
+          // receipt_items.target_month is `date not null` in the DB.
+          target_month: string;
           receipts: { status: string } | { status: string }[] | null;
         }
 
@@ -496,13 +497,15 @@ export default function LoanDetailPage() {
   );
 }
 
-function Stat({ label, value, tone }: { label: string; value: string; tone?: 'warn' | 'danger' }) {
+function Stat({ label, value, tone }: { label: string; value: string; tone?: 'warn' | 'danger' | 'success' }) {
   const valueClass =
     tone === 'danger'
       ? 'text-[var(--color-danger)]'
       : tone === 'warn'
         ? 'text-[var(--color-warn)]'
-        : 'text-[var(--color-text)]';
+        : tone === 'success'
+          ? 'text-[var(--color-success)]'
+          : 'text-[var(--color-text)]';
   return (
     <div>
       <div className="text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase mb-1">

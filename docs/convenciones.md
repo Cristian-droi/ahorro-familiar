@@ -70,6 +70,8 @@
 - Todo cambio de esquema es una **migración versionada** en `supabase/migrations/`, con el formato `YYYYMMDDHHMMSS_descripcion.sql` (14 dígitos).
 - **Nunca** se cambia el esquema a mano desde el panel de Supabase.
 - Toda tabla nueva tiene **RLS activado** y políticas explícitas en la misma migración.
+- Toda tabla nueva lleva sus **`grant` explícitos** en la misma migración: las tablas y secuencias nacen sin privilegios para `anon` ni `authenticated` (migración `20260809010000_revoke_default_privileges.sql`). Las funciones nuevas nacen sin `EXECUTE` para `anon`: si una RPC debe ser pública, se le da el `grant` a propósito.
+- **Ojo con las funciones fuera de `public`:** esa misma migración revoca el `EXECUTE` de `PUBLIC` sobre las funciones futuras de **todos los schemas**, no solo de `public`. En `public` los defaults de Supabase siguen dando `EXECUTE` a `authenticated` y `service_role`, pero en cualquier otro schema la función nace sin `EXECUTE` para nadie salvo su dueño. Toda función nueva en otro schema necesita su `grant execute ... to <rol>` explícito en la misma migración.
 - Las migraciones ya aplicadas **no se editan**. Se corrigen con una migración nueva.
 - Cada migración se prueba primero en Supabase local.
 - Después de migrar, se regeneran los tipos: `npm run gen:types`.
@@ -117,6 +119,6 @@
 
 ## 10. Seguridad
 
-- Los secretos solo van en variables de entorno, nunca en el código ni en los scripts (`scripts/seed.mjs` tiene credenciales fijas que hay que eliminar).
+- Los secretos solo van en variables de entorno, nunca en el código ni en los scripts. Los scripts reciben los datos por argumentos o por `.env.local` (ver `scripts/seed-admin.mjs`).
 - La autorización siempre se valida en el servidor. Ocultar un botón **no** es seguridad.
 - Datos reales del Sheet: **solo lectura**. Desarrollo y tests usan datos ficticios.

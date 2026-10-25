@@ -7,13 +7,44 @@ export type Json =
   | Json[]
 
 export type Database = {
-  // Allows to automatically instantiate createClient with right options
-  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
-  __InternalSupabase: {
-    PostgrestVersion: "14.5"
-  }
   public: {
     Tables: {
+      bank_accounts: {
+        Row: {
+          account_number: string
+          account_type: string
+          bank_name: string
+          created_at: string
+          holder_name: string
+          id: string
+          is_active: boolean
+          qr_path: string | null
+          updated_at: string
+        }
+        Insert: {
+          account_number: string
+          account_type: string
+          bank_name: string
+          created_at?: string
+          holder_name: string
+          id?: string
+          is_active?: boolean
+          qr_path?: string | null
+          updated_at?: string
+        }
+        Update: {
+          account_number?: string
+          account_type?: string
+          bank_name?: string
+          created_at?: string
+          holder_name?: string
+          id?: string
+          is_active?: boolean
+          qr_path?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       capitalization_windows: {
         Row: {
           closed_at: string | null
@@ -177,15 +208,21 @@ export type Database = {
           admin_notes: string | null
           borrower_seen_status_at: string | null
           created_at: string
+          deduct_obligations: boolean | null
+          deducted_capital_amount: number | null
+          deducted_fines_amount: number | null
+          deducted_interest_amount: number | null
+          deducted_shares_amount: number | null
+          deductions_detail: Json | null
           disbursed_amount: number | null
           disbursed_at: string | null
           disbursement_number: string | null
-          loan_number: number
           disbursement_proof_path: string | null
           four_per_thousand: number
           id: string
           interest_rate: number
           last_interest_payment_date: string | null
+          loan_number: number | null
           loan_shares_amount: number
           loan_shares_count: number
           loan_shares_paid_upfront: boolean
@@ -198,26 +235,26 @@ export type Database = {
           status: Database["public"]["Enums"]["loan_status"]
           updated_at: string
           user_id: string
-          deduct_obligations: boolean
-          deducted_shares_amount: number
-          deducted_fines_amount: number
-          deducted_interest_amount: number
-          deducted_capital_amount: number
-          deductions_detail: Json
         }
         Insert: {
           admin_notes?: string | null
           borrower_seen_status_at?: string | null
           created_at?: string
+          deduct_obligations?: boolean | null
+          deducted_capital_amount?: number | null
+          deducted_fines_amount?: number | null
+          deducted_interest_amount?: number | null
+          deducted_shares_amount?: number | null
+          deductions_detail?: Json | null
           disbursed_amount?: number | null
           disbursed_at?: string | null
           disbursement_number?: string | null
-          loan_number?: number
           disbursement_proof_path?: string | null
           four_per_thousand?: number
           id?: string
           interest_rate?: number
           last_interest_payment_date?: string | null
+          loan_number?: number | null
           loan_shares_amount?: number
           loan_shares_count?: number
           loan_shares_paid_upfront?: boolean
@@ -230,17 +267,17 @@ export type Database = {
           status?: Database["public"]["Enums"]["loan_status"]
           updated_at?: string
           user_id: string
-          deduct_obligations?: boolean
-          deducted_shares_amount?: number
-          deducted_fines_amount?: number
-          deducted_interest_amount?: number
-          deducted_capital_amount?: number
-          deductions_detail?: Json
         }
         Update: {
           admin_notes?: string | null
           borrower_seen_status_at?: string | null
           created_at?: string
+          deduct_obligations?: boolean | null
+          deducted_capital_amount?: number | null
+          deducted_fines_amount?: number | null
+          deducted_interest_amount?: number | null
+          deducted_shares_amount?: number | null
+          deductions_detail?: Json | null
           disbursed_amount?: number | null
           disbursed_at?: string | null
           disbursement_number?: string | null
@@ -249,6 +286,7 @@ export type Database = {
           id?: string
           interest_rate?: number
           last_interest_payment_date?: string | null
+          loan_number?: number | null
           loan_shares_amount?: number
           loan_shares_count?: number
           loan_shares_paid_upfront?: boolean
@@ -261,12 +299,6 @@ export type Database = {
           status?: Database["public"]["Enums"]["loan_status"]
           updated_at?: string
           user_id?: string
-          deduct_obligations?: boolean
-          deducted_shares_amount?: number
-          deducted_fines_amount?: number
-          deducted_interest_amount?: number
-          deducted_capital_amount?: number
-          deductions_detail?: Json
         }
         Relationships: [
           {
@@ -337,6 +369,7 @@ export type Database = {
           identity_document: string
           last_name: string
           monthly_income: number | null
+          next_year_capitalization: number | null
           phone: string | null
           role: Database["public"]["Enums"]["user_role"]
           selected_share_value: number | null
@@ -354,8 +387,9 @@ export type Database = {
           first_name: string
           id: string
           identity_document: string
-          last_name: string
+          last_name?: string
           monthly_income?: number | null
+          next_year_capitalization?: number | null
           phone?: string | null
           role?: Database["public"]["Enums"]["user_role"]
           selected_share_value?: number | null
@@ -375,6 +409,7 @@ export type Database = {
           identity_document?: string
           last_name?: string
           monthly_income?: number | null
+          next_year_capitalization?: number | null
           phone?: string | null
           role?: Database["public"]["Enums"]["user_role"]
           selected_share_value?: number | null
@@ -439,8 +474,10 @@ export type Database = {
       }
       receipts: {
         Row: {
+          bank_account_id: string | null
           created_at: string
           id: string
+          payment_method: string | null
           payment_proof_path: string | null
           receipt_number: string | null
           rejection_note: string | null
@@ -456,8 +493,10 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          bank_account_id?: string | null
           created_at?: string
           id?: string
+          payment_method?: string | null
           payment_proof_path?: string | null
           receipt_number?: string | null
           rejection_note?: string | null
@@ -473,8 +512,10 @@ export type Database = {
           user_id: string
         }
         Update: {
+          bank_account_id?: string | null
           created_at?: string
           id?: string
+          payment_method?: string | null
           payment_proof_path?: string | null
           receipt_number?: string | null
           rejection_note?: string | null
@@ -489,7 +530,15 @@ export type Database = {
           updated_at?: string
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "receipts_bank_account_id_fkey"
+            columns: ["bank_account_id"]
+            isOneToOne: false
+            referencedRelation: "bank_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       system_settings: {
         Row: {
@@ -514,15 +563,6 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      _test_anon_insert: {
-        Args: never
-        Returns: {
-          inserted_id: string
-          message: string
-          sqlstate_code: string
-          status: string
-        }[]
-      }
       close_capitalization_window: { Args: never; Returns: Json }
       close_capitalization_window_v2: {
         Args: { p_window_id: string }
@@ -530,6 +570,16 @@ export type Database = {
       }
       count_active_shareholders: { Args: never; Returns: number }
       count_my_pending_loan_share_purchases: { Args: never; Returns: number }
+      get_all_users_utilities_by_year: {
+        Args: { p_year: number }
+        Returns: {
+          distribution: number
+          month_number: number
+          participation: number
+          user_id: string
+          utilities_pool: number
+        }[]
+      }
       get_capitalization_window_state: { Args: never; Returns: Json }
       get_capitalization_windows_admin: {
         Args: never
@@ -787,3 +837,4 @@ export const Constants = {
     },
   },
 } as const
+

@@ -44,8 +44,9 @@ npm test           # tests (script pendiente de agregar)
 npm run gen:types  # regenerar tipos de Supabase
 ```
 
-## Estado actual (2026-10-14)
+## Estado actual (2026-10-19)
 
-- `master` tiene todo el trabajo y la documentación (PR #1, 2026-10-14). El trabajo nuevo va en ramas `tipo/descripcion` con PR.
-- La semana S0 del [roadmap](docs/roadmap.md) está completa. Sigue la S1 (cimientos).
-- La estructura `src/modules/` todavía **no existe**: la lógica actual está en `src/lib/`.
+- El trabajo nuevo va en ramas `tipo/descripcion` con PR. La S1 (cimientos) está en el PR de `feat/s1-cimientos`. Después sigue la S2 (dominio I).
+- **Supabase local:** `supabase start` aplica todas las migraciones desde cero. Los tipos se generan desde local (`supabase gen types typescript --local`).
+- **Ya existen** `src/shared/domain` (`fechas.ts`, `result.ts`) y `src/modules/` (vacío, ver su README). La lógica legada sigue en `src/lib/` y se migra en la S3.
+- **GGA** revisa cada commit con las reglas de `REVIEW.md`. En Windows necesita la variable `CLAUDE_CODE_GIT_BASH_PATH`.
