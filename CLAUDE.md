@@ -46,7 +46,7 @@ npm run gen:types  # regenerar tipos de Supabase
 
 ## Estado actual (2026-10-19)
 
-- El trabajo nuevo va en ramas `tipo/descripcion` con PR. La S1 (cimientos) está en el PR de `feat/s1-cimientos`. Después sigue la S2 (dominio I).
+- El trabajo nuevo va en ramas `tipo/descripcion` con PR. La S1 (cimientos) se mergeó el 2026-10-25 (PR #3). Sigue la S2 (dominio I).
 - **Supabase local:** `supabase start` aplica todas las migraciones desde cero. Los tipos se generan desde local (`supabase gen types typescript --local`).
 - **Ya existen** `src/shared/domain` (`fechas.ts`, `result.ts`) y `src/modules/` (vacío, ver su README). La lógica legada sigue en `src/lib/` y se migra en la S3.
 - **GGA** revisa cada commit con las reglas de `REVIEW.md`. En Windows necesita la variable `CLAUDE_CODE_GIT_BASH_PATH`.

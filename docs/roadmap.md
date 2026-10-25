@@ -20,7 +20,7 @@
 | Semana | Fechas | Entregable | Horas | Estado |
 |---|---|---|---|---|
 | **S0** | 14–18 oct | Diseño y modelo: AppFlow, Design Brief, Backend Schema, orden del repositorio y merge a `master` | ~10 | ✅ |
-| **S1** | 19–25 oct | **Cimientos:** Supabase local, migraciones reproducibles, seguridad base, `shared/domain` | 8 | |
+| **S1** | 19–25 oct | **Cimientos:** Supabase local, migraciones reproducibles, seguridad base, `shared/domain` | 8 | ✅ |
 | **S2** | 26 oct – 1 nov | **Dominio I (TDD):** acciones, multas y cálculos de préstamos | 8 | |
 | **S3** | 2–8 nov | **Dominio II (TDD):** votación, aplicación de pagos y migración de `src/lib` al dominio | 8 | |
 | **S4** | 9–15 nov | **Seguridad:** roles nuevos, bloqueo de escrituras con RLS y `audit_log` | 8 | |
@@ -129,4 +129,5 @@ Se sacaron del plan hasta la demo por falta de capacidad. Ninguna es necesaria p
 | Semana | Horas planificadas | Horas reales | Estado | Notas |
 |---|---|---|---|---|
 | S0 | 10 | 6 | ✅ | Terminada antes de lo previsto (14–15 oct), con 4 h menos de lo estimado |
-| S1 | 8 | | 🔄 | Los 7 ítems están hechos (18–19 oct). Se cierra al mergear el PR. También se arreglaron 34 errores de `tsc` y se agregó RN-4.29 |
+| S1 | 8 | 9 | ✅ | Terminada el 19 de oct (PR #3, mergeado el 25), con 1 h más de lo planeado. Además se arreglaron 34 errores de `tsc` y se agregó RN-4.29 |
+| S2 | 8 | | ⏳ | |
