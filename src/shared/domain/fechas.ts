@@ -67,3 +67,11 @@ export function mesSiguiente(fecha: FechaISO): FechaISO {
   const { anio, mes } = partes(fecha);
   return mes === 12 ? componer(anio + 1, 1, 1) : componer(anio, mes + 1, 1);
 }
+
+// Calendar months from the month of `desde` to the month of `hasta`.
+// The day is ignored; the result is negative when `desde` is later.
+export function mesesEntre(desde: FechaISO, hasta: FechaISO): number {
+  const a = partes(desde);
+  const b = partes(hasta);
+  return (b.anio - a.anio) * 12 + (b.mes - a.mes);
+}

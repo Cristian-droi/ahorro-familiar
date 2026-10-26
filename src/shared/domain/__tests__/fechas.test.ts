@@ -5,6 +5,7 @@ import {
   diaDelMes,
   primerDiaDelMes,
   mesSiguiente,
+  mesesEntre,
   type FechaISO,
 } from '@/shared/domain/fechas';
 
@@ -67,5 +68,23 @@ describe('mesSiguiente', () => {
 
   it('rolls over to January of the next year', () => {
     expect(mesSiguiente(fecha('2026-12-15'))).toBe('2027-01-01');
+  });
+});
+
+describe('mesesEntre', () => {
+  it('counts whole calendar months from one month to another, ignoring the day', () => {
+    expect(mesesEntre(fecha('2026-08-01'), fecha('2026-09-20'))).toBe(1);
+  });
+
+  it('is zero within the same month', () => {
+    expect(mesesEntre(fecha('2026-09-30'), fecha('2026-09-01'))).toBe(0);
+  });
+
+  it('crosses the year boundary', () => {
+    expect(mesesEntre(fecha('2026-11-01'), fecha('2027-01-15'))).toBe(2);
+  });
+
+  it('is negative when the first month is later', () => {
+    expect(mesesEntre(fecha('2026-12-01'), fecha('2026-09-28'))).toBe(-3);
   });
 });
