@@ -72,6 +72,15 @@ describe('calcularMulta (RN-3.4)', () => {
   it('charges only the current month when it is the first pending one', () => {
     const multa = calcularMulta({
       primerMesPendiente: fecha('2026-09-01'),
+      hoy: fecha('2026-09-15'),
+      reglas: REGLAS,
+    });
+    expect(multa).toEqual({ mesesCompletos: 0, multaMesesCompletos: 0, multaMesEnCurso: 2500, total: 2500 });
+  });
+
+  it('owes nothing for the current month during the grace period', () => {
+    const multa = calcularMulta({
+      primerMesPendiente: fecha('2026-09-01'),
       hoy: fecha('2026-09-08'),
       reglas: REGLAS,
     });

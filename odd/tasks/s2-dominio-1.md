@@ -31,7 +31,7 @@ Assumption (S2): the caller passes the first month without a purchase (`primerMe
 | T2 | S3 | inline | done | `977265c` · RED: module missing → GREEN 10/10 |
 | T3 | S4 | inline | done | `e5a78dd` · RED: module missing → GREEN 12/12 |
 | T5 | S7, S8, S9 | inline | done | `698b4dc` · RED: `sumarMeses` 3 and `diciembreDelAnio` 3 failing, module missing → GREEN; cuota de cierre RED module missing → GREEN 8/8 |
-| T4 | S5, S6 | inline | done, awaiting commit OK | RED: module missing → GREEN 18/18 |
+| T4 | S5, S6 | inline | done | `cca4791` · RED: module missing → GREEN 18/18 |
 | T6 | S10 | inline + independent verifier (Risk item 1) | pending | |
 
 T5 runs before T4 because the half rate depends on the applied month.
@@ -54,3 +54,6 @@ T5 runs before T4 because the half rate depends on the applied month.
 - **L14 (2026-10-25)** T4 waiting on Cris: RN-4.21 is 🟡; proposal is to implement it as written with an isolated test marked 🟡.
 - **L15 (2026-10-26)** "Sí, implementá la RN-4.21 como está escrita, con su test aislado y marcado 🟡, y terminá T4."
 - **L16 (2026-10-26)** T4 done: `src/modules/prestamos/domain/intereses.ts`, `interesDelMes` and `interesesDelPeriodo`. The rate is an integer in basis points (200 = 2%). RN-4.21 🟡 lives in its own `describe` block and in `tasaDelMes`. Full suite 166/166 on the warm rerun, ESLint and `tsc` clean. The cold first run failed one test again (44 s total) and passed on rerun; it could not be reproduced warm. Suspected cause: the ESLint boundaries test timing out on a cold start (pre-existing, not caused by S2).
+- **L17 (2026-10-26)** "Sí, commiteá T4." T4 committed as `cca4791`; GGA review passed. Next: T6 (money to `bigint`, Risk item 1) plus the two review follow-ups from L13.
+- **L18 (2026-10-26)** "Sí, arreglá los dos hallazgos de la revisión (cuota antes del mes aplicado y test del día 8) y después seguimos con T6."
+- **L19 (2026-10-26)** Review follow-ups done, uncommitted. (2) `cuotaParaCerrarElAnio` now takes `mesInicial` (applied month) and returns `antes_del_plazo` for an earlier month (RED: 1 failing → GREEN 10/10). (3) The multas current-month test now uses day 15 → 2.500, plus a separate grace-period test for day 8. It passed on the existing code: it is a stronger test, not a bug fix. Full suite 169/169, ESLint and `tsc` clean. Finding (1), validating configuration values, is still open for the `parametros` module.
