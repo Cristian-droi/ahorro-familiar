@@ -30,8 +30,8 @@ Assumption (S2): the caller passes the first month without a purchase (`primerMe
 | T1 | S1, S2 | inline | done | `71a3fef` · RED: modules missing, `mesesEntre` 4 failing → GREEN 49/49 |
 | T2 | S3 | inline | done | `977265c` · RED: module missing → GREEN 10/10 |
 | T3 | S4 | inline | done | `e5a78dd` · RED: module missing → GREEN 12/12 |
-| T5 | S7, S8, S9 | inline | done, awaiting commit OK | RED: `sumarMeses` 3 and `diciembreDelAnio` 3 failing, module missing → GREEN; cuota de cierre RED module missing → GREEN 8/8 |
-| T4 | S5, S6 | inline | pending | |
+| T5 | S7, S8, S9 | inline | done | `698b4dc` · RED: `sumarMeses` 3 and `diciembreDelAnio` 3 failing, module missing → GREEN; cuota de cierre RED module missing → GREEN 8/8 |
+| T4 | S5, S6 | inline | done, awaiting commit OK | RED: module missing → GREEN 18/18 |
 | T6 | S10 | inline + independent verifier (Risk item 1) | pending | |
 
 T5 runs before T4 because the half rate depends on the applied month.
@@ -50,3 +50,7 @@ T5 runs before T4 because the half rate depends on the applied month.
 - **L10 (2026-10-25)** S7 and S8 done: `src/modules/prestamos/domain/calendario.ts` (`mesAplicado`, `plazoDelPrestamo`), plus `sumarMeses` and `diciembreDelAnio` in `shared/domain/fechas.ts`. Full suite 140/140, ESLint and `tsc` clean. S9 rule (section 4.7): "`saldo pendiente ÷ meses restantes hasta diciembre, incluido el actual`", example 900.000 in October → 300.000. Open question: the rules do not say how to round a non-exact division (e.g. 1.000.000 ÷ 3). Asked Cris.
 - **L11 (2026-10-25)** "Redondeá la cuota para cerrar el año hacia arriba (Math.ceil), agregá la regla a reglas-negocio.md y terminá T5." Added RN-4.30 to `docs/reglas-negocio.md` (example 1.000.000 in October → 333.334).
 - **L12 (2026-10-25)** T5 done: `src/modules/prestamos/domain/cuota-de-cierre.ts`, `cuotaParaCerrarElAnio({ saldo, mesActual, mesFinal })`. Assumptions: an extended loan spreads its balance until the last month of its term (`mesFinal` from `plazoDelPrestamo`), and a month after the term returns `fuera_del_plazo`. Full suite 148/148, ESLint and `tsc` clean.
+- **L13 (2026-10-25)** T5 committed as `698b4dc`. Native review (RDD) of commits `71a3fef..698b4dc`: Cris granted consent, reliability lens, **approved** and acknowledged (lineage `review-c3e8c93e21c61efa`, authority burned). Non-blocking findings for later: (1) configuration values `paso`, `valorAccion`, `tasaPorMil` and min/max shares are not validated; (2) `cuotaParaCerrarElAnio` does not reject a month before the applied month (e.g. disbursed 26 Oct, queried in Oct → divides by 3 instead of 2); (3) the multas test "charges only the current month" uses day 8, inside the grace period, so it cannot detect a missing charge.
+- **L14 (2026-10-25)** T4 waiting on Cris: RN-4.21 is 🟡; proposal is to implement it as written with an isolated test marked 🟡.
+- **L15 (2026-10-26)** "Sí, implementá la RN-4.21 como está escrita, con su test aislado y marcado 🟡, y terminá T4."
+- **L16 (2026-10-26)** T4 done: `src/modules/prestamos/domain/intereses.ts`, `interesDelMes` and `interesesDelPeriodo`. The rate is an integer in basis points (200 = 2%). RN-4.21 🟡 lives in its own `describe` block and in `tasaDelMes`. Full suite 166/166 on the warm rerun, ESLint and `tsc` clean. The cold first run failed one test again (44 s total) and passed on rerun; it could not be reproduced warm. Suspected cause: the ESLint boundaries test timing out on a cold start (pre-existing, not caused by S2).
