@@ -28,8 +28,8 @@ Assumption (S2): the caller passes the first month without a purchase (`primerMe
 | ID | Specs | Route | Status | Commit |
 |---|---|---|---|---|
 | T1 | S1, S2 | inline | done | `71a3fef` · RED: modules missing, `mesesEntre` 4 failing → GREEN 49/49 |
-| T2 | S3 | inline | done, awaiting commit OK | RED: module missing → GREEN 10/10 |
-| T3 | S4 | inline | pending | |
+| T2 | S3 | inline | done | `977265c` · RED: module missing → GREEN 10/10 |
+| T3 | S4 | inline | done, awaiting commit OK | RED: module missing → GREEN 12/12 |
 | T5 | S7, S8, S9 | inline | pending | |
 | T4 | S5, S6 | inline | pending | |
 | T6 | S10 | inline + independent verifier (Risk item 1) | pending | |
@@ -44,3 +44,5 @@ T5 runs before T4 because the half rate depends on the applied month.
 - **L4 (2026-10-25)** T1 done: `src/modules/acciones/domain/{compra,multas}.ts` and `mesesEntre` in `shared/domain/fechas.ts`. Full suite 101/101, ESLint and `tsc` clean. The first cold run had one failing test (41 s total, likely the ESLint boundaries test timing out on a cold start); two reruns passed. Commits need Cris's explicit OK (app `CLAUDE.md`).
 - **L5 (2026-10-25)** "Sí, commiteá T1 con el documento de la S2 y seguí con T2." T1 committed as `71a3fef`; GGA review passed.
 - **L6 (2026-10-25)** T2 done: `src/modules/prestamos/domain/acciones-por-prestamo.ts`. It also returns the shares' value (RN-4.14, example 900.000 at 50.000 → 100.000). The RN-4.11 exception ("Deuda año anterior" needs no shares) is left to the caller. Full suite 111/111, ESLint and `tsc` clean.
+- **L7 (2026-10-25)** "Sí, commiteá T2 y seguí con T3 (4x1000)." T2 committed as `977265c`. GGA advisory (not blocking): `paso` and `valorAccion` are not validated (`paso` = 0 gives Infinity). Pending decision: validate configuration values in the domain or in the `parametros` module.
+- **L8 (2026-10-25)** T3 done: `src/modules/prestamos/domain/desembolso.ts`, `calcularDesembolso({ monto, deducciones, tasaPorMil })`. The rate is an integer per thousand (4 = 0,004) to avoid binary fractions. Assumption, not in the rules: deductions larger than the amount are rejected (`deducciones_mayores_al_monto`). Full suite 123/123, ESLint and `tsc` clean.
