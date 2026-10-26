@@ -153,6 +153,10 @@
 
 **Ejemplo:** en octubre el saldo es 900.000 y faltan 3 meses (octubre, noviembre y diciembre). La cuota para cerrar el año es **300.000**.
 
+- **RN-4.30** ✅ Si la división no es exacta, la cuota para cerrar el año se redondea **hacia arriba** al peso: `TECHO(saldo pendiente ÷ meses restantes)`. Así el ritmo sugerido alcanza para quedar en cero en diciembre. *Decidido por Cris el 2026-10-25.*
+
+**Ejemplo:** en octubre el saldo es 1.000.000 y faltan 3 meses → 333.333,33 → la cuota para cerrar el año es **333.334**.
+
 ---
 
 ## 5. Capitalizaciones ✅

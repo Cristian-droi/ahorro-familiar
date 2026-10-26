@@ -75,3 +75,15 @@ export function mesesEntre(desde: FechaISO, hasta: FechaISO): number {
   const b = partes(hasta);
   return (b.anio - a.anio) * 12 + (b.mes - a.mes);
 }
+
+// First day of the month `meses` months after the month of `fecha`.
+export function sumarMeses(fecha: FechaISO, meses: number): FechaISO {
+  const { anio, mes } = partes(fecha);
+  const indice = anio * 12 + (mes - 1) + meses;
+  return componer(Math.floor(indice / 12), (indice % 12) + 1, 1);
+}
+
+// First day of December of the same year (the last month of a period).
+export function diciembreDelAnio(fecha: FechaISO): FechaISO {
+  return componer(partes(fecha).anio, 12, 1);
+}

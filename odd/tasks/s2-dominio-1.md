@@ -18,7 +18,7 @@ Rules are quoted verbatim from `docs/reglas-negocio.md`. Every value marked ⚙�
 - **S6 (RN-4.20)** "**Primer mes:** si el desembolso es **después del día 15** ⚙️, se cobra **media tasa (1%)**."
 - **S7 (RN-4.15)** "**Mes aplicado:** si el desembolso es **después del día 25** ⚙️, el préstamo cuenta como **del mes siguiente**."
 - **S8 (RN-4.3)** "Por defecto, hasta **diciembre del periodo actual**. Un préstamo de enero tiene 12 meses de plazo y uno de octubre, 3." "El administrador puede habilitar ⚙️ plazos hasta **diciembre del periodo siguiente**."
-- **S9** Installment to close the year ("Cuota para cerrar el año", roadmap S2).
+- **S9** Installment to close the year ("Cuota para cerrar el año", roadmap S2): "`saldo pendiente ÷ meses restantes hasta diciembre, incluido el actual`", rounded up (RN-4.30, L11).
 - **S10** Migration: money columns to `bigint` ("Migración: dinero a `bigint`", roadmap S2). Local Supabase only.
 
 Assumption (S2): the caller passes the first month without a purchase (`primerMesPendiente`), because purchases can target future months; the domain does not look up purchases.
@@ -29,8 +29,8 @@ Assumption (S2): the caller passes the first month without a purchase (`primerMe
 |---|---|---|---|---|
 | T1 | S1, S2 | inline | done | `71a3fef` · RED: modules missing, `mesesEntre` 4 failing → GREEN 49/49 |
 | T2 | S3 | inline | done | `977265c` · RED: module missing → GREEN 10/10 |
-| T3 | S4 | inline | done, awaiting commit OK | RED: module missing → GREEN 12/12 |
-| T5 | S7, S8, S9 | inline | pending | |
+| T3 | S4 | inline | done | `e5a78dd` · RED: module missing → GREEN 12/12 |
+| T5 | S7, S8, S9 | inline | done, awaiting commit OK | RED: `sumarMeses` 3 and `diciembreDelAnio` 3 failing, module missing → GREEN; cuota de cierre RED module missing → GREEN 8/8 |
 | T4 | S5, S6 | inline | pending | |
 | T6 | S10 | inline + independent verifier (Risk item 1) | pending | |
 
@@ -46,3 +46,7 @@ T5 runs before T4 because the half rate depends on the applied month.
 - **L6 (2026-10-25)** T2 done: `src/modules/prestamos/domain/acciones-por-prestamo.ts`. It also returns the shares' value (RN-4.14, example 900.000 at 50.000 → 100.000). The RN-4.11 exception ("Deuda año anterior" needs no shares) is left to the caller. Full suite 111/111, ESLint and `tsc` clean.
 - **L7 (2026-10-25)** "Sí, commiteá T2 y seguí con T3 (4x1000)." T2 committed as `977265c`. GGA advisory (not blocking): `paso` and `valorAccion` are not validated (`paso` = 0 gives Infinity). Pending decision: validate configuration values in the domain or in the `parametros` module.
 - **L8 (2026-10-25)** T3 done: `src/modules/prestamos/domain/desembolso.ts`, `calcularDesembolso({ monto, deducciones, tasaPorMil })`. The rate is an integer per thousand (4 = 0,004) to avoid binary fractions. Assumption, not in the rules: deductions larger than the amount are rejected (`deducciones_mayores_al_monto`). Full suite 123/123, ESLint and `tsc` clean.
+- **L9 (2026-10-25)** "Sí, commiteá T3 y seguí con T5 (mes aplicado, plazo y cuota de cierre)." T3 committed as `e5a78dd`.
+- **L10 (2026-10-25)** S7 and S8 done: `src/modules/prestamos/domain/calendario.ts` (`mesAplicado`, `plazoDelPrestamo`), plus `sumarMeses` and `diciembreDelAnio` in `shared/domain/fechas.ts`. Full suite 140/140, ESLint and `tsc` clean. S9 rule (section 4.7): "`saldo pendiente ÷ meses restantes hasta diciembre, incluido el actual`", example 900.000 in October → 300.000. Open question: the rules do not say how to round a non-exact division (e.g. 1.000.000 ÷ 3). Asked Cris.
+- **L11 (2026-10-25)** "Redondeá la cuota para cerrar el año hacia arriba (Math.ceil), agregá la regla a reglas-negocio.md y terminá T5." Added RN-4.30 to `docs/reglas-negocio.md` (example 1.000.000 in October → 333.334).
+- **L12 (2026-10-25)** T5 done: `src/modules/prestamos/domain/cuota-de-cierre.ts`, `cuotaParaCerrarElAnio({ saldo, mesActual, mesFinal })`. Assumptions: an extended loan spreads its balance until the last month of its term (`mesFinal` from `plazoDelPrestamo`), and a month after the term returns `fuera_del_plazo`. Full suite 148/148, ESLint and `tsc` clean.
