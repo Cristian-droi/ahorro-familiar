@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
-import { calcDisbursedAmount, buildPaymentPlan, calcLoanDeductionsAndNet } from '@/lib/loans';
+import { buildPaymentPlan } from '@/lib/loans';
+import { desembolsoDePrestamo, getTasaCuatroPorMil } from '@/lib/loan-settings';
 import { disburseSchema, deductionsDetailSchema } from '@/lib/schemas/loan';
 import { getCashBalance } from '@/lib/data/loans';
 import { getOpenPeriodShareValue } from '@/lib/data/share-value';
@@ -69,36 +70,27 @@ export async function POST(
     }
     const deductionsDetail = parsedDeductions.data;
 
-    // Cargar configuración del gravamen 4x1000 desde system_settings
-    const { data: fptSetting } = await admin
-      .from('system_settings')
-      .select('value')
-      .eq('key', 'four_per_thousand_rate')
-      .maybeSingle();
-    const fourPerThousandRate = fptSetting?.value != null ? Number(fptSetting.value) : 0.004;
-
     // Validación de saldo en caja: bloqueamos el desembolso si la caja no
-    // alcanza a cubrir el monto neto que vamos a entregar (requested_amount
-    // menos acciones pagadas upfront y 4x1000 si corresponde). Usamos el
-    // mismo get_cash_balance() que pinta el Libro de caja — así admin y
-    // sistema hablan del mismo número.
-    const netAmount = loan.deduct_obligations
-      ? calcLoanDeductionsAndNet({
-          requestedAmount: Number(loan.requested_amount),
-          sharesAmount: Number(loan.loan_shares_amount || 0),
-          paidUpfront: Boolean(loan.loan_shares_paid_upfront),
-          deductedShares: Number(loan.deducted_shares_amount || 0),
-          deductedFines: Number(loan.deducted_fines_amount || 0),
-          deductedInterest: Number(loan.deducted_interest_amount || 0),
-          deductedCapital: Number(loan.deducted_capital_amount || 0),
-          fourPerThousandRate,
-        }).netDisbursed
-      : calcDisbursedAmount(
-          Number(loan.requested_amount),
-          Number(loan.loan_shares_amount),
-          Boolean(loan.loan_shares_paid_upfront),
-          Number(loan.four_per_thousand),
-        );
+    // alcanza a cubrir el monto neto que vamos a entregar. Usamos el mismo
+    // get_cash_balance() que pinta el Libro de caja — así admin y sistema
+    // hablan del mismo número.
+    // RN-4.16: el 4x1000 se calcula sobre el neto que sale de la caja, después
+    // de las deducciones (acciones por préstamo, multas, intereses y capital).
+    const desembolso = desembolsoDePrestamo({
+      monto: Number(loan.requested_amount),
+      accionesPorPrestamo: Number(loan.loan_shares_amount || 0),
+      pagadasPorAdelantado: Boolean(loan.loan_shares_paid_upfront),
+      accionesVencidas: loan.deduct_obligations ? Number(loan.deducted_shares_amount || 0) : 0,
+      multas: loan.deduct_obligations ? Number(loan.deducted_fines_amount || 0) : 0,
+      intereses: loan.deduct_obligations ? Number(loan.deducted_interest_amount || 0) : 0,
+      capital: loan.deduct_obligations ? Number(loan.deducted_capital_amount || 0) : 0,
+      tasaPorMil: await getTasaCuatroPorMil(admin),
+    });
+    if (!desembolso.ok) {
+      return NextResponse.json({ error: desembolso.error.mensaje }, { status: 422 });
+    }
+    const netAmount = desembolso.value.seTransfiere;
+    const fourPerThousand = desembolso.value.cuatroPorMil;
 
     const cashBalance = await getCashBalance(admin).catch((err) => {
       console.error('disburse: fallo al leer cash balance', err);
@@ -166,6 +158,7 @@ export async function POST(
       .update({
         status: 'active',
         disbursed_amount: disbursedAmount,
+        four_per_thousand: fourPerThousand,
         disbursed_at: disbursedAt.toISOString(),
         outstanding_balance: loan.requested_amount,
         disbursement_proof_path: payment_method === 'cash' ? 'cash' : disbursement_proof_path,

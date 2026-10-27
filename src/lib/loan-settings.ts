@@ -1,0 +1,69 @@
+import type { TypedSupabaseClient } from './data/types';
+import type { Result, ErrorDeDominio } from '@/shared/domain/result';
+import {
+  calcularAccionesPorPrestamo,
+  type AccionesPorPrestamo,
+} from '@/modules/prestamos/domain/acciones-por-prestamo';
+import { calcularDesembolso, type Desembolso } from '@/modules/prestamos/domain/desembolso';
+
+// Adapter between the legacy loan callers and the loan domain
+// (docs/reglas-negocio.md, RN-4.10, RN-4.14 and RN-4.16). It only maps the
+// stored settings and loan fields; the rules live in src/modules/prestamos/domain.
+
+// RN-4.10: one share per loan for every 500.000 (⚙️), rounded up.
+export const PASO_ACCIONES_POR_PRESTAMO = 500_000;
+
+// RN-4.16: 4x1000 by default, expressed in thousandths.
+export const TASA_CUATRO_POR_MIL_POR_DEFECTO = 4;
+
+// `system_settings.four_per_thousand_rate` is stored as a fraction (0.004).
+// The domain takes an integer per-mille rate (4), so the conversion happens
+// here, once, for every caller. Missing or invalid values use the default.
+export function tasaCuatroPorMilDesdeAjuste(valor: unknown): number {
+  if (valor === null || valor === undefined || valor === '') return TASA_CUATRO_POR_MIL_POR_DEFECTO;
+  const fraccion = Number(valor);
+  if (!Number.isFinite(fraccion) || fraccion < 0) return TASA_CUATRO_POR_MIL_POR_DEFECTO;
+  return Math.round(fraccion * 1000);
+}
+
+export async function getTasaCuatroPorMil(client: TypedSupabaseClient): Promise<number> {
+  const { data } = await client
+    .from('system_settings')
+    .select('value')
+    .eq('key', 'four_per_thousand_rate')
+    .maybeSingle();
+  return tasaCuatroPorMilDesdeAjuste(data?.value);
+}
+
+export function accionesPorPrestamo(
+  monto: number,
+  valorAccion: number,
+): Result<AccionesPorPrestamo, ErrorDeDominio> {
+  return calcularAccionesPorPrestamo({ monto, valorAccion, paso: PASO_ACCIONES_POR_PRESTAMO });
+}
+
+// Maps the loan fields to the domain deductions. Loan shares are deducted
+// only when they are not paid upfront (RN-4.14); overdue shares are added to
+// the same share deduction.
+export function desembolsoDePrestamo(params: {
+  monto: number;
+  accionesPorPrestamo: number;
+  pagadasPorAdelantado: boolean;
+  accionesVencidas: number;
+  multas: number;
+  intereses: number;
+  capital: number;
+  tasaPorMil: number;
+}): Result<Desembolso, ErrorDeDominio> {
+  const accionesDescontadas = params.pagadasPorAdelantado ? 0 : params.accionesPorPrestamo;
+  return calcularDesembolso({
+    monto: params.monto,
+    deducciones: {
+      acciones: accionesDescontadas + params.accionesVencidas,
+      multas: params.multas,
+      intereses: params.intereses,
+      capital: params.capital,
+    },
+    tasaPorMil: params.tasaPorMil,
+  });
+}

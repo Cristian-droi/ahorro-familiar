@@ -1,56 +1,11 @@
 // Lógica de negocio del módulo de préstamos.
 
-export const LOAN_SHARES_STEP = 500_000; // 1 acción por préstamo cada 500k
-
 export interface PlanRow {
   month_number: number;
   due_date: string;
   capital_amount: number;
   estimated_interest: number;
   estimated_balance_after: number;
-}
-
-export function calcLoanShares(requestedAmount: number, shareValue: number) {
-  const count = Math.floor(requestedAmount / LOAN_SHARES_STEP);
-  return { count, amount: count * shareValue };
-}
-
-export function calcFourPerThousand(amount: number, rate: number = 0.004): number {
-  return Math.round(amount * rate);
-}
-
-export function calcDisbursedAmount(
-  requestedAmount: number,
-  sharesAmount: number,
-  paidUpfront: boolean,
-  fourPerThousand: number,
-): number {
-  const sharesDiscount = paidUpfront ? 0 : sharesAmount;
-  return requestedAmount - sharesDiscount - fourPerThousand;
-}
-
-export function calcLoanDeductionsAndNet(params: {
-  requestedAmount: number;
-  sharesAmount: number;
-  paidUpfront: boolean;
-  deductedShares: number;
-  deductedFines: number;
-  deductedInterest: number;
-  deductedCapital: number;
-  fourPerThousandRate?: number;
-}) {
-  const rate = params.fourPerThousandRate ?? 0.004;
-  const sharesDiscount = params.paidUpfront ? 0 : params.sharesAmount;
-  const netBeforeTax =
-    params.requestedAmount -
-    sharesDiscount -
-    params.deductedShares -
-    params.deductedFines -
-    params.deductedInterest -
-    params.deductedCapital;
-  const fourPerThousand = netBeforeTax <= 0 ? 0 : Math.round(netBeforeTax * rate);
-  const netDisbursed = Math.max(0, netBeforeTax - fourPerThousand);
-  return { netDisbursed, fourPerThousand };
 }
 
 export function buildPaymentPlan(params: {

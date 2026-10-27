@@ -18,14 +18,13 @@ import {
 import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import { getCashBalance } from '@/lib/data/loans';
 import { cop } from '@/lib/format';
+import { buildPaymentPlan, type PlanRow } from '@/lib/loans';
 import {
-  calcLoanShares,
-  calcFourPerThousand,
-  calcDisbursedAmount,
-  calcLoanDeductionsAndNet,
-  buildPaymentPlan,
-  type PlanRow,
-} from '@/lib/loans';
+  accionesPorPrestamo,
+  desembolsoDePrestamo,
+  getTasaCuatroPorMil,
+  TASA_CUATRO_POR_MIL_POR_DEFECTO,
+} from '@/lib/loan-settings';
 import { checkUserObligations, type UserObligationsStatus } from '@/lib/obligations';
 import { DeductionDetail } from '@/types/entities';
 
@@ -34,6 +33,7 @@ export default function NuevaSolicitudPage() {
 
   const [shareValue, setShareValue] = useState<number | null>(null);
   const [interestRate, setInterestRate] = useState(0.02);
+  const [tasaPorMil, setTasaPorMil] = useState(TASA_CUATRO_POR_MIL_POR_DEFECTO);
   const [cashBalance, setCashBalance] = useState<number | null>(null);
   const [obligations, setObligations] = useState<UserObligationsStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -55,11 +55,12 @@ export default function NuevaSolicitudPage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.replace('/login'); return; }
 
-      const [periodShareValue, rateSetting, balance, obligationsStatus] = await Promise.all([
+      const [periodShareValue, rateSetting, balance, obligationsStatus, fourPerThousandRate] = await Promise.all([
         getOpenPeriodShareValue(supabase, user.id),
         supabase.from('system_settings').select('value').eq('key', 'loan_interest_rate').maybeSingle(),
         getCashBalance(supabase).catch(() => null),
         checkUserObligations(supabase, user.id).catch(() => null),
+        getTasaCuatroPorMil(supabase).catch(() => TASA_CUATRO_POR_MIL_POR_DEFECTO),
       ]);
 
       if (cancelled) return;
@@ -67,6 +68,7 @@ export default function NuevaSolicitudPage() {
       if (rateSetting.data?.value) setInterestRate(Number(rateSetting.data.value));
       setCashBalance(balance);
       setObligations(obligationsStatus);
+      setTasaPorMil(fourPerThousandRate);
       setLoading(false);
     })();
     return () => { cancelled = true; };
@@ -77,10 +79,12 @@ export default function NuevaSolicitudPage() {
     return digits ? Number(digits) : 0;
   }, [amountInput]);
 
-  const { count: sharesCount, amount: sharesAmount } = useMemo(
-    () => (shareValue ? calcLoanShares(requestedAmount, shareValue) : { count: 0, amount: 0 }),
-    [requestedAmount, shareValue],
-  );
+  // RN-4.10: shares rounded up with the configured step.
+  const { cantidad: sharesCount, valor: sharesAmount } = useMemo(() => {
+    if (!shareValue) return { cantidad: 0, valor: 0 };
+    const acciones = accionesPorPrestamo(requestedAmount, shareValue);
+    return acciones.ok ? acciones.value : { cantidad: 0, valor: 0 };
+  }, [requestedAmount, shareValue]);
 
   const deductedShares = useMemo(() => {
     return deductObligations && obligations ? obligations.sharesOwedAmount : 0;
@@ -99,33 +103,45 @@ export default function NuevaSolicitudPage() {
     return Object.values(capitalAbonos).reduce((sum, val) => sum + val, 0);
   }, [deductObligations, capitalAbonos]);
 
-  const { netDisbursed, finalFourPerThousand } = useMemo(() => {
-    if (deductObligations) {
-      const { netDisbursed, fourPerThousand } = calcLoanDeductionsAndNet({
-        requestedAmount,
-        sharesAmount,
-        paidUpfront,
-        deductedShares,
-        deductedFines,
-        deductedInterest,
-        deductedCapital,
+  // RN-4.16: the 4x1000 is computed on the net after deductions. A domain
+  // error (for example, deductions above the amount) is shown, never clamped.
+  const calcularNeto = useCallback(
+    (pagadasPorAdelantado: boolean) => {
+      if (requestedAmount <= 0) return null;
+      return desembolsoDePrestamo({
+        monto: requestedAmount,
+        accionesPorPrestamo: sharesAmount,
+        pagadasPorAdelantado,
+        accionesVencidas: deductedShares,
+        multas: deductedFines,
+        intereses: deductedInterest,
+        capital: deductedCapital,
+        tasaPorMil,
       });
-      return { netDisbursed, finalFourPerThousand: fourPerThousand };
-    } else {
-      const ft = calcFourPerThousand(requestedAmount);
-      const nd = calcDisbursedAmount(requestedAmount, sharesAmount, paidUpfront, ft);
-      return { netDisbursed: nd, finalFourPerThousand: ft };
+    },
+    [requestedAmount, sharesAmount, deductedShares, deductedFines, deductedInterest, deductedCapital, tasaPorMil],
+  );
+
+  const { netDisbursed, finalFourPerThousand, disbursementError } = useMemo(() => {
+    const desembolso = calcularNeto(paidUpfront);
+    if (!desembolso) return { netDisbursed: 0, finalFourPerThousand: 0, disbursementError: null };
+    if (!desembolso.ok) {
+      return { netDisbursed: 0, finalFourPerThousand: 0, disbursementError: desembolso.error.mensaje };
     }
-  }, [
-    requestedAmount,
-    sharesAmount,
-    paidUpfront,
-    deductObligations,
-    deductedShares,
-    deductedFines,
-    deductedInterest,
-    deductedCapital,
-  ]);
+    return {
+      netDisbursed: desembolso.value.seTransfiere,
+      finalFourPerThousand: desembolso.value.cuatroPorMil,
+      disbursementError: null,
+    };
+  }, [calcularNeto, paidUpfront]);
+
+  const netoSegunPago = useCallback(
+    (pagadasPorAdelantado: boolean) => {
+      const desembolso = calcularNeto(pagadasPorAdelantado);
+      return desembolso && desembolso.ok ? desembolso.value.seTransfiere : 0;
+    },
+    [calcularNeto],
+  );
 
   const plan: PlanRow[] = useMemo(() => {
     if (requestedAmount < 500_000 || months < 1) return [];
@@ -144,11 +160,9 @@ export default function NuevaSolicitudPage() {
     if (requestedAmount < 500_000) return 'El monto mínimo es $500.000';
     if (!shareValue) return 'Debes definir tu valor de acción en Ajustes';
     if (months < 1 || months > 60) return 'Los meses deben estar entre 1 y 60';
-    if (deductObligations && netDisbursed < 0) {
-      return 'Las deducciones no pueden superar el monto solicitado.';
-    }
+    if (disbursementError) return disbursementError;
     return null;
-  }, [requestedAmount, shareValue, months, deductObligations, netDisbursed]);
+  }, [requestedAmount, shareValue, months, disbursementError]);
 
   const canSubmit = useMemo(() => {
     if (submitting || !!validationError || requestedAmount === 0) return false;
@@ -382,7 +396,7 @@ export default function NuevaSolicitudPage() {
                     Quiero pagar las {sharesCount} acciones por préstamo ({cop(sharesAmount)}) por adelantado
                   </div>
                   <div className="text-[12px] text-[var(--color-text-muted)] mt-0.5">
-                    Si marcás esta opción, recibirás {cop(calcDisbursedAmount(requestedAmount, sharesAmount, true, finalFourPerThousand))} en vez de {cop(calcDisbursedAmount(requestedAmount, sharesAmount, false, finalFourPerThousand))}.
+                    Si marcás esta opción, recibirás {cop(netoSegunPago(true))} en vez de {cop(netoSegunPago(false))}.
                     Deberás comprarlas en el módulo de compras antes del desembolso.
                   </div>
                 </div>

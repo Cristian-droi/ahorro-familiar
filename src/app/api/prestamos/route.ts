@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { createLoanSchema } from '@/lib/schemas/loan';
-import { calcLoanShares, buildPaymentPlan, calcLoanDeductionsAndNet } from '@/lib/loans';
+import { buildPaymentPlan } from '@/lib/loans';
+import { accionesPorPrestamo, desembolsoDePrestamo, getTasaCuatroPorMil } from '@/lib/loan-settings';
 import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import { validarPuedeComprar } from '@/modules/acciones/domain/valor-de-accion';
 import { checkUserObligations } from '@/lib/obligations';
@@ -70,11 +71,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: puedeComprar.error.mensaje }, { status: 400 });
     }
 
-    // Calcular valores de acciones asociadas al préstamo
-    const { count: sharesCount, amount: sharesAmount } = calcLoanShares(
-      requested_amount,
-      puedeComprar.value,
-    );
+    // Calcular valores de acciones asociadas al préstamo (RN-4.10)
+    const acciones = accionesPorPrestamo(requested_amount, puedeComprar.value);
+    if (!acciones.ok) {
+      return NextResponse.json({ error: acciones.error.mensaje }, { status: 400 });
+    }
+    const { cantidad: sharesCount, valor: sharesAmount } = acciones.value;
 
     let deductedShares = 0;
     let deductedFines = 0;
@@ -101,19 +103,21 @@ export async function POST(request: Request) {
       }
     }
 
-    const { netDisbursed, fourPerThousand } = calcLoanDeductionsAndNet({
-      requestedAmount: requested_amount,
-      sharesAmount,
-      paidUpfront: loan_shares_paid_upfront,
-      deductedShares,
-      deductedFines,
-      deductedInterest,
-      deductedCapital,
+    // RN-4.16: 4x1000 sobre el neto que sale de la caja, después de las deducciones.
+    const desembolso = desembolsoDePrestamo({
+      monto: requested_amount,
+      accionesPorPrestamo: sharesAmount,
+      pagadasPorAdelantado: loan_shares_paid_upfront,
+      accionesVencidas: deductedShares,
+      multas: deductedFines,
+      intereses: deductedInterest,
+      capital: deductedCapital,
+      tasaPorMil: await getTasaCuatroPorMil(admin),
     });
-
-    if (deduct_obligations && netDisbursed < 0) {
-      return NextResponse.json({ error: 'El neto a recibir no puede ser negativo.' }, { status: 422 });
+    if (!desembolso.ok) {
+      return NextResponse.json({ error: desembolso.error.mensaje }, { status: 422 });
     }
+    const fourPerThousand = desembolso.value.cuatroPorMil;
 
     // Crear el préstamo
     const { data: loan, error: loanError } = await admin

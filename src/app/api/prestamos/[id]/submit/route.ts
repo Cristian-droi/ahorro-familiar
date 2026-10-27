@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { checkUserObligations } from '@/lib/obligations';
-import { calcLoanDeductionsAndNet } from '@/lib/loans';
+import { desembolsoDePrestamo, getTasaCuatroPorMil } from '@/lib/loan-settings';
 import { getBogotaCurrentMonth } from '@/lib/fines';
 import { deductionsDetailSchema } from '@/lib/schemas/loan';
 import type { DeductionDetail } from '@/types/entities';
@@ -141,21 +141,22 @@ export async function POST(
         }
       }
 
-      const { netDisbursed, fourPerThousand } = calcLoanDeductionsAndNet({
-        requestedAmount: Number(loan.requested_amount),
-        sharesAmount: Number(loan.loan_shares_amount || 0),
-        paidUpfront: !!loan.loan_shares_paid_upfront,
-        deductedShares,
-        deductedFines,
-        deductedInterest,
-        deductedCapital,
+      // RN-4.16: 4x1000 sobre el neto que sale de la caja, después de las deducciones.
+      const desembolso = desembolsoDePrestamo({
+        monto: Number(loan.requested_amount),
+        accionesPorPrestamo: Number(loan.loan_shares_amount || 0),
+        pagadasPorAdelantado: !!loan.loan_shares_paid_upfront,
+        accionesVencidas: deductedShares,
+        multas: deductedFines,
+        intereses: deductedInterest,
+        capital: deductedCapital,
+        tasaPorMil: await getTasaCuatroPorMil(admin),
       });
-
-      if (netDisbursed < 0) {
-        return NextResponse.json({ error: 'El neto a recibir no puede ser negativo.' }, { status: 422 });
+      if (!desembolso.ok) {
+        return NextResponse.json({ error: desembolso.error.mensaje }, { status: 422 });
       }
 
-      finalFourPerThousand = fourPerThousand;
+      finalFourPerThousand = desembolso.value.cuatroPorMil;
     }
 
     const { error: updateError } = await admin
