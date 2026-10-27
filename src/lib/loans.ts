@@ -199,10 +199,6 @@ export function calcAccruedInterest(params: {
   return total;
 }
 
-export function requiredVotes(totalActive: number): number {
-  return Math.floor(totalActive / 2) + 1;
-}
-
 // ============================================================
 // Libro de accionista — conciliación plan vs pagado mes a mes
 // ============================================================

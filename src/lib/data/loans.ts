@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from '@/types/database';
 import type { Loan, LoanVote, LoanWithDetails, Profile } from '@/types/entities';
+import { eligibleVoterCount } from './votes';
 
 type SB = SupabaseClient<Database>;
 
@@ -295,6 +296,7 @@ export type LoanWithBorrower = Loan & {
     first_name: string;
     last_name: string;
     identity_document: string;
+    role: Profile['role'];
   } | null;
 };
 
@@ -302,21 +304,24 @@ export async function getAllLoans(supabase: SB): Promise<LoanWithBorrower[]> {
   const { data, error } = await supabase
     .from('loans')
     .select(
-      `*, borrower:profiles!loans_user_id_fkey(id, first_name, last_name, identity_document)`,
+      `*, borrower:profiles!loans_user_id_fkey(id, first_name, last_name, identity_document, role)`,
     )
     .order('created_at', { ascending: false });
   if (error) throw error;
   return (data ?? []) as unknown as LoanWithBorrower[];
 }
 
+// `eligible_voters` is n from RN-4.6: active shareholders except the applicant.
+export type LoanWithVoting = LoanWithDetails & { eligible_voters: number };
+
 export async function getLoanWithDetails(
   supabase: SB,
   id: string,
-): Promise<LoanWithDetails | null> {
+): Promise<LoanWithVoting | null> {
   const [loanRes, planRes, votesRes, totalRes] = await Promise.all([
     supabase
       .from('loans')
-      .select(`*, borrower:profiles!loans_user_id_fkey(id,first_name,last_name,identity_document)`)
+      .select(`*, borrower:profiles!loans_user_id_fkey(id,first_name,last_name,identity_document,role)`)
       .eq('id', id)
       .maybeSingle(),
     supabase
@@ -350,14 +355,16 @@ export async function getLoanWithDetails(
   );
 
   const loan = loanRes.data as Record<string, unknown>;
-  const borrower = loan.borrower as LoanWithDetails['borrower'];
+  const borrower = loan.borrower as (LoanWithDetails['borrower'] & { role?: Profile['role'] }) | null;
+  const totalShareholders = Number(totalRes.data ?? 0);
 
   return {
     ...(loan as unknown as Loan),
     borrower: borrower ?? null,
     payment_plan: (planRes.data ?? []) as LoanWithDetails['payment_plan'],
     votes: votes as unknown as LoanWithDetails['votes'],
-    total_active_shareholders: Number(totalRes.data ?? 0),
+    total_active_shareholders: totalShareholders,
+    eligible_voters: eligibleVoterCount({ totalShareholders, applicantRole: borrower?.role }),
     approved_votes: approvedVotes,
     rejected_votes: rejectedVotes,
     has_upfront_shares_receipt: hasUpfront,

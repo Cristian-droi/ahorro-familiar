@@ -9,21 +9,20 @@ import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { showToast } from '@/components/ui/Toast';
 import { ChevronLeft, ThumbsUp, ThumbsDown, Users, AlertTriangle, RotateCcw, Send } from 'lucide-react';
-import { getLoanWithDetails, getMyActiveLoansDebt } from '@/lib/data/loans';
-import type { LoanWithDetails } from '@/types/entities';
+import { getLoanWithDetails, getMyActiveLoansDebt, type LoanWithVoting } from '@/lib/data/loans';
 import { cop } from '@/lib/format';
 import {
   LOAN_STATUS_LABELS,
   LOAN_STATUS_TONE,
-  requiredVotes,
   computeLoanBook,
   type LoanBook,
 } from '@/lib/loans';
+import { votosNecesarios } from '@/modules/prestamos/domain/votacion';
 
 export default function LoanDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const [loan, setLoan] = useState<LoanWithDetails | null>(null);
+  const [loan, setLoan] = useState<LoanWithVoting | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [voting, setVoting] = useState<'approved' | 'rejected' | null>(null);
@@ -156,7 +155,7 @@ export default function LoanDetailPage() {
       setResubmitting(false);
     }
   };
-  const needed = requiredVotes(loan.total_active_shareholders);
+  const needed = votosNecesarios(loan.eligible_voters);
   const tone = LOAN_STATUS_TONE[loan.status] as Parameters<typeof Badge>[0]['tone'];
 
   return (
@@ -441,7 +440,7 @@ export default function LoanDetailPage() {
               </div>
 
               <div className="text-[12px] text-[var(--color-text-muted)] text-center">
-                Se necesitan <b>{needed}</b> votos a favor de {loan.total_active_shareholders} accionistas activos
+                Se necesitan <b>{needed}</b> votos a favor de {loan.eligible_voters} votantes habilitados
               </div>
 
               {/* Barra de progreso */}

@@ -28,16 +28,15 @@ import {
   FileText,
   Landmark,
 } from 'lucide-react';
-import { getLoanWithDetails, getCashBalance } from '@/lib/data/loans';
+import { getLoanWithDetails, getCashBalance, type LoanWithVoting } from '@/lib/data/loans';
 import { getOpenPeriodShareValue } from '@/lib/data/share-value';
-import type { LoanWithDetails } from '@/types/entities';
 import { cop } from '@/lib/format';
 import {
   LOAN_STATUS_LABELS,
   LOAN_STATUS_TONE,
   calcAccruedInterest,
-  requiredVotes,
 } from '@/lib/loans';
+import { votosNecesarios } from '@/modules/prestamos/domain/votacion';
 
 function extensionFromMime(mime: string) {
   if (mime === 'image/jpeg') return 'jpg';
@@ -48,7 +47,7 @@ function extensionFromMime(mime: string) {
 
 export default function AdminLoanDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const [loan, setLoan] = useState<LoanWithDetails | null>(null);
+  const [loan, setLoan] = useState<LoanWithVoting | null>(null);
   const [loading, setLoading] = useState(true);
   const [cashBalance, setCashBalance] = useState<number | null>(null);
   const [shareValue, setShareValue] = useState<number | null>(null);
@@ -198,7 +197,7 @@ export default function AdminLoanDetailPage() {
   if (!loan) return <div className="text-sm text-[var(--color-text-muted)]">Préstamo no encontrado.</div>;
 
   const tone = LOAN_STATUS_TONE[loan.status] as Parameters<typeof Badge>[0]['tone'];
-  const needed = requiredVotes(loan.total_active_shareholders);
+  const needed = votosNecesarios(loan.eligible_voters);
   const loanAmount = Number(loan.requested_amount);
   const shortfall = cashBalance !== null ? loanAmount - cashBalance : 0;
   const exceedsBalance = cashBalance !== null && shortfall > 0;
@@ -915,7 +914,7 @@ export default function AdminLoanDetailPage() {
               )}
               {loan.status === 'pending_shareholder_vote' && (
                 <div className="mt-3 text-[12px] text-[var(--color-text-muted)]">
-                  {loan.approved_votes} / {needed} votos necesarios · {loan.total_active_shareholders} accionistas activos
+                  {loan.approved_votes} / {needed} votos necesarios · {loan.eligible_voters} votantes habilitados
                 </div>
               )}
               {loan.status === 'draft' && loan.admin_notes && (
