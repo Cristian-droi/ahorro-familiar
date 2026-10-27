@@ -3,6 +3,7 @@
 
 import type { ReglasDeCompra } from '@/modules/acciones/domain/compra';
 import { ok, err, type Result, type ErrorDeDominio } from '@/shared/domain/result';
+import { hayRepetidos } from './repetidos';
 
 export interface PrestamoPendiente {
   id: string;
@@ -60,6 +61,13 @@ export function distribuirMontoFijo(params: {
       codigo: 'valor_invalido',
       mensaje: 'Los saldos, intereses y multas deben ser enteros no negativos, y el valor de la acción mayor que cero.',
     });
+  }
+
+  if (hayRepetidos(prestamos.map((p) => p.id))) {
+    return err({ codigo: 'prestamo_repetido', mensaje: 'Cada préstamo solo puede estar una vez en el pago.' });
+  }
+  if (hayRepetidos([...meses, ...mesesFuturos].map((m) => m.mes))) {
+    return err({ codigo: 'mes_repetido', mensaje: 'Cada mes de acciones solo puede estar una vez en el pago.' });
   }
 
   // RN-3.1: one month means the minimum shares.

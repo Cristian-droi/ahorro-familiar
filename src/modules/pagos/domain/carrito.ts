@@ -4,6 +4,7 @@
 import { validarCantidadDeAcciones, type ReglasDeCompra } from '@/modules/acciones/domain/compra';
 import { aplicarPago, type PagoAplicado } from '@/modules/prestamos/domain/pagos';
 import { ok, err, type Result, type ErrorDeDominio } from '@/shared/domain/result';
+import { hayRepetidos } from './repetidos';
 
 export interface MesEnCarrito {
   mes: string;
@@ -38,10 +39,6 @@ const VALOR_INVALIDO: ErrorDeDominio = {
   codigo: 'valor_invalido',
   mensaje: 'El valor de la acción debe ser mayor que cero y la multa no puede ser negativa.',
 };
-
-function hayRepetidos(claves: string[]): boolean {
-  return new Set(claves).size !== claves.length;
-}
 
 export function totalDelCarrito(params: {
   meses: MesEnCarrito[];

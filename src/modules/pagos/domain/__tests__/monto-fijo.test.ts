@@ -152,6 +152,17 @@ describe('distribuirMontoFijo (RN-4.29c)', () => {
     [{ prestamos: [{ id: 'A', interesesPendientes: -1, saldoCapital: 100 }] }, 'valor_invalido'],
     [{ mesActual: { mes: '2026-10-01', valorAccion: 0, multa: 0 } }, 'valor_invalido'],
     [{ mesesAtrasados: [{ mes: '2026-09-01', valorAccion: 25000, multa: -5 }] }, 'valor_invalido'],
+    [
+      {
+        prestamos: [
+          { id: 'A', interesesPendientes: 0, saldoCapital: 100 },
+          { id: 'A', interesesPendientes: 0, saldoCapital: 100 },
+        ],
+      },
+      'prestamo_repetido',
+    ],
+    [{ mesesAtrasados: [{ mes: '2026-10-01', valorAccion: 25000, multa: 0 }] }, 'mes_repetido'],
+    [{ mesesFuturos: [{ mes: '2026-10-01', valorAccion: 25000 }] }, 'mes_repetido'],
   ])('returns an error for %o', (cambio, codigo) => {
     const r = distribuirMontoFijo({ ...ejemplo, monto: 300000, adelantarAcciones: false, ...cambio });
     expect(!r.ok && r.error.codigo).toBe(codigo);
