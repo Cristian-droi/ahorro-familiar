@@ -35,6 +35,7 @@ import {
 import { Landmark } from 'lucide-react';
 import { exportToExcel, exportToPdf, type ExportSection } from '@/lib/exports';
 import { getProfile } from '@/lib/data/profiles';
+import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import { listReceiptItemsByYear } from '@/lib/data/receipts';
 import {
   getLibroAccionistaData,
@@ -211,15 +212,14 @@ export function ExtractoView({ targetUserId }: ExtractoViewProps = {}) {
       setUserId(effectiveUserId);
 
       try {
-        const profile = await getProfile(supabase, effectiveUserId);
+        const [profile, periodShareValue] = await Promise.all([
+          getProfile(supabase, effectiveUserId),
+          getOpenPeriodShareValue(supabase, effectiveUserId),
+        ]);
         if (cancelled) return;
         setFirstName(profile.first_name ?? '');
         setLastName(profile.last_name ?? '');
-        if (profile.selected_share_value != null) {
-          setShareValue(Number(profile.selected_share_value));
-        } else {
-          setShareValue(null);
-        }
+        setShareValue(periodShareValue);
       } catch (err) {
         console.error('Error perfil:', err);
       }

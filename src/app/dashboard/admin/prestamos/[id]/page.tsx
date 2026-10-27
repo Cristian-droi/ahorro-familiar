@@ -29,6 +29,7 @@ import {
   Landmark,
 } from 'lucide-react';
 import { getLoanWithDetails, getCashBalance } from '@/lib/data/loans';
+import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import type { LoanWithDetails } from '@/types/entities';
 import { cop } from '@/lib/format';
 import {
@@ -50,6 +51,7 @@ export default function AdminLoanDetailPage() {
   const [loan, setLoan] = useState<LoanWithDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [cashBalance, setCashBalance] = useState<number | null>(null);
+  const [shareValue, setShareValue] = useState<number | null>(null);
   const [rejectionReason, setRejectionReason] = useState('');
   const [revisionNote, setRevisionNote] = useState('');
   const [adminNotes, setAdminNotes] = useState('');
@@ -68,6 +70,9 @@ export default function AdminLoanDetailPage() {
     ]);
     setLoan(data);
     setCashBalance(balance);
+    setShareValue(
+      data ? await getOpenPeriodShareValue(supabase, data.user_id).catch(() => null) : null,
+    );
     if (data?.admin_notes) setAdminNotes(data.admin_notes);
     setLoading(false);
   }, [id]);
@@ -194,7 +199,6 @@ export default function AdminLoanDetailPage() {
 
   const tone = LOAN_STATUS_TONE[loan.status] as Parameters<typeof Badge>[0]['tone'];
   const needed = requiredVotes(loan.total_active_shareholders);
-  const shareValue = loan.borrower?.selected_share_value;
   const loanAmount = Number(loan.requested_amount);
   const shortfall = cashBalance !== null ? loanAmount - cashBalance : 0;
   const exceedsBalance = cashBalance !== null && shortfall > 0;

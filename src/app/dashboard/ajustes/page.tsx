@@ -15,8 +15,6 @@ import {
   ChevronDown,
   CheckCircle2,
   Lock,
-  Unlock,
-  Users,
   TrendingUp,
   CalendarClock,
   PlayCircle,
@@ -37,6 +35,7 @@ import {
   getProfileRole,
   updateProfile,
 } from '@/lib/data/profiles';
+import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import {
   closeCapitalizationWindowV2,
   listAdminCapitalizationWindows,
@@ -67,23 +66,13 @@ export default function AjustesPage() {
   const [maxLoansPerUser, setMaxLoansPerUser] = useState<number>(2);
   const [resumenSaving, setResumenSaving] = useState<boolean>(false);
 
-  // User state (su propia selección + si puede cambiarla)
+  // User state: the open-period value is chosen once and never changes
+  // (RN-2.2), so a saved value is read-only.
   const [selectedShare, setSelectedShare] = useState<number | null>(null);
   const [savedShare, setSavedShare] = useState<number | null>(null);
-  const [canChange, setCanChange] = useState<boolean>(true);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  // Bulk unlock/lock de todos los accionistas (solo admin).
-  const [bulkLoading, setBulkLoading] = useState<'allow' | 'revoke' | null>(null);
-  // Estadística del estado actual: cuántos accionistas tienen el cambio
-  // habilitado vs total. Se usa para mostrar el estado global y deshabilitar
-  // el botón que ya no aplicaría (p.ej. "Permitir a todos" cuando ya todos
-  // lo tienen habilitado). El admin tiene RLS para leer profiles.
-  const [shareChangeStats, setShareChangeStats] = useState<{
-    enabled: number;
-    total: number;
-  } | null>(null);
 
   // Datos personales (todos los usuarios). Guardamos dos copias: `profileForm`
   // es lo que el usuario está editando y `profileSaved` es el snapshot del
@@ -253,32 +242,6 @@ export default function AjustesPage() {
     }
   };
 
-  const refreshShareChangeStats = useCallback(async () => {
-    const [totalRes, enabledRes] = await Promise.all([
-      supabase
-        .from('profiles')
-        .select('id', { count: 'exact', head: true })
-        .eq('role', 'accionista'),
-      supabase
-        .from('profiles')
-        .select('id', { count: 'exact', head: true })
-        .eq('role', 'accionista')
-        .eq('share_value_change_allowed', true),
-    ]);
-    if (totalRes.error) {
-      console.error('Error contando accionistas:', totalRes.error);
-      return;
-    }
-    if (enabledRes.error) {
-      console.error('Error contando accionistas habilitados:', enabledRes.error);
-      return;
-    }
-    setShareChangeStats({
-      total: totalRes.count ?? 0,
-      enabled: enabledRes.count ?? 0,
-    });
-  }, []);
-
   const refreshCapWindows = useCallback(async () => {
     try {
       const list = await listAdminCapitalizationWindows(supabase);
@@ -290,7 +253,6 @@ export default function AjustesPage() {
 
   useEffect(() => {
     let cancelled = false;
-    let profileChannel: ReturnType<typeof supabase.channel> | null = null;
 
     const init = async () => {
       const {
@@ -355,11 +317,9 @@ export default function AjustesPage() {
             });
           }
 
-          // Si es admin, cargamos el estado global del flag de cambio
-          // para todos los accionistas (habilitados vs total) y la lista
-          // de ventanas activas de capitalización.
+          // Si es admin, cargamos las cuentas bancarias y la lista de
+          // ventanas activas de capitalización.
           if (userRole === 'admin') {
-            refreshShareChangeStats();
             loadBankAccounts();
             try {
               const list = await listAdminCapitalizationWindows(supabase);
@@ -382,59 +342,11 @@ export default function AjustesPage() {
 
           // Al admin no le cargamos valor de acción: no aplica.
           if (userRole !== 'admin') {
-            if (profile.selected_share_value != null) {
-              const val = Number(profile.selected_share_value);
-              setSelectedShare(val);
-              setSavedShare(val);
+            const periodShareValue = await getOpenPeriodShareValue(supabase, user.id);
+            if (!cancelled && periodShareValue != null) {
+              setSelectedShare(periodShareValue);
+              setSavedShare(periodShareValue);
             }
-            setCanChange(profile.share_value_change_allowed ?? true);
-
-            // Escuchamos cambios en el propio perfil para reflejar en vivo
-            // cuando el admin habilita/bloquea el cambio del valor de acción
-            // mientras el accionista está en esta pantalla.
-            profileChannel = supabase
-              .channel(`profile-self-${user.id}`)
-              .on(
-                'postgres_changes',
-                {
-                  event: 'UPDATE',
-                  schema: 'public',
-                  table: 'profiles',
-                  filter: `id=eq.${user.id}`,
-                },
-                (payload) => {
-                  if (cancelled) return;
-                  const next = payload.new as {
-                    share_value_change_allowed?: boolean;
-                    selected_share_value?: number | null;
-                  };
-                  if (typeof next.share_value_change_allowed === 'boolean') {
-                    setCanChange((prev) => {
-                      // Feedback visible cuando el admin cambió el permiso.
-                      if (prev !== next.share_value_change_allowed) {
-                        if (next.share_value_change_allowed) {
-                          showToast(
-                            'success',
-                            'El administrador habilitó el cambio de tu valor de acción',
-                          );
-                        } else {
-                          showToast(
-                            'info',
-                            'El administrador bloqueó el cambio de tu valor de acción',
-                          );
-                        }
-                      }
-                      return next.share_value_change_allowed!;
-                    });
-                  }
-                  if (next.selected_share_value != null) {
-                    const val = Number(next.selected_share_value);
-                    setSavedShare(val);
-                    setSelectedShare((prev) => (prev === null ? val : prev));
-                  }
-                },
-              )
-              .subscribe();
           }
         } catch (err) {
           console.error('Error cargando perfil:', err);
@@ -489,7 +401,6 @@ export default function AjustesPage() {
 
     return () => {
       cancelled = true;
-      if (profileChannel) supabase.removeChannel(profileChannel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -726,77 +637,29 @@ export default function AjustesPage() {
   };
 
   const saveUserShare = async () => {
-    if (!userId || !selectedShare) return;
+    if (!userId || !selectedShare || savedShare !== null) return;
     setSaving(true);
 
     try {
-      await updateProfile(supabase, userId, {
-        selected_share_value: selectedShare,
-      });
-      setSavedShare(selectedShare);
-      // El trigger del backend auto-bloquea tras guardar: reflejamos eso
-      // en el estado local para que la UI se actualice sin refetch.
-      setCanChange(false);
-      showToast('success', 'Valor de acción guardado exitosamente');
-    } catch (err: unknown) {
-      // Supabase devuelve PostgrestError como objeto plano con .message/.hint,
-      // no como Error nativo — leemos ambos shapes.
-      const errObj = err as { message?: string; hint?: string } | null;
-      const message = errObj?.message ?? '';
-      const hint = errObj?.hint ?? '';
-      const isLocked =
-        message.includes('share_value_locked') ||
-        hint.includes('share_value_locked') ||
-        message.includes('autorizar el cambio');
-
-      if (isLocked) {
-        // Silenciamos el console.error: es un flujo esperado (admin bloqueó
-        // el cambio justo antes del guardado). La UI ya lo comunica.
-        showToast(
-          'error',
-          'El administrador bloqueó el cambio de tu valor de acción. Vuelve a pedir autorización para modificarlo.',
-        );
-        // Refrescamos la UI con el nuevo estado bloqueado + restauramos el
-        // valor guardado en el select para que no quede desincronizado.
-        setCanChange(false);
-        setSelectedShare(savedShare);
-      } else {
-        console.error('Error guardando valor de acción:', err);
-        showToast('error', 'Error al guardar tu valor de acción');
-      }
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const bulkChangeAllow = async (allow: boolean) => {
-    setBulkLoading(allow ? 'allow' : 'revoke');
-    try {
-      const res = await fetch('/api/admin/share-value-unlock', {
+      const res = await fetch('/api/acciones/valor', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scope: 'all', allow }),
+        body: JSON.stringify({ shareValue: selectedShare }),
       });
-      const body = await res.json().catch(() => null);
+      const body = (await res.json().catch(() => null)) as
+        | { error?: string; shareValue?: number }
+        | null;
       if (!res.ok) {
-        showToast('error', body?.error ?? 'No se pudo aplicar el cambio');
+        showToast('error', body?.error ?? 'Error al guardar tu valor de acción');
         return;
       }
-      const updated = body?.updated ?? 0;
-      showToast(
-        'success',
-        allow
-          ? `Cambio habilitado para ${updated} accionista${updated === 1 ? '' : 's'}`
-          : `Cambio bloqueado para ${updated} accionista${updated === 1 ? '' : 's'}`,
-      );
-      // Refrescamos el badge para que muestre el estado nuevo y se
-      // deshabilite el botón que ya no aplica.
-      await refreshShareChangeStats();
+      setSavedShare(body?.shareValue ?? selectedShare);
+      showToast('success', 'Valor de acción guardado exitosamente');
     } catch (err) {
-      console.error('Error bulk share-value-unlock:', err);
-      showToast('error', 'No se pudo aplicar el cambio');
+      console.error('Error guardando valor de acción:', err);
+      showToast('error', 'Error al guardar tu valor de acción');
     } finally {
-      setBulkLoading(null);
+      setSaving(false);
     }
   };
 
@@ -854,10 +717,8 @@ export default function AjustesPage() {
   }
 
   const isAdmin = role === 'admin';
-  // Un accionista puede editar si nunca ha elegido (savedShare === null) o si
-  // el admin le permitió cambiar (canChange === true).
-  const canUserEditShare = savedShare === null || canChange;
-  const userPanelDisabled = !canUserEditShare;
+  // RN-2.2: the value is chosen once per period; after that it is read-only.
+  const userPanelDisabled = savedShare !== null;
 
   return (
     <div className="flex flex-col gap-7 animate-in fade-in duration-300">
@@ -901,26 +762,20 @@ export default function AjustesPage() {
                     Tu valor de acción
                   </h2>
                 </div>
-                {savedShare !== null &&
-                  (canChange ? (
-                    <Badge tone="success" className="shrink-0">
-                      <Unlock size={11} strokeWidth={1.75} />
-                      Cambio habilitado
-                    </Badge>
-                  ) : (
-                    <Badge tone="neutral" className="shrink-0">
-                      <Lock size={11} strokeWidth={1.75} />
-                      Bloqueado
-                    </Badge>
-                  ))}
+                {savedShare !== null && (
+                  <Badge tone="neutral" className="shrink-0">
+                    <Lock size={11} strokeWidth={1.75} />
+                    Elegido para este periodo
+                  </Badge>
+                )}
               </div>
               <p className="text-[var(--color-text-muted)] text-[13px] leading-[1.55]">
                 Selecciona el monto fijo que aportarás mensualmente como acción dentro
                 de la plataforma. Este valor formará parte de tu capital acumulado.
                 <br />
                 <span className="text-[12px] text-[var(--color-text-subtle)]">
-                  Una vez guardes tu selección, no podrás cambiarla sin autorización
-                  del administrador.
+                  Se elige una sola vez por periodo, al iniciar el año, y no se puede
+                  cambiar a mitad de año.
                 </span>
               </p>
 
@@ -973,32 +828,25 @@ export default function AjustesPage() {
                   <div className="flex items-start gap-2 px-3 py-2.5 rounded-[10px] bg-[var(--color-surface-alt)] text-[var(--color-text-muted)] text-[12.5px] leading-[1.5]">
                     <Lock size={14} strokeWidth={1.75} className="mt-0.5 shrink-0" />
                     <span>
-                      Tu valor de acción está bloqueado. Pídele al administrador que
-                      autorice el cambio si necesitas modificarlo.
+                      Ya elegiste tu valor de acción para este periodo. No se puede
+                      cambiar a mitad de año.
                     </span>
                   </div>
                 )}
               </div>
             </div>
-            <div className="p-4 border-t border-[var(--color-border)] bg-[var(--color-surface-alt)]">
-              <Button
-                className="w-full"
-                onClick={saveUserShare}
-                disabled={
-                  saving ||
-                  !selectedShare ||
-                  selectedShare === savedShare ||
-                  userPanelDisabled
-                }
-              >
-                <Save size={15} strokeWidth={1.75} />
-                {saving
-                  ? 'Guardando...'
-                  : selectedShare === savedShare
-                    ? 'Sin cambios'
-                    : 'Guardar preferencia'}
-              </Button>
-            </div>
+            {!userPanelDisabled && (
+              <div className="p-4 border-t border-[var(--color-border)] bg-[var(--color-surface-alt)]">
+                <Button
+                  className="w-full"
+                  onClick={saveUserShare}
+                  disabled={saving || !selectedShare}
+                >
+                  <Save size={15} strokeWidth={1.75} />
+                  {saving ? 'Guardando...' : 'Guardar valor del periodo'}
+                </Button>
+              </div>
+            )}
           </Card>
         )}
 
@@ -1075,108 +923,6 @@ export default function AjustesPage() {
                   <Save size={15} strokeWidth={1.75} />
                   {saving ? 'Aplicando...' : 'Aplicar cambios globales'}
                 </Button>
-              </div>
-            </Card>
-
-            {/* Bulk: permitir o revocar cambio de valor a todos los accionistas */}
-            <Card padding="none" className="flex flex-col overflow-hidden">
-              <div className="p-6 flex-1 flex flex-col gap-4">
-                <div className="flex items-center justify-between gap-3 mb-1">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-[10px] bg-[var(--color-brand-soft)] text-[var(--color-brand)] flex items-center justify-center">
-                      <Users size={18} strokeWidth={1.75} />
-                    </div>
-                    <h2 className="text-[15px] font-semibold tracking-tight text-[var(--color-text)]">
-                      Cambio de valor de acción
-                    </h2>
-                  </div>
-                  {(() => {
-                    // Badge de estado actual. Tres casos:
-                    //   - Sin accionistas registrados → no mostramos nada.
-                    //   - Todos habilitados       → verde "Habilitado".
-                    //   - Todos bloqueados        → neutro "Bloqueado".
-                    //   - Mixto                   → warn "N de M habilitados".
-                    if (!shareChangeStats || shareChangeStats.total === 0) {
-                      return null;
-                    }
-                    const { enabled, total } = shareChangeStats;
-                    if (enabled === total) {
-                      return (
-                        <Badge tone="success" dot>
-                          Habilitado
-                        </Badge>
-                      );
-                    }
-                    if (enabled === 0) {
-                      return (
-                        <Badge tone="neutral" dot>
-                          Bloqueado
-                        </Badge>
-                      );
-                    }
-                    return (
-                      <Badge tone="warn" dot>
-                        {enabled} de {total} habilitados
-                      </Badge>
-                    );
-                  })()}
-                </div>
-                <p className="text-[var(--color-text-muted)] text-[13px] leading-[1.55]">
-                  Por defecto cada accionista puede elegir su valor de acción una
-                  sola vez. Si quieres reabrir el cambio para todos (por ejemplo,
-                  cuando ajustas los montos globales), hazlo aquí. También puedes
-                  permitir o revocar uno por uno desde el directorio de accionistas.
-                </p>
-
-                {(() => {
-                  // Derivamos los flags de UI a partir del conteo. Si aún no
-                  // tenemos los datos (primer render), los botones quedan
-                  // activos pero sin saber el estado.
-                  const total = shareChangeStats?.total ?? 0;
-                  const enabled = shareChangeStats?.enabled ?? 0;
-                  const allEnabled = total > 0 && enabled === total;
-                  const allBlocked = total > 0 && enabled === 0;
-
-                  return (
-                    <div className="flex flex-col gap-2 mt-1">
-                      <Button
-                        className="w-full"
-                        onClick={() => bulkChangeAllow(true)}
-                        disabled={bulkLoading !== null || allEnabled}
-                        title={
-                          allEnabled
-                            ? 'Todos los accionistas ya lo tienen habilitado'
-                            : undefined
-                        }
-                      >
-                        <Unlock size={15} strokeWidth={1.75} />
-                        {bulkLoading === 'allow'
-                          ? 'Habilitando...'
-                          : allEnabled
-                            ? 'Ya habilitado para todos'
-                            : 'Permitir cambio a todos los accionistas'}
-                      </Button>
-                      <Button
-                        className="w-full"
-                        variant="secondary"
-                        onClick={() => bulkChangeAllow(false)}
-                        disabled={bulkLoading !== null || allBlocked}
-                        title={
-                          allBlocked
-                            ? 'Ningún accionista lo tiene habilitado'
-                            : undefined
-                        }
-                      >
-                        <Lock size={15} strokeWidth={1.75} />
-                        {bulkLoading === 'revoke'
-                          ? 'Bloqueando...'
-                          : allBlocked
-                            ? 'Ya bloqueado para todos'
-                            : 'Bloquear cambio a todos los accionistas'}
-                      </Button>
-                    </div>
-                  );
-                })()}
               </div>
             </Card>
 

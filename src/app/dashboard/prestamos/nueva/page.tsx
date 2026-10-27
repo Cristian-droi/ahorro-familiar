@@ -15,7 +15,7 @@ import {
   Check,
   X,
 } from 'lucide-react';
-import { getProfile } from '@/lib/data/profiles';
+import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import { getCashBalance } from '@/lib/data/loans';
 import { cop } from '@/lib/format';
 import {
@@ -55,15 +55,15 @@ export default function NuevaSolicitudPage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.replace('/login'); return; }
 
-      const [profile, rateSetting, balance, obligationsStatus] = await Promise.all([
-        getProfile(supabase, user.id),
+      const [periodShareValue, rateSetting, balance, obligationsStatus] = await Promise.all([
+        getOpenPeriodShareValue(supabase, user.id),
         supabase.from('system_settings').select('value').eq('key', 'loan_interest_rate').maybeSingle(),
         getCashBalance(supabase).catch(() => null),
         checkUserObligations(supabase, user.id).catch(() => null),
       ]);
 
       if (cancelled) return;
-      setShareValue(profile.selected_share_value ?? null);
+      setShareValue(periodShareValue);
       if (rateSetting.data?.value) setInterestRate(Number(rateSetting.data.value));
       setCashBalance(balance);
       setObligations(obligationsStatus);

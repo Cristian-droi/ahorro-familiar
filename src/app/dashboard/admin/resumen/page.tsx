@@ -89,7 +89,7 @@ export default function AdminResumenPage() {
       // 1. Cargar perfiles activos
       const { data: profiles, error: profilesErr } = await supabase
         .from('profiles')
-        .select('id, first_name, last_name, identity_document, selected_share_value, next_year_capitalization')
+        .select('id, first_name, last_name, identity_document, next_year_capitalization')
         .eq('role', 'accionista')
         .order('first_name');
 

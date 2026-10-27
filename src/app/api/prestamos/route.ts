@@ -3,7 +3,8 @@ import { requireUser } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { createLoanSchema } from '@/lib/schemas/loan';
 import { calcLoanShares, buildPaymentPlan, calcLoanDeductionsAndNet } from '@/lib/loans';
-import { getProfile } from '@/lib/data/profiles';
+import { getOpenPeriodShareValue } from '@/lib/data/share-value';
+import { validarPuedeComprar } from '@/modules/acciones/domain/valor-de-accion';
 import { checkUserObligations } from '@/lib/obligations';
 
 // POST /api/prestamos — accionista crea un borrador de préstamo.
@@ -61,16 +62,18 @@ export async function POST(request: Request) {
       }
     }
 
-    // Obtener perfil para valor de acción
-    const profile = await getProfile(admin, user.id);
-    if (!profile.selected_share_value) {
-      return NextResponse.json({ error: 'Debes definir tu valor de acción antes de solicitar un préstamo' }, { status: 422 });
+    // Valor de acción del periodo abierto (RN-2.3)
+    const puedeComprar = validarPuedeComprar({
+      valorDeAccion: await getOpenPeriodShareValue(admin, user.id),
+    });
+    if (!puedeComprar.ok) {
+      return NextResponse.json({ error: puedeComprar.error.mensaje }, { status: 400 });
     }
 
     // Calcular valores de acciones asociadas al préstamo
     const { count: sharesCount, amount: sharesAmount } = calcLoanShares(
       requested_amount,
-      profile.selected_share_value,
+      puedeComprar.value,
     );
 
     let deductedShares = 0;

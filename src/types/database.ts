@@ -355,6 +355,87 @@ export type Database = {
         }
         Relationships: []
       }
+      period_memberships: {
+        Row: {
+          period_id: string
+          profile_id: string
+          share_value: number | null
+          share_value_locked_at: string | null
+        }
+        Insert: {
+          period_id: string
+          profile_id: string
+          share_value?: number | null
+          share_value_locked_at?: string | null
+        }
+        Update: {
+          period_id?: string
+          profile_id?: string
+          share_value?: number | null
+          share_value_locked_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "period_memberships_period_id_fkey"
+            columns: ["period_id"]
+            isOneToOne: false
+            referencedRelation: "periods"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "period_memberships_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      periods: {
+        Row: {
+          closed_at: string | null
+          closed_by: string | null
+          id: string
+          opened_at: string
+          opened_by: string | null
+          status: Database["public"]["Enums"]["period_status"]
+          year: number
+        }
+        Insert: {
+          closed_at?: string | null
+          closed_by?: string | null
+          id?: string
+          opened_at?: string
+          opened_by?: string | null
+          status?: Database["public"]["Enums"]["period_status"]
+          year: number
+        }
+        Update: {
+          closed_at?: string | null
+          closed_by?: string | null
+          id?: string
+          opened_at?: string
+          opened_by?: string | null
+          status?: Database["public"]["Enums"]["period_status"]
+          year?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "periods_closed_by_fkey"
+            columns: ["closed_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "periods_opened_by_fkey"
+            columns: ["opened_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           address: string | null
@@ -372,8 +453,6 @@ export type Database = {
           next_year_capitalization: number | null
           phone: string | null
           role: Database["public"]["Enums"]["user_role"]
-          selected_share_value: number | null
-          share_value_change_allowed: boolean
           updated_at: string
         }
         Insert: {
@@ -392,8 +471,6 @@ export type Database = {
           next_year_capitalization?: number | null
           phone?: string | null
           role?: Database["public"]["Enums"]["user_role"]
-          selected_share_value?: number | null
-          share_value_change_allowed?: boolean
           updated_at?: string
         }
         Update: {
@@ -412,8 +489,6 @@ export type Database = {
           next_year_capitalization?: number | null
           phone?: string | null
           role?: Database["public"]["Enums"]["user_role"]
-          selected_share_value?: number | null
-          share_value_change_allowed?: boolean
           updated_at?: string
         }
         Relationships: []
@@ -563,6 +638,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      choose_share_value: { Args: { p_share_value: number }; Returns: number }
       close_capitalization_window: { Args: never; Returns: Json }
       close_capitalization_window_v2: {
         Args: { p_window_id: string }
@@ -670,6 +746,7 @@ export type Database = {
         | "rejected_by_admin"
         | "rejected_by_shareholders"
       loan_vote_value: "approved" | "rejected"
+      period_status: "open" | "closing" | "closed"
       receipt_concept:
         | "acciones"
         | "acciones_prestamo"
@@ -821,6 +898,7 @@ export const Constants = {
         "rejected_by_shareholders",
       ],
       loan_vote_value: ["approved", "rejected"],
+      period_status: ["open", "closing", "closed"],
       receipt_concept: [
         "acciones",
         "acciones_prestamo",

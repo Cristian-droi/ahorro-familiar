@@ -1,11 +1,15 @@
 import { type SupabaseClient } from '@supabase/supabase-js';
 import { type Database } from '@/types/database';
+import { getOpenPeriodShareValue } from '@/lib/data/share-value';
+import { validarPuedeComprar } from '@/modules/acciones/domain/valor-de-accion';
 import { getBogotaToday, getBogotaCurrentMonth, DEFAULT_PURCHASE_RULES, type PurchaseRules, computeFineForMonth } from '@/lib/fines';
 
 export interface UserObligationsStatus {
   isUpToDate: boolean;
   reasons: string[];
   accionesShortage: boolean;
+  // Open-period share value; null while it is not chosen (RN-2.3).
+  shareValue: number | null;
   finesPending: boolean;
   interestOwed: boolean;
   sharesOwedCount: number;
@@ -67,18 +71,21 @@ export async function checkUserObligations(
   let finesPending = false;
   let interestOwed = false;
 
-  // 1. Cargar reglas de compra, perfil del socio y fecha actual en Bogotá
+  // 1. Cargar reglas de compra, valor de acción del periodo y fecha actual en Bogotá
   const rules = await getPurchaseRules(supabase);
   const today = getBogotaToday();
   const currentMonthStr = getBogotaCurrentMonth(); // YYYY-MM-01
   const currentYear = today.getUTCFullYear();
 
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('selected_share_value')
-    .eq('id', userId)
-    .maybeSingle();
-  const shareValue = profile?.selected_share_value ?? 50000;
+  // RN-2.3: without a chosen value there is no share amount to owe or to
+  // deduct. The shareholder is not up to date and the share months are
+  // skipped until the value is chosen (no silent default).
+  const shareValue = await getOpenPeriodShareValue(supabase, userId);
+  const puedeComprar = validarPuedeComprar({ valorDeAccion: shareValue });
+  if (!puedeComprar.ok) {
+    reasons.push(puedeComprar.error.mensaje);
+    accionesShortage = true;
+  }
 
   // 2. Determinar meses a validar (desde Enero hasta el mes actual del año en Bogotá)
   const currMonthNum = Number(currentMonthStr.split('-')[1]);
@@ -139,8 +146,10 @@ export async function checkUserObligations(
     fineOwed: number;
   }> = [];
 
-  // Validar cada mes requerido
-  for (const monthStr of monthsToValidate) {
+  // Validar cada mes requerido (solo con un valor de acción elegido)
+  const monthsWithShareValue = puedeComprar.ok ? monthsToValidate : [];
+  const unitValue = puedeComprar.ok ? puedeComprar.value : 0;
+  for (const monthStr of monthsWithShareValue) {
     const approvedShares = sharesByMonth.get(monthStr) ?? 0;
     const sharesOwed = Math.max(0, rules.min_shares_per_month - approvedShares);
     
@@ -154,7 +163,7 @@ export async function checkUserObligations(
       );
       accionesShortage = true;
       sharesOwedCount += sharesOwed;
-      sharesOwedAmount += sharesOwed * shareValue;
+      sharesOwedAmount += sharesOwed * unitValue;
 
       // Si además de faltar acciones hoy ya pasó el día de gracia, hay multa por mora
       const [y, m] = monthStr.split('-').map(Number);
@@ -177,7 +186,7 @@ export async function checkUserObligations(
         month: monthStr,
         monthName,
         sharesOwed,
-        shareValue,
+        shareValue: unitValue,
         fineOwed
       });
     }
@@ -240,6 +249,7 @@ export async function checkUserObligations(
     isUpToDate: reasons.length === 0,
     reasons,
     accionesShortage,
+    shareValue,
     finesPending,
     interestOwed,
     sharesOwedCount,

@@ -4,9 +4,8 @@ import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 
 // POST /api/receipts/[id]/approve — aprobación por parte del admin.
 //
-// Pasa el recibo a 'approved' y registra reviewed_at/reviewed_by. El trigger
-// `lock_share_value_on_approval` congela share_value_change_allowed del
-// accionista si es la primera vez que aprueba un concepto 'acciones'.
+// Pasa el recibo a 'approved' y registra reviewed_at/reviewed_by. El valor de
+// la acción ya queda bloqueado al elegirlo (period_memberships, RN-2.2).
 //
 // Si el recibo tiene ítems ligados a préstamos (loan_id != null):
 //   - pago_capital  → descuenta del outstanding_balance del préstamo

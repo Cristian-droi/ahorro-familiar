@@ -4,6 +4,8 @@ import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { calcDisbursedAmount, buildPaymentPlan, calcLoanDeductionsAndNet } from '@/lib/loans';
 import { disburseSchema, deductionsDetailSchema } from '@/lib/schemas/loan';
 import { getCashBalance } from '@/lib/data/loans';
+import { getOpenPeriodShareValue } from '@/lib/data/share-value';
+import { validarPuedeComprar } from '@/modules/acciones/domain/valor-de-accion';
 import type { Database } from '@/types/database';
 
 // POST /api/prestamos/[id]/disburse — admin realiza el desembolso del préstamo.
@@ -226,12 +228,12 @@ export async function POST(
 
         // A. Acciones por préstamo descontadas (acciones_prestamo)
         if (hasLoanSharesDeduction) {
-          const { data: borrowerProfile } = await admin
-            .from('profiles')
-            .select('selected_share_value')
-            .eq('id', loan.user_id)
-            .maybeSingle();
-          const unitValue = borrowerProfile?.selected_share_value != null ? Number(borrowerProfile.selected_share_value) : null;
+          // The receipt already exists here, so a missing value keeps the
+          // previous behavior (unit_value null) instead of aborting.
+          const puedeComprar = validarPuedeComprar({
+            valorDeAccion: await getOpenPeriodShareValue(admin, loan.user_id),
+          });
+          const unitValue = puedeComprar.ok ? puedeComprar.value : null;
           
           const yyyy = disbursedAt.getFullYear();
           const mm = String(disbursedAt.getMonth() + 1).padStart(2, '0');

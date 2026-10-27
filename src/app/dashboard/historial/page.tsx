@@ -39,7 +39,7 @@ import {
   Landmark,
 } from 'lucide-react';
 import { exportToExcel, exportToPdf, type ExportSection } from '@/lib/exports';
-import { getProfile } from '@/lib/data/profiles';
+import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import {
   computeFineForMonth,
   DEFAULT_PURCHASE_RULES,
@@ -185,10 +185,10 @@ export default function HistorialPage() {
       setUserId(user.id);
 
       try {
-        const profile = await getProfile(supabase, user.id);
+        const periodShareValue = await getOpenPeriodShareValue(supabase, user.id);
         if (cancelled) return;
-        if (profile.selected_share_value != null) {
-          setShareValue(Number(profile.selected_share_value));
+        if (periodShareValue != null) {
+          setShareValue(periodShareValue);
         }
       } catch (err) {
         console.error('Error perfil:', err);

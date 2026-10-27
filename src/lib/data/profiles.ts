@@ -50,7 +50,7 @@ export async function listProfiles(client: TypedSupabaseClient) {
   const { data, error } = await client
     .from('profiles')
     .select(
-      'id, identity_document, selected_share_value, share_value_change_allowed, role, bank_name, bank_account_number, bank_account_type',
+      'id, identity_document, role, bank_name, bank_account_number, bank_account_type',
     );
 
   if (error) throw error;
@@ -64,7 +64,7 @@ export async function listProfilesWithNames(client: TypedSupabaseClient) {
   const { data, error } = await client
     .from('profiles')
     .select(
-      'id, first_name, last_name, identity_document, selected_share_value, role',
+      'id, first_name, last_name, identity_document, role',
     )
     .eq('role', 'accionista')
     .order('first_name');

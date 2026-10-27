@@ -316,7 +316,7 @@ export async function getLoanWithDetails(
   const [loanRes, planRes, votesRes, totalRes] = await Promise.all([
     supabase
       .from('loans')
-      .select(`*, borrower:profiles!loans_user_id_fkey(id,first_name,last_name,identity_document,selected_share_value)`)
+      .select(`*, borrower:profiles!loans_user_id_fkey(id,first_name,last_name,identity_document)`)
       .eq('id', id)
       .maybeSingle(),
     supabase

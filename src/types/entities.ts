@@ -28,8 +28,6 @@ export interface Profile {
   address: string | null;
   monthly_income: number | null;
   role: UserRole;
-  selected_share_value: number | null;
-  share_value_change_allowed: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -180,7 +178,7 @@ export interface LoanVote {
 export interface LoanWithDetails extends Loan {
   payment_plan: LoanPaymentPlanItem[];
   votes: LoanVote[];
-  borrower: Pick<Profile, 'id' | 'first_name' | 'last_name' | 'identity_document' | 'selected_share_value'> | null;
+  borrower: Pick<Profile, 'id' | 'first_name' | 'last_name' | 'identity_document'> | null;
   total_active_shareholders: number;
   approved_votes: number;
   rejected_votes: number;

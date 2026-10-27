@@ -17,8 +17,6 @@ export const profile = z.object({
   address: z.string().nullable(),
   monthly_income: z.number().nullable(),
   role: userRole,
-  selected_share_value: z.number().nullable(),
-  share_value_change_allowed: z.boolean(),
   bank_name: z.string().nullable(),
   bank_account_number: z.string().nullable(),
   bank_account_type: bankAccountType.nullable(),
