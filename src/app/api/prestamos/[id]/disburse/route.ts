@@ -228,11 +228,15 @@ export async function POST(
 
         // A. Acciones por préstamo descontadas (acciones_prestamo)
         if (hasLoanSharesDeduction) {
-          // The receipt already exists here, so a missing value keeps the
-          // previous behavior (unit_value null) instead of aborting.
-          const puedeComprar = validarPuedeComprar({
-            valorDeAccion: await getOpenPeriodShareValue(admin, loan.user_id),
-          });
+          // The receipt already exists here, so a missing value or a failed
+          // read keeps the previous behavior (unit_value null) instead of aborting.
+          let valorDeAccion: number | null = null;
+          try {
+            valorDeAccion = await getOpenPeriodShareValue(admin, loan.user_id);
+          } catch (shareValueErr) {
+            console.error('disburse: no se pudo leer el valor de acción del periodo', shareValueErr);
+          }
+          const puedeComprar = validarPuedeComprar({ valorDeAccion });
           const unitValue = puedeComprar.ok ? puedeComprar.value : null;
           
           const yyyy = disbursedAt.getFullYear();
