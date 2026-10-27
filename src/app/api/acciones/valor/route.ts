@@ -2,41 +2,30 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { requireUser } from '@/lib/auth';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-import { getOpenPeriodShareValue, getOpenPeriodStatus } from '@/lib/data/share-value';
+import {
+  getOpenPeriodMembership,
+  getOpenPeriodStatus,
+  hasShareReceiptsInOpenPeriod,
+  shareValueChoiceErrorMessage,
+} from '@/lib/data/share-value';
 import { elegirValorDeAccion } from '@/modules/acciones/domain/valor-de-accion';
 
 // POST /api/acciones/valor: the shareholder chooses the share value of the
-// open period (RN-2.1, RN-2.2). It is chosen once and never changes mid-year;
-// there is no admin exception.
+// open period (RN-2.1, RN-2.2). A chosen value changes only once the admin
+// allowed it (one change) and before the first share receipt; after that it
+// stays fixed until the next period.
 //
 // Flow:
 //   1. Auth + payload validation.
-//   2. The domain validates with the open period, the current value and the
-//      allowed values (elegirValorDeAccion).
+//   2. The domain validates with the open period, the current value, the
+//      admin permission, the share receipts and the allowed values
+//      (elegirValorDeAccion).
 //   3. The `choose_share_value` RPC writes it with the user's session; the
-//      database trigger protects the lock.
+//      database trigger protects the lock and consumes the permission.
 
 const payload = z.object({
   shareValue: z.number().int().positive(),
 });
-
-// Messages come from the domain so the DB errors read the same as the
-// domain errors.
-function mensajeDeErrorDeBase(dbMessage: string, valor: number): string | null {
-  if (dbMessage.includes('share_value_locked')) {
-    const r = elegirValorDeAccion({ estadoDelPeriodo: 'open', valorActual: valor, valor, permitidos: [valor] });
-    return r.ok ? null : r.error.mensaje;
-  }
-  if (dbMessage.includes('period_not_open')) {
-    const r = elegirValorDeAccion({ estadoDelPeriodo: 'closed', valorActual: null, valor, permitidos: [valor] });
-    return r.ok ? null : r.error.mensaje;
-  }
-  // The allowed values changed between the route check and the RPC.
-  if (dbMessage.includes('share_value_not_allowed')) {
-    return 'El valor de la acción ya no está entre los permitidos. Recarga la página y elige otro.';
-  }
-  return null;
-}
 
 export async function POST(request: Request) {
   try {
@@ -56,9 +45,10 @@ export async function POST(request: Request) {
     const { shareValue } = parsed.data;
 
     const supabase = await createSupabaseServerClient();
-    const [periodStatus, valorActual, settingRes] = await Promise.all([
+    const [periodStatus, membership, tieneCompras, settingRes] = await Promise.all([
       getOpenPeriodStatus(supabase),
-      getOpenPeriodShareValue(supabase, user.id),
+      getOpenPeriodMembership(supabase, user.id),
+      hasShareReceiptsInOpenPeriod(supabase, user.id),
       supabase
         .from('system_settings')
         .select('value')
@@ -73,7 +63,9 @@ export async function POST(request: Request) {
     const eleccion = elegirValorDeAccion({
       // No open period reads as not open.
       estadoDelPeriodo: periodStatus ?? 'closed',
-      valorActual,
+      valorActual: membership?.shareValue ?? null,
+      cambioHabilitado: membership?.changeAllowed ?? false,
+      tieneCompras,
       valor: shareValue,
       permitidos,
     });
@@ -85,7 +77,7 @@ export async function POST(request: Request) {
       p_share_value: eleccion.value,
     });
     if (error) {
-      const mensaje = mensajeDeErrorDeBase(`${error.message} ${error.hint ?? ''}`, eleccion.value);
+      const mensaje = shareValueChoiceErrorMessage(`${error.message} ${error.hint ?? ''}`);
       if (mensaje) {
         return NextResponse.json({ error: mensaje }, { status: 400 });
       }

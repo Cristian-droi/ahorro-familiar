@@ -35,7 +35,14 @@ import {
   getProfileRole,
   updateProfile,
 } from '@/lib/data/profiles';
-import { getOpenPeriodShareValue } from '@/lib/data/share-value';
+import {
+  getOpenPeriodMembership,
+  hasShareReceiptsInOpenPeriod,
+} from '@/lib/data/share-value';
+import {
+  MENSAJE_VALOR_BLOQUEADO_POR_COMPRA,
+  MENSAJE_VALOR_YA_ELEGIDO,
+} from '@/modules/acciones/domain/valor-de-accion';
 import {
   closeCapitalizationWindowV2,
   listAdminCapitalizationWindows,
@@ -66,10 +73,17 @@ export default function AjustesPage() {
   const [maxLoansPerUser, setMaxLoansPerUser] = useState<number>(2);
   const [resumenSaving, setResumenSaving] = useState<boolean>(false);
 
-  // User state: the open-period value is chosen once and never changes
-  // (RN-2.2), so a saved value is read-only.
+  // User state (RN-2.2): a saved value changes only once the admin allowed
+  // one change and before the first share receipt of the period.
   const [selectedShare, setSelectedShare] = useState<number | null>(null);
   const [savedShare, setSavedShare] = useState<number | null>(null);
+  const [shareChangeAllowed, setShareChangeAllowed] = useState(false);
+  const [hasShareReceipts, setHasShareReceipts] = useState(false);
+  // RN-2.2: a new value can be picked when none was chosen, or when the admin
+  // allowed a change and there is no share receipt in the period yet.
+  const isShareChange = savedShare !== null && shareChangeAllowed && !hasShareReceipts;
+  const canEditShare = savedShare === null || isShareChange;
+  const userPanelDisabled = !canEditShare;
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -342,10 +356,17 @@ export default function AjustesPage() {
 
           // Al admin no le cargamos valor de acción: no aplica.
           if (userRole !== 'admin') {
-            const periodShareValue = await getOpenPeriodShareValue(supabase, user.id);
-            if (!cancelled && periodShareValue != null) {
-              setSelectedShare(periodShareValue);
-              setSavedShare(periodShareValue);
+            const [membership, withShareReceipts] = await Promise.all([
+              getOpenPeriodMembership(supabase, user.id),
+              hasShareReceiptsInOpenPeriod(supabase, user.id),
+            ]);
+            if (!cancelled) {
+              if (membership?.shareValue != null) {
+                setSelectedShare(membership.shareValue);
+                setSavedShare(membership.shareValue);
+              }
+              setShareChangeAllowed(membership?.changeAllowed ?? false);
+              setHasShareReceipts(withShareReceipts);
             }
           }
         } catch (err) {
@@ -637,7 +658,7 @@ export default function AjustesPage() {
   };
 
   const saveUserShare = async () => {
-    if (!userId || !selectedShare || savedShare !== null) return;
+    if (!userId || !selectedShare || !canEditShare || selectedShare === savedShare) return;
     setSaving(true);
 
     try {
@@ -653,7 +674,10 @@ export default function AjustesPage() {
         showToast('error', body?.error ?? 'Error al guardar tu valor de acción');
         return;
       }
+      const isChange = savedShare !== null;
       setSavedShare(body?.shareValue ?? selectedShare);
+      // The permission is good for a single change.
+      if (isChange) setShareChangeAllowed(false);
       showToast('success', 'Valor de acción guardado exitosamente');
     } catch (err) {
       console.error('Error guardando valor de acción:', err);
@@ -717,8 +741,6 @@ export default function AjustesPage() {
   }
 
   const isAdmin = role === 'admin';
-  // RN-2.2: the value is chosen once per period; after that it is read-only.
-  const userPanelDisabled = savedShare !== null;
 
   return (
     <div className="flex flex-col gap-7 animate-in fade-in duration-300">
@@ -763,10 +785,16 @@ export default function AjustesPage() {
                   </h2>
                 </div>
                 {savedShare !== null && (
-                  <Badge tone="neutral" className="shrink-0">
-                    <Lock size={11} strokeWidth={1.75} />
-                    Elegido para este periodo
-                  </Badge>
+                  isShareChange ? (
+                    <Badge tone="success" className="shrink-0">
+                      Cambio habilitado
+                    </Badge>
+                  ) : (
+                    <Badge tone="neutral" className="shrink-0">
+                      <Lock size={11} strokeWidth={1.75} />
+                      Elegido para este periodo
+                    </Badge>
+                  )
                 )}
               </div>
               <p className="text-[var(--color-text-muted)] text-[13px] leading-[1.55]">
@@ -774,8 +802,9 @@ export default function AjustesPage() {
                 de la plataforma. Este valor formará parte de tu capital acumulado.
                 <br />
                 <span className="text-[12px] text-[var(--color-text-subtle)]">
-                  Se elige una sola vez por periodo, al iniciar el año, y no se puede
-                  cambiar a mitad de año.
+                  Se elige por periodo, al iniciar el año. Solo se puede cambiar si el
+                  administrador lo habilita y todavía no has comprado acciones en el
+                  periodo.
                 </span>
               </p>
 
@@ -828,8 +857,18 @@ export default function AjustesPage() {
                   <div className="flex items-start gap-2 px-3 py-2.5 rounded-[10px] bg-[var(--color-surface-alt)] text-[var(--color-text-muted)] text-[12.5px] leading-[1.5]">
                     <Lock size={14} strokeWidth={1.75} className="mt-0.5 shrink-0" />
                     <span>
-                      Ya elegiste tu valor de acción para este periodo. No se puede
-                      cambiar a mitad de año.
+                      {hasShareReceipts
+                        ? MENSAJE_VALOR_BLOQUEADO_POR_COMPRA
+                        : MENSAJE_VALOR_YA_ELEGIDO}
+                    </span>
+                  </div>
+                )}
+
+                {isShareChange && (
+                  <div className="flex items-start gap-2 px-3 py-2.5 rounded-[10px] bg-[var(--color-surface-alt)] text-[var(--color-text-muted)] text-[12.5px] leading-[1.5]">
+                    <span>
+                      El administrador te habilitó un cambio. Elige el nuevo valor y
+                      guárdalo; después de guardarlo, el valor vuelve a quedar fijo.
                     </span>
                   </div>
                 )}
@@ -840,10 +879,14 @@ export default function AjustesPage() {
                 <Button
                   className="w-full"
                   onClick={saveUserShare}
-                  disabled={saving || !selectedShare}
+                  disabled={saving || !selectedShare || selectedShare === savedShare}
                 >
                   <Save size={15} strokeWidth={1.75} />
-                  {saving ? 'Guardando...' : 'Guardar valor del periodo'}
+                  {saving
+                    ? 'Guardando...'
+                    : isShareChange
+                      ? 'Guardar nuevo valor'
+                      : 'Guardar valor del periodo'}
                 </Button>
               </div>
             )}

@@ -39,7 +39,7 @@
 ## 2. Valor de la acción ✅
 
 - **RN-2.1** Cada accionista elige el valor de su acción entre los permitidos ⚙️. Hoy son 10.000, 25.000 y 50.000.
-- **RN-2.2** El valor se elige **una sola vez por periodo**, al iniciar el año. **No se puede cambiar a mitad de año.**
+- **RN-2.2** El valor se elige **por periodo**, al iniciar el año. El accionista solo lo puede cambiar si **todavía no ha comprado acciones** en el periodo **y el administrador le habilitó el cambio** (el permiso sirve para un solo cambio). Desde que **envía el primer recibo con acciones** (pendiente o aprobado), el valor queda fijo hasta el próximo periodo, sin excepción. *Definido por Cris el 2026-10-27.*
 - **RN-2.3** Un accionista **no puede comprar acciones** mientras no haya definido el valor de su acción para el periodo.
 - **RN-2.4** Cada compra guarda el **valor unitario con el que se hizo**. Los cálculos históricos usan ese valor, nunca el valor actual.
   > ⚠️ El Sheet multiplica el valor actual por el total de acciones. Si alguien cambiara su valor, se recalcularía todo el pasado. La app **no** debe repetir ese error.

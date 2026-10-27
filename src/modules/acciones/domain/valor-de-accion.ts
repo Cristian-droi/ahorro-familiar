@@ -12,26 +12,45 @@ function enumerar(valores: number[]): string {
   return `${textos.slice(0, -1).join(', ')} o ${textos[textos.length - 1]}`;
 }
 
-// RN-2.2: the value is chosen once per period and never changes mid-year.
+// Messages shared with the routes that map the database errors (RN-2.2), so
+// both read the same.
+export const MENSAJE_PERIODO_NO_ABIERTO = 'El valor de la acción solo se elige mientras el periodo está abierto.';
+export const MENSAJE_VALOR_BLOQUEADO_POR_COMPRA =
+  'Ya compraste acciones con este valor. Podrás cambiarlo en el próximo periodo.';
+export const MENSAJE_VALOR_YA_ELEGIDO =
+  'Ya elegiste el valor de tu acción para este periodo. Para cambiarlo, pídele al administrador que lo habilite.';
+
+// RN-2.2: the value is chosen per period. It changes only with the
+// administrator permission and before the first share receipt is sent.
 export function elegirValorDeAccion(params: {
   estadoDelPeriodo: EstadoDelPeriodo;
   // The value already chosen in this period, or null.
   valorActual: number | null;
+  // The administrator allowed one change.
+  cambioHabilitado: boolean;
+  // A pending or approved share receipt exists in the period.
+  tieneCompras: boolean;
   valor: number;
   // RN-2.1: configurable allowed values.
   permitidos: number[];
 }): Result<number, ErrorDeDominio> {
-  const { estadoDelPeriodo, valorActual, valor, permitidos } = params;
+  const { estadoDelPeriodo, valorActual, cambioHabilitado, tieneCompras, valor, permitidos } = params;
   if (estadoDelPeriodo !== 'open') {
     return err({
       codigo: 'periodo_no_abierto',
-      mensaje: 'El valor de la acción solo se elige mientras el periodo está abierto.',
+      mensaje: MENSAJE_PERIODO_NO_ABIERTO,
     });
   }
-  if (valorActual !== null) {
+  if (valorActual !== null && tieneCompras) {
+    return err({
+      codigo: 'valor_bloqueado_por_compra',
+      mensaje: MENSAJE_VALOR_BLOQUEADO_POR_COMPRA,
+    });
+  }
+  if (valorActual !== null && !cambioHabilitado) {
     return err({
       codigo: 'valor_ya_elegido',
-      mensaje: 'Ya elegiste el valor de tu acción para este periodo. No se puede cambiar a mitad de año.',
+      mensaje: MENSAJE_VALOR_YA_ELEGIDO,
     });
   }
   if (!permitidos.includes(valor)) {

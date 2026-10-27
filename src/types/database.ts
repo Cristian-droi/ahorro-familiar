@@ -360,18 +360,21 @@ export type Database = {
           period_id: string
           profile_id: string
           share_value: number | null
+          share_value_change_allowed: boolean
           share_value_locked_at: string | null
         }
         Insert: {
           period_id: string
           profile_id: string
           share_value?: number | null
+          share_value_change_allowed?: boolean
           share_value_locked_at?: string | null
         }
         Update: {
           period_id?: string
           profile_id?: string
           share_value?: number | null
+          share_value_change_allowed?: boolean
           share_value_locked_at?: string | null
         }
         Relationships: [
@@ -638,6 +641,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      allow_share_value_change: {
+        Args: { p_allow: boolean; p_profile_id: string }
+        Returns: boolean
+      }
       choose_share_value: { Args: { p_share_value: number }; Returns: number }
       close_capitalization_window: { Args: never; Returns: Json }
       close_capitalization_window_v2: {
@@ -717,6 +724,10 @@ export type Database = {
           participation: number
           utilities_pool: number
         }[]
+      }
+      has_share_receipts_in_period: {
+        Args: { p_period_id: string; p_profile_id: string }
+        Returns: boolean
       }
       is_admin: { Args: never; Returns: boolean }
       mark_my_loans_status_seen: { Args: never; Returns: number }
