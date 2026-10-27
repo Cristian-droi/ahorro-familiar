@@ -146,10 +146,10 @@ export async function checkUserObligations(
     fineOwed: number;
   }> = [];
 
-  // Validar cada mes requerido (solo con un valor de acción elegido)
-  const monthsWithShareValue = puedeComprar.ok ? monthsToValidate : [];
+  // Validar cada mes requerido. Sin valor de acción elegido no hay monto de
+  // acciones, pero las multas por mora se acumulan igual (Cris, 2026-10-27).
   const unitValue = puedeComprar.ok ? puedeComprar.value : 0;
-  for (const monthStr of monthsWithShareValue) {
+  for (const monthStr of monthsToValidate) {
     const approvedShares = sharesByMonth.get(monthStr) ?? 0;
     const sharesOwed = Math.max(0, rules.min_shares_per_month - approvedShares);
     

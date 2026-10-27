@@ -89,7 +89,8 @@ export async function POST(
       
       // 1. Acciones vencidas y multas
       for (const o of obligations.overdueMonthsDetails) {
-        if (o.sharesOwed > 0) {
+        // Without a chosen share value (RN-2.3) only the fine is deducted.
+        if (o.sharesOwed > 0 && o.shareValue > 0) {
           newDeductionsDetail.push({
             concept: 'acciones',
             target_month: o.month,
