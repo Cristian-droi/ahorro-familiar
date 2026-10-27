@@ -5,6 +5,9 @@ import {
   diaDelMes,
   primerDiaDelMes,
   mesSiguiente,
+  mesesEntre,
+  sumarMeses,
+  diciembreDelAnio,
   type FechaISO,
 } from '@/shared/domain/fechas';
 
@@ -67,5 +70,44 @@ describe('mesSiguiente', () => {
 
   it('rolls over to January of the next year', () => {
     expect(mesSiguiente(fecha('2026-12-15'))).toBe('2027-01-01');
+  });
+});
+
+describe('mesesEntre', () => {
+  it('counts whole calendar months from one month to another, ignoring the day', () => {
+    expect(mesesEntre(fecha('2026-08-01'), fecha('2026-09-20'))).toBe(1);
+  });
+
+  it('is zero within the same month', () => {
+    expect(mesesEntre(fecha('2026-09-30'), fecha('2026-09-01'))).toBe(0);
+  });
+
+  it('crosses the year boundary', () => {
+    expect(mesesEntre(fecha('2026-11-01'), fecha('2027-01-15'))).toBe(2);
+  });
+
+  it('is negative when the first month is later', () => {
+    expect(mesesEntre(fecha('2026-12-01'), fecha('2026-09-28'))).toBe(-3);
+  });
+});
+
+describe('sumarMeses', () => {
+  it('returns the first day of the month n months later', () => {
+    expect(sumarMeses(fecha('2026-10-28'), 2)).toBe('2026-12-01');
+  });
+
+  it('returns the first day of the same month for zero', () => {
+    expect(sumarMeses(fecha('2026-10-28'), 0)).toBe('2026-10-01');
+  });
+
+  it('crosses year boundaries in both directions', () => {
+    expect(sumarMeses(fecha('2026-12-01'), 13)).toBe('2028-01-01');
+    expect(sumarMeses(fecha('2026-01-15'), -1)).toBe('2025-12-01');
+  });
+});
+
+describe('diciembreDelAnio', () => {
+  it.each(['2026-01-01', '2026-10-28', '2026-12-31'])('returns 1 December of the same year for %s', (texto) => {
+    expect(diciembreDelAnio(fecha(texto))).toBe('2026-12-01');
   });
 });
