@@ -143,7 +143,25 @@
 - Abono al préstamo A: **1.200.000**. Queda en cero y pasa a pagado.
 - Abono al préstamo B: **24.389**. Su saldo baja a **1.999.299**.
 
-- 🟡 **RN-4.29b** **Si el accionista no tiene otro préstamo** al que llevar el excedente: ¿se rechaza todo el pago o se acepta solo hasta el saldo? *Validar con el gerente.*
+### 4.6b Cómo paga el accionista ✅
+*Definido por Cris el 2026-10-26.*
+
+- **RN-4.29b** **Carrito.** El accionista elige qué quiere pagar y el sistema le muestra el **total** que debe enviar con el comprobante:
+  - **Acciones:** el sistema le muestra los meses pendientes (el actual y los atrasados). Por cada mes que elige, paga las acciones que compra (RN-3.1) más **la multa de ese mes** (RN-3.4). Si tiene 3 meses atrasados y paga uno, solo se le cobra la multa de ese mes.
+  - **Préstamos:** por cada préstamo que elige, el pago va primero a sus intereses pendientes y después a capital (RN-4.24 y 4.25). El abono a capital no puede superar el saldo (RN-4.29).
+- **RN-4.29c** **Monto fijo** (opcional). El accionista envía un monto y el sistema lo reparte en este orden:
+  1. Intereses pendientes de todos sus préstamos.
+  2. Acciones atrasadas, del mes más antiguo al más reciente, **cada mes con su multa**.
+  3. Acciones del mes actual, con su multa si la tiene.
+  4. Abono a capital, en los préstamos y en el orden que él elija (RN-4.29).
+  5. Si ya no tiene nada pendiente, puede llevar el sobrante a **acciones de meses futuros**: solo acciones enteras, y **se rechaza el resto**.
+  - En los pasos 2, 3 y 5 el sistema cobra **1 acción por mes**, que es el mínimo (RN-3.1).
+  - Si no elige adelantar acciones, se rechaza el sobrante.
+
+**Ejemplo (monto fijo):** valor de acción 25.000. Debe 20.000 de intereses, tiene un mes atrasado con 15.000 de multa y el mes actual sin multa. El préstamo debe 100.000 y envía 300.000:
+- Intereses: **20.000**. Mes atrasado: 25.000 + 15.000 = **40.000**. Mes actual: **25.000**.
+- Capital: **100.000**. El préstamo queda pagado.
+- Quedan 115.000. Si adelanta acciones: **4 meses** (100.000) y se rechazan **15.000**. Si no adelanta, se rechazan los 115.000.
 
 ### 4.7 Las dos vistas del préstamo ✅
 | Vista | Quién la ve | Qué muestra |
@@ -321,7 +339,6 @@ En diciembre las utilidades llegan a 10.000.000, pero el gasto **sigue siendo 20
 ### 🟡 Para validar con el gerente
 1. **RN-4.21:** interés de un préstamo desembolsado después del día 25.
 2. **RN-8.6:** capitalización reservada frente a intereses impagos al cierre.
-3. **RN-4.29b:** abono a capital mayor al saldo cuando el accionista no tiene otro préstamo.
 
 ### ❓ Abiertas
 Ninguna por ahora (cerradas el 2026-10-14).
