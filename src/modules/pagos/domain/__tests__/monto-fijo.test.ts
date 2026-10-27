@@ -133,7 +133,7 @@ describe('distribuirMontoFijo (RN-4.29c)', () => {
     expect(r.ok && r.value.rechazado).toBe(30000);
   });
 
-  it('assumption: an overdue month is paid whole or not at all, and the rest is rejected', () => {
+  it('pays an overdue month whole or not at all, and rejects the rest (confirmed by Cris, L12)', () => {
     // 30.000 does not cover the 25.000 share plus the 15.000 fine, so nothing
     // can go to newer months or to capital before it.
     const r = distribuirMontoFijo({ ...ejemplo, monto: 50000, adelantarAcciones: true });
