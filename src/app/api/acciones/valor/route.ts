@@ -31,6 +31,10 @@ function mensajeDeErrorDeBase(dbMessage: string, valor: number): string | null {
     const r = elegirValorDeAccion({ estadoDelPeriodo: 'closed', valorActual: null, valor, permitidos: [valor] });
     return r.ok ? null : r.error.mensaje;
   }
+  // The allowed values changed between the route check and the RPC.
+  if (dbMessage.includes('share_value_not_allowed')) {
+    return 'El valor de la acción ya no está entre los permitidos. Recarga la página y elige otro.';
+  }
   return null;
 }
 
