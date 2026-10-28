@@ -21,14 +21,34 @@ export function multaDelMesEnCurso(dia: number, reglas: ReglasDeMulta): number {
   return Math.min(diasDeMora * reglas.multaPorDia, reglas.topeMensual);
 }
 
+export interface DetalleDeMultaDelMes {
+  monto: number;
+  diasDeMora: number;
+  // Days that add to the fine; they stop at the monthly cap.
+  diasCobrados: number;
+  topado: boolean;
+}
+
 // RN-3.4: each unpaid month adds the daily fine from the day after its grace
 // days (day 11) until the monthly cap. A past month keeps adding until the
 // cap; it is not charged the cap at once (Cris, 2026-10-27).
-export function multaDelMes(params: { mes: FechaISO; hoy: FechaISO; reglas: ReglasDeMulta }): number {
+export function detalleDeMulta(params: { mes: FechaISO; hoy: FechaISO; reglas: ReglasDeMulta }): DetalleDeMultaDelMes {
   const { mes, hoy, reglas } = params;
   const finDeGracia = sumarDias(primerDiaDelMes(mes), reglas.diasDeGracia - 1);
   const diasDeMora = Math.max(diasEntre(finDeGracia, hoy), 0);
-  return Math.min(diasDeMora * reglas.multaPorDia, reglas.topeMensual);
+  const sinTope = diasDeMora * reglas.multaPorDia;
+  // RN-3.4: whole days only; the day that crosses the cap is not counted.
+  const diasHastaElTope = reglas.multaPorDia > 0 ? Math.floor(reglas.topeMensual / reglas.multaPorDia) : 0;
+  return {
+    monto: Math.min(sinTope, reglas.topeMensual),
+    diasDeMora,
+    diasCobrados: reglas.multaPorDia > 0 ? Math.min(diasDeMora, diasHastaElTope) : 0,
+    topado: sinTope > reglas.topeMensual,
+  };
+}
+
+export function multaDelMes(params: { mes: FechaISO; hoy: FechaISO; reglas: ReglasDeMulta }): number {
+  return detalleDeMulta(params).monto;
 }
 
 function sumarDias(fecha: FechaISO, dias: number): FechaISO {

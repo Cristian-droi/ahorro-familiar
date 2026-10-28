@@ -4,6 +4,7 @@ import {
   multaDelMesEnCurso,
   calcularMulta,
   multaDelMes,
+  detalleDeMulta,
   type ReglasDeMulta,
 } from '@/modules/acciones/domain/multas';
 
@@ -51,6 +52,35 @@ describe('multaDelMes (RN-3.4)', () => {
     ['2026-10-01', '2026-09-20', 0],
   ])('month %s on %s owes %i', (mes, hoy, esperado) => {
     expect(multaDelMes({ mes: fecha(mes), hoy: fecha(hoy), reglas: REGLAS })).toBe(esperado);
+  });
+});
+
+describe('detalleDeMulta (RN-3.4)', () => {
+  it('reports the days late and charged days below the cap', () => {
+    expect(detalleDeMulta({ mes: fecha('2026-08-01'), hoy: fecha('2026-09-02'), reglas: REGLAS })).toEqual({
+      monto: 11500,
+      diasDeMora: 23,
+      diasCobrados: 23,
+      topado: false,
+    });
+  });
+
+  it('stops charging days at the monthly cap', () => {
+    expect(detalleDeMulta({ mes: fecha('2026-08-01'), hoy: fecha('2026-09-20'), reglas: REGLAS })).toEqual({
+      monto: 15000,
+      diasDeMora: 41,
+      diasCobrados: 30,
+      topado: true,
+    });
+  });
+
+  it('owes nothing during the grace days', () => {
+    expect(detalleDeMulta({ mes: fecha('2026-08-01'), hoy: fecha('2026-08-10'), reglas: REGLAS })).toEqual({
+      monto: 0,
+      diasDeMora: 0,
+      diasCobrados: 0,
+      topado: false,
+    });
   });
 });
 

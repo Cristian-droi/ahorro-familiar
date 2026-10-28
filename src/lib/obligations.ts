@@ -165,18 +165,14 @@ export async function checkUserObligations(
       sharesOwedCount += sharesOwed;
       sharesOwedAmount += sharesOwed * unitValue;
 
-      // Si además de faltar acciones hoy ya pasó el día de gracia, hay multa por mora
-      const [y, m] = monthStr.split('-').map(Number);
-      const limitDate = new Date(Date.UTC(y, m - 1, rules.grace_period_days));
-      if (today.getTime() > limitDate.getTime()) {
-        const finePaid = finesPaidByMonth.has(monthStr);
-        if (!finePaid) {
-          fineOwed = computeFineForMonth(monthStr, today, rules);
-          if (fineOwed > 0) {
-            reasons.push(`Tenés una multa pendiente por mora en acciones de ${monthName} ${currentYear}.`);
-            finesPending = true;
-            finesOwedAmount += fineOwed;
-          }
+      // Si además de faltar acciones hay multa por mora (RN-3.4: es 0 durante
+      // los días de gracia) y no se ha pagado, se cobra.
+      if (!finesPaidByMonth.has(monthStr)) {
+        fineOwed = computeFineForMonth(monthStr, today, rules);
+        if (fineOwed > 0) {
+          reasons.push(`Tenés una multa pendiente por mora en acciones de ${monthName} ${currentYear}.`);
+          finesPending = true;
+          finesOwedAmount += fineOwed;
         }
       }
     }
