@@ -82,7 +82,14 @@ export async function POST(
 
     // Validate the tally with this vote BEFORE storing it, so a rejected
     // count never leaves a stored vote behind an error response.
-    const { data: previos } = await admin.from('loan_votes').select('vote, voter_id').eq('loan_id', id);
+    const { data: previos, error: previosError } = await admin
+      .from('loan_votes')
+      .select('vote, voter_id')
+      .eq('loan_id', id);
+    if (previosError) {
+      console.error('No se pudieron leer los votos antes de votar:', previosError);
+      return NextResponse.json({ error: 'No se pudo registrar el voto' }, { status: 500 });
+    }
     const previo = resultadoDeVotacion({
       votantes: eligibleVoters,
       ...contar([...(previos ?? []), { vote: parsed.data.vote, voter_id: user.id }]),
@@ -102,7 +109,15 @@ export async function POST(
     }
 
     // Recount after storing: other votes may have arrived meanwhile.
-    const { data: votos } = await admin.from('loan_votes').select('vote, voter_id').eq('loan_id', id);
+    const { data: votos, error: votosError } = await admin
+      .from('loan_votes')
+      .select('vote, voter_id')
+      .eq('loan_id', id);
+    if (votosError) {
+      // The vote is stored; the next vote recounts and updates the status.
+      console.error('No se pudieron recontar los votos:', votosError);
+      return NextResponse.json({ success: true, total_active: eligibleVoters, new_status: null });
+    }
     const { aFavor: approved, enContra: rejected } = contar(votos ?? []);
     const resultado = resultadoDeVotacion({ votantes: eligibleVoters, aFavor: approved, enContra: rejected });
     if (!resultado.ok) {
