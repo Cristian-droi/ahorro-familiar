@@ -51,16 +51,18 @@
 - **RN-3.1** Cada accionista compra entre **1 y 10 acciones por mes** ⚙️.
 - **RN-3.2** La compra de acciones es la **única obligación mensual**.
 - **RN-3.3** **Las multas solo se generan por no comprar acciones a tiempo.** Los intereses de los préstamos **no** generan multa.
-- **RN-3.4** Cálculo de la multa:
-  - **Mes en curso:** días de gracia ⚙️ = 10. Desde el día 11 se cobran 500 por día ⚙️, con tope de 15.000 por mes ⚙️.
-    `multa_mes = MIN(MAX(día − 10, 0) × 500, 15.000)`
-  - **Meses completos sin comprar:** 15.000 por cada uno ⚙️.
+- **RN-3.4** Cálculo de la multa, **por cada mes sin comprar**:
+  - Días de gracia ⚙️ = 10. Desde el **día 11 de ese mes** se cobran 500 por día ⚙️, con tope de 15.000 por mes ⚙️.
+    `multa_mes = MIN(días_de_mora × 500, 15.000)`, donde `días_de_mora` son los días desde el día 10 de ese mes hasta hoy.
+  - Un mes pasado **sigue sumando** 500 por día hasta llegar al tope; no se cobran los 15.000 de una vez al terminar el mes. *Aclarado por Cris el 2026-10-27.*
 - **RN-3.5** Las multas **no se reparten** como utilidades. Ingresan a la caja del banco.
 
 **Ejemplo:** la última compra fue en julio y hoy es 20 de septiembre.
-- Agosto completo sin comprar: **15.000**.
+- Agosto: 41 días de mora (del 10 de agosto al 20 de septiembre) × 500 = 20.500, con tope: **15.000**.
 - Septiembre: (20 − 10) × 500 = **5.000**.
 - **Multa total: 20.000.**
+
+**Ejemplo:** hoy es 2 de septiembre y agosto no se compró: 23 días de mora × 500 = **11.500** (todavía no llega al tope).
 
 ---
 
@@ -292,7 +294,6 @@ En diciembre las utilidades llegan a 10.000.000, pero el gasto **sigue siendo 20
 | Días de gracia para la multa | 10 |
 | Multa por día | 500 |
 | Tope de multa mensual | 15.000 |
-| Multa por mes completo sin comprar | 15.000 |
 | Tasa de interés mensual | 2% |
 | Día límite para tasa completa en el primer mes | 15 |
 | Día de corte del mes aplicado | 25 |

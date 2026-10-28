@@ -68,6 +68,15 @@ export function mesSiguiente(fecha: FechaISO): FechaISO {
   return mes === 12 ? componer(anio + 1, 1, 1) : componer(anio, mes + 1, 1);
 }
 
+// Calendar days from `desde` to `hasta`; negative when `desde` is later.
+// Pure arithmetic on the date parts, no clock.
+export function diasEntre(desde: FechaISO, hasta: FechaISO): number {
+  const a = partes(desde);
+  const b = partes(hasta);
+  const MS_POR_DIA = 24 * 60 * 60 * 1000;
+  return Math.round((Date.UTC(b.anio, b.mes - 1, b.dia) - Date.UTC(a.anio, a.mes - 1, a.dia)) / MS_POR_DIA);
+}
+
 // Calendar months from the month of `desde` to the month of `hasta`.
 // The day is ignored; the result is negative when `desde` is later.
 export function mesesEntre(desde: FechaISO, hasta: FechaISO): number {
