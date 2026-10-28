@@ -51,6 +51,14 @@ export async function POST(
       return NextResponse.json({ error: votante.error.mensaje }, { status: 403 });
     }
 
+    // Votantes habilitados: accionistas sin el solicitante (RN-4.6).
+    const shareholderIds = await getShareholderIds(admin);
+    const habilitados = new Set(shareholderIds.filter((voterId) => voterId !== loan.user_id));
+    const eligibleVoters = votantesHabilitados({ accionistasActivos: shareholderIds, solicitanteId: loan.user_id });
+    if (!habilitados.has(user.id)) {
+      return NextResponse.json({ error: 'No estás habilitado para votar en este préstamo.' }, { status: 403 });
+    }
+
     // Verificar si ya votó
     const { data: existing } = await admin
       .from('loan_votes')
@@ -63,6 +71,27 @@ export async function POST(
       return NextResponse.json({ error: 'Ya emitiste tu voto para este préstamo' }, { status: 409 });
     }
 
+    // Only votes from eligible voters count, so the tally never exceeds n.
+    const contar = (votos: { vote: string; voter_id: string }[]) => {
+      const validos = votos.filter((v) => habilitados.has(v.voter_id));
+      return {
+        aFavor: validos.filter((v) => v.vote === 'approved').length,
+        enContra: validos.filter((v) => v.vote === 'rejected').length,
+      };
+    };
+
+    // Validate the tally with this vote BEFORE storing it, so a rejected
+    // count never leaves a stored vote behind an error response.
+    const { data: previos } = await admin.from('loan_votes').select('vote, voter_id').eq('loan_id', id);
+    const previo = resultadoDeVotacion({
+      votantes: eligibleVoters,
+      ...contar([...(previos ?? []), { vote: parsed.data.vote, voter_id: user.id }]),
+    });
+    if (!previo.ok) {
+      console.error('Conteo de votos inválido antes de votar:', previo.error.codigo);
+      return NextResponse.json({ error: previo.error.mensaje }, { status: 409 });
+    }
+
     // Registrar voto
     const { error: voteError } = await admin
       .from('loan_votes')
@@ -72,21 +101,14 @@ export async function POST(
       return NextResponse.json({ error: 'No se pudo registrar el voto' }, { status: 500 });
     }
 
-    // Contar votos actuales y votantes habilitados (n excluye al solicitante)
-    const [votesRes, shareholderIds] = await Promise.all([
-      admin.from('loan_votes').select('vote').eq('loan_id', id),
-      getShareholderIds(admin),
-    ]);
-
-    const votes = votesRes.data ?? [];
-    const eligibleVoters = votantesHabilitados({ accionistasActivos: shareholderIds, solicitanteId: loan.user_id });
-    const approved = votes.filter((v) => v.vote === 'approved').length;
-    const rejected = votes.filter((v) => v.vote === 'rejected').length;
-
+    // Recount after storing: other votes may have arrived meanwhile.
+    const { data: votos } = await admin.from('loan_votes').select('vote, voter_id').eq('loan_id', id);
+    const { aFavor: approved, enContra: rejected } = contar(votos ?? []);
     const resultado = resultadoDeVotacion({ votantes: eligibleVoters, aFavor: approved, enContra: rejected });
     if (!resultado.ok) {
-      console.error('Conteo de votos inválido:', resultado.error.codigo);
-      return NextResponse.json({ error: resultado.error.mensaje }, { status: 409 });
+      // The vote is stored; report it without changing the loan status.
+      console.error('Conteo de votos inválido después de votar:', resultado.error.codigo);
+      return NextResponse.json({ success: true, approved, rejected, total_active: eligibleVoters, new_status: null });
     }
     const { estado, necesarios, observacion } = resultado.value;
 
