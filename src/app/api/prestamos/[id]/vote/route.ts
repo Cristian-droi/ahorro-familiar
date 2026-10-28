@@ -90,10 +90,8 @@ export async function POST(
       console.error('No se pudieron leer los votos antes de votar:', previosError);
       return NextResponse.json({ error: 'No se pudo registrar el voto' }, { status: 500 });
     }
-    const previo = resultadoDeVotacion({
-      votantes: eligibleVoters,
-      ...contar([...(previos ?? []), { vote: parsed.data.vote, voter_id: user.id }]),
-    });
+    const conteoPrevio = contar([...(previos ?? []), { vote: parsed.data.vote, voter_id: user.id }]);
+    const previo = resultadoDeVotacion({ votantes: eligibleVoters, ...conteoPrevio });
     if (!previo.ok) {
       console.error('Conteo de votos inválido antes de votar:', previo.error.codigo);
       return NextResponse.json({ error: previo.error.mensaje }, { status: 409 });
@@ -113,18 +111,16 @@ export async function POST(
       .from('loan_votes')
       .select('vote, voter_id')
       .eq('loan_id', id);
-    if (votosError) {
-      // The vote is stored; the next vote recounts and updates the status.
-      console.error('No se pudieron recontar los votos:', votosError);
-      return NextResponse.json({ success: true, total_active: eligibleVoters, new_status: null });
-    }
-    const { aFavor: approved, enContra: rejected } = contar(votos ?? []);
-    const resultado = resultadoDeVotacion({ votantes: eligibleVoters, aFavor: approved, enContra: rejected });
-    if (!resultado.ok) {
-      // The vote is stored; report it without changing the loan status.
-      console.error('Conteo de votos inválido después de votar:', resultado.error.codigo);
-      return NextResponse.json({ success: true, approved, rejected, total_active: eligibleVoters, new_status: null });
-    }
+    // If the recount cannot be read or is invalid, fall back to the tally
+    // validated before the insert, which already includes this vote, so the
+    // deciding vote still updates the loan status.
+    if (votosError) console.error('No se pudieron recontar los votos:', votosError);
+    const recuento = votosError ? null : contar(votos ?? []);
+    const actual = recuento ? resultadoDeVotacion({ votantes: eligibleVoters, ...recuento }) : null;
+    if (actual && !actual.ok) console.error('Conteo de votos inválido después de votar:', actual.error.codigo);
+    const usarActual = recuento !== null && actual !== null && actual.ok;
+    const { aFavor: approved, enContra: rejected } = usarActual ? recuento : conteoPrevio;
+    const resultado = usarActual ? actual : previo;
     const { estado, necesarios, observacion } = resultado.value;
 
     const newStatus =
