@@ -29,6 +29,28 @@ describe('estadoDeObligaciones (RN-3.1, RN-3.4, RN-2.3, RN-4.22)', () => {
     expect(r.razones).toEqual([]);
   });
 
+  it('RN-3.4: requires the current month from day 11, with 500 of fine', () => {
+    const r = estadoDeObligaciones(entrada({ hoy: f('2026-01-11') }));
+    expect(r.mesesEnMora).toEqual([
+      { mes: '2026-01-01', nombreDelMes: 'Enero', accionesAdeudadas: 1, valorDeAccion: 25000, multa: 500 },
+    ]);
+  });
+
+  it('RN-3.4: in December only December is owed when the rest of the year is bought', () => {
+    const r = estadoDeObligaciones(
+      entrada({
+        hoy: f('2026-12-20'),
+        accionesCompradas: Array.from({ length: 11 }, (_, i) => ({
+          mes: f(`2026-${String(i + 1).padStart(2, '0')}-01`),
+          acciones: 1,
+        })),
+      }),
+    );
+    expect(r.mesesEnMora).toEqual([
+      { mes: '2026-12-01', nombreDelMes: 'Diciembre', accionesAdeudadas: 1, valorDeAccion: 25000, multa: 5000 },
+    ]);
+  });
+
   it('RN-3.1/RN-3.4: a past month without the minimum owes its shares and its fine', () => {
     // 2 September: August is 23 days late: 11.500 (RN-3.4 example).
     const r = estadoDeObligaciones(
