@@ -176,25 +176,16 @@ describe('Financial Calculations', () => {
     });
   });
 
-  describe('calcAccruedInterest', () => {
-    it('calculates interest correctly for multiple months overdue', async () => {
-      const disbursedAt = new Date('2026-01-10T12:00:00Z');
-      const mockNow = new Date('2026-04-10T12:00:00Z'); // 3 months later
-      
-      const { vi } = await import('vitest');
-      vi.useFakeTimers();
-      vi.setSystemTime(mockNow);
-      
-      const interest = calcAccruedInterest({
-        outstandingBalance: 1_000_000,
+  describe('calcAccruedInterest (adapter over interesesAdeudados)', () => {
+    it('RN-4.22: three months unpaid on 1.000.000 at 2% owe 60.000', () => {
+      const r = calcAccruedInterest({
+        requestedAmount: 1_000_000,
         rate: 0.02,
-        disbursedAt,
-        lastInterestPaymentDate: null,
+        disbursedAt: '2026-01-10T17:00:00+00:00',
+        items: [],
+        today: '2026-04-10' as FechaISO,
       });
-
-      // 3 months at 2% = 6% of 1M = 60_000
-      expect(interest).toBe(60_000);
-      vi.useRealTimers();
+      expect(r).toEqual({ ok: true, value: 60_000 });
     });
   });
 });

@@ -1,9 +1,10 @@
 // Lógica de negocio del módulo de préstamos.
 
-import { crearFecha, primerDiaDelMes, sumarMeses, type FechaISO } from '@/shared/domain/fechas';
+import { crearFecha, hoyBogota, primerDiaDelMes, sumarMeses, type FechaISO } from '@/shared/domain/fechas';
 import { ok, err, type Result, type ErrorDeDominio } from '@/shared/domain/result';
 import { planAcordadoDesdeCuotas, planDePagos, validarPlanSolicitado } from '@/modules/prestamos/domain/plan-de-pagos';
 import { mesAplicado } from '@/modules/prestamos/domain/calendario';
+import { interesesAdeudados } from '@/modules/prestamos/domain/intereses-adeudados';
 import { PLAZO_HASTA_PERIODO_SIGUIENTE_POR_DEFECTO, reglasDeInteresDelPrestamo } from '@/lib/loan-settings';
 
 export interface PlanRow {
@@ -114,32 +115,61 @@ export function agreedPlanFromRows(
   return ok({ lastMonth: plan.value.mesFinal, capitalOverrides: plan.value.capitalPorMes });
 }
 
+// A receipt item of one loan, as stored in `receipt_items` (approved receipts).
+export interface LoanInterestItem {
+  concept: string;
+  target_month: string;
+  amount: number | string;
+}
+
+// `loans.disbursed_at` is a timestamptz; the rules read its day in Bogota.
+function fechaDeDesembolso(valor: string): Result<FechaISO, ErrorDeDominio> {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(valor)) return crearFecha(valor);
+  const instante = new Date(valor);
+  if (Number.isNaN(instante.getTime())) {
+    return err({ codigo: 'fecha_invalida', mensaje: `La fecha "${valor}" no es válida.` });
+  }
+  return ok(hoyBogota(instante));
+}
+
+// Adapter over the domain interest owed (src/modules/prestamos/domain/
+// intereses-adeudados.ts, section 11 n.º 13): it maps the loan fields and its
+// approved `pago_capital` / `pago_intereses` items. `today` defaults to the
+// Bogota date of the clock, which is only read here.
 export function calcAccruedInterest(params: {
-  outstandingBalance: number;
-  rate: number;
-  disbursedAt: Date;
-  lastInterestPaymentDate: Date | null;
-}): number {
-  const { outstandingBalance, rate, disbursedAt, lastInterestPaymentDate } = params;
-  const from = lastInterestPaymentDate ?? disbursedAt;
-  const now = new Date();
+  requestedAmount: number | string;
+  // Stored fraction, e.g. 0.02 for 2% monthly.
+  rate: unknown;
+  disbursedAt: string;
+  items: LoanInterestItem[];
+  today?: FechaISO;
+}): Result<number, ErrorDeDominio> {
+  const reglas = reglasDeInteresDelPrestamo(params.rate);
+  if (!reglas.ok) return reglas;
+  const fechaDesembolso = fechaDeDesembolso(params.disbursedAt);
+  if (!fechaDesembolso.ok) return fechaDesembolso;
 
-  const months =
-    (now.getFullYear() - from.getFullYear()) * 12 +
-    (now.getMonth() - from.getMonth());
-
-  if (months <= 0) return 0;
-
-  const isFirstEver = lastInterestPaymentDate === null;
-  const disbursedDay = disbursedAt.getDate();
-  let total = 0;
-
-  for (let m = 1; m <= months; m++) {
-    const effectiveRate = isFirstEver && m === 1 && disbursedDay > 15 ? rate / 2 : rate;
-    total += Math.round(outstandingBalance * effectiveRate);
+  const abonosACapital: { mes: FechaISO; monto: number }[] = [];
+  const pagosDeIntereses: { monto: number }[] = [];
+  for (const item of params.items) {
+    if (item.concept === 'pago_capital') {
+      const mes = crearFecha(item.target_month);
+      if (!mes.ok) return mes;
+      abonosACapital.push({ mes: mes.value, monto: Number(item.amount) });
+    } else if (item.concept === 'pago_intereses') {
+      pagosDeIntereses.push({ monto: Number(item.amount) });
+    }
   }
 
-  return total;
+  const r = interesesAdeudados({
+    fechaDesembolso: fechaDesembolso.value,
+    hoy: params.today ?? hoyBogota(new Date()),
+    monto: Number(params.requestedAmount),
+    abonosACapital,
+    pagosDeIntereses,
+    reglas: reglas.value,
+  });
+  return r.ok ? ok(r.value.adeudado) : r;
 }
 
 // ============================================================

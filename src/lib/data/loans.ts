@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from '@/types/database';
 import type { Loan, LoanVote, LoanWithDetails, Profile } from '@/types/entities';
 import { eligibleVoterCount } from './votes';
+import type { LoanInterestItem } from '@/lib/loans';
 
 type SB = SupabaseClient<Database>;
 
@@ -614,4 +615,32 @@ export async function getLibroAccionistaData(
       `${b.user.first_name} ${b.user.last_name}`,
     ),
   );
+}
+
+// Approved capital and interest items of the given loans, in one query, for
+// the domain interest owed (calcAccruedInterest). Loans without items map to [].
+export async function getLoanInterestItems(
+  supabase: SB,
+  loanIds: string[],
+): Promise<Map<string, LoanInterestItem[]>> {
+  const porPrestamo = new Map<string, LoanInterestItem[]>(loanIds.map((id) => [id, []]));
+  if (loanIds.length === 0) return porPrestamo;
+
+  const { data, error } = await supabase
+    .from('receipt_items')
+    .select('loan_id, concept, target_month, amount, receipts!inner(status)')
+    .in('loan_id', loanIds)
+    .in('concept', ['pago_capital', 'pago_intereses'])
+    .eq('receipts.status', 'approved');
+  if (error) throw error;
+
+  for (const item of data ?? []) {
+    if (!item.loan_id) continue;
+    porPrestamo.get(item.loan_id)?.push({
+      concept: item.concept,
+      target_month: item.target_month,
+      amount: item.amount,
+    });
+  }
+  return porPrestamo;
 }

@@ -1,6 +1,8 @@
 import { type SupabaseClient } from '@supabase/supabase-js';
 import { type Database } from '@/types/database';
 import { getOpenPeriodShareValue } from '@/lib/data/share-value';
+import { getLoanInterestItems } from '@/lib/data/loans';
+import { calcAccruedInterest, type LoanInterestItem } from '@/lib/loans';
 import { DEFAULT_PURCHASE_RULES, type PurchaseRules, toReglasDeMulta } from '@/lib/fines';
 import { estadoDeObligaciones, type PrestamoActivo } from '@/modules/pagos/domain/obligaciones';
 import { hoyBogota, type FechaISO } from '@/shared/domain/fechas';
@@ -100,10 +102,11 @@ export async function checkUserObligations(
     }
   }
 
-  // 3. Préstamos activos y su interés adeudado
+  // 3. Préstamos activos y su interés adeudado, calculado en el dominio
+  //    (interesesAdeudados, sección 11 n.º 13) con una sola consulta de pagos.
   const { data: activeLoans, error: loansError } = await supabase
     .from('loans')
-    .select('id, loan_number, disbursement_number, outstanding_balance')
+    .select('id, loan_number, disbursement_number, outstanding_balance, requested_amount, interest_rate, disbursed_at')
     .eq('user_id', userId)
     .eq('status', 'active')
     .not('disbursed_at', 'is', null);
@@ -113,14 +116,27 @@ export async function checkUserObligations(
     throw loansError;
   }
 
-  const prestamos: PrestamoActivo[] = [];
-  for (const loan of activeLoans || []) {
-    const { data: interestDebt, error: interestError } = await supabase
-      .rpc('get_loan_interest_owed', { p_loan_id: loan.id });
+  const loans = activeLoans || [];
+  let itemsByLoan: Map<string, LoanInterestItem[]>;
+  try {
+    itemsByLoan = await getLoanInterestItems(supabase, loans.map((l) => l.id));
+  } catch (interestItemsError) {
+    console.error('Error al consultar pagos de préstamos para verificar obligaciones:', interestItemsError);
+    throw interestItemsError;
+  }
 
-    if (interestError) {
-      console.error(`Error al consultar interés adeudado para préstamo ${loan.id}:`, interestError);
-      throw interestError;
+  const prestamos: PrestamoActivo[] = [];
+  for (const loan of loans) {
+    const interes = calcAccruedInterest({
+      requestedAmount: loan.requested_amount,
+      rate: loan.interest_rate,
+      disbursedAt: loan.disbursed_at as string,
+      items: itemsByLoan.get(loan.id) ?? [],
+      today: hoy,
+    });
+    if (!interes.ok) {
+      console.error(`Error al calcular el interés adeudado del préstamo ${loan.id}:`, interes.error);
+      throw new Error(interes.error.mensaje);
     }
 
     prestamos.push({
@@ -128,7 +144,7 @@ export async function checkUserObligations(
       numero: loan.loan_number,
       numeroDeDesembolso: loan.disbursement_number,
       saldo: Number(loan.outstanding_balance || 0),
-      interesAdeudado: Number(interestDebt || 0),
+      interesAdeudado: interes.value,
     });
   }
 

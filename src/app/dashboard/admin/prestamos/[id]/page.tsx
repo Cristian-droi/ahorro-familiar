@@ -28,13 +28,14 @@ import {
   FileText,
   Landmark,
 } from 'lucide-react';
-import { getLoanWithDetails, getCashBalance, type LoanWithVoting } from '@/lib/data/loans';
+import { getLoanWithDetails, getCashBalance, getLoanInterestItems, type LoanWithVoting } from '@/lib/data/loans';
 import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import { cop } from '@/lib/format';
 import {
   LOAN_STATUS_LABELS,
   LOAN_STATUS_TONE,
   calcAccruedInterest,
+  type LoanInterestItem,
 } from '@/lib/loans';
 import { votosNecesarios } from '@/modules/prestamos/domain/votacion';
 
@@ -51,6 +52,8 @@ export default function AdminLoanDetailPage() {
   const [loading, setLoading] = useState(true);
   const [cashBalance, setCashBalance] = useState<number | null>(null);
   const [shareValue, setShareValue] = useState<number | null>(null);
+  // Approved capital and interest items, for the interest owed (null: not loaded).
+  const [interestItems, setInterestItems] = useState<LoanInterestItem[] | null>(null);
   const [rejectionReason, setRejectionReason] = useState('');
   const [revisionNote, setRevisionNote] = useState('');
   const [adminNotes, setAdminNotes] = useState('');
@@ -71,6 +74,13 @@ export default function AdminLoanDetailPage() {
     setCashBalance(balance);
     setShareValue(
       data ? await getOpenPeriodShareValue(supabase, data.user_id).catch(() => null) : null,
+    );
+    setInterestItems(
+      data?.status === 'active'
+        ? await getLoanInterestItems(supabase, [data.id])
+            .then((porPrestamo) => porPrestamo.get(data.id) ?? [])
+            .catch(() => null)
+        : null,
     );
     if (data?.admin_notes) setAdminNotes(data.admin_notes);
     setLoading(false);
@@ -202,17 +212,17 @@ export default function AdminLoanDetailPage() {
   const shortfall = cashBalance !== null ? loanAmount - cashBalance : 0;
   const exceedsBalance = cashBalance !== null && shortfall > 0;
 
-  const accruedInterest =
-    loan.status === 'active' && loan.disbursed_at
+  // Interest owed from the domain (section 11, n.º 13); null when it cannot be computed.
+  const accruedInterestResult =
+    loan.status === 'active' && loan.disbursed_at && interestItems
       ? calcAccruedInterest({
-          outstandingBalance: Number(loan.outstanding_balance),
-          rate: Number(loan.interest_rate),
-          disbursedAt: new Date(loan.disbursed_at),
-          lastInterestPaymentDate: loan.last_interest_payment_date
-            ? new Date(loan.last_interest_payment_date)
-            : null,
+          requestedAmount: loan.requested_amount,
+          rate: loan.interest_rate,
+          disbursedAt: loan.disbursed_at,
+          items: interestItems,
         })
-      : 0;
+      : null;
+  const accruedInterest = accruedInterestResult?.ok ? accruedInterestResult.value : null;
 
   return (
     <div className="flex flex-col gap-7 animate-in fade-in duration-300">
@@ -296,7 +306,7 @@ export default function AdminLoanDetailPage() {
               {loan.status === 'active' && (
                 <>
                   <Stat label="Saldo pendiente" value={cop(Number(loan.outstanding_balance))} tone="warn" />
-                  <Stat label="Intereses acumulados" value={cop(accruedInterest)} tone="danger" />
+                  <Stat label="Intereses acumulados" value={accruedInterest === null ? 'No disponible' : cop(accruedInterest)} tone="danger" />
                 </>
               )}
               {loan.deduct_obligations && (
