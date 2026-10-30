@@ -1,20 +1,28 @@
 import { describe, it, expect } from 'vitest';
 import { createLoanSchema, updatePaymentPlanSchema } from '@/lib/schemas/loan';
 
-// RN-4.3 (section 11, n.º 5): the term is no longer chosen; it runs until
-// December. A months field is rejected instead of silently ignored.
-const MENSAJE_PLAZO = 'El plazo ya no se elige: va hasta diciembre del periodo (RN-4.3).';
+// RN-4.3: the shareholder chooses the term. The schema only checks the shape
+// (a whole number of months); the maximum is validated by the domain plan.
 
 describe('createLoanSchema (RN-4.3)', () => {
-  it('accepts a request without months', () => {
-    const r = createLoanSchema.safeParse({ requested_amount: 1_000_000 });
+  it('accepts the chosen term in months', () => {
+    const r = createLoanSchema.safeParse({ requested_amount: 1_000_000, payment_plan_months: 4 });
     expect(r.success).toBe(true);
+    if (r.success) expect(r.data.payment_plan_months).toBe(4);
   });
 
-  it('rejects a request that still sends payment_plan_months', () => {
-    const r = createLoanSchema.safeParse({ requested_amount: 1_000_000, payment_plan_months: 12 });
-    expect(r.success).toBe(false);
-    if (!r.success) expect(r.error.issues[0]).toMatchObject({ path: ['payment_plan_months'], message: MENSAJE_PLAZO });
+  it('accepts a request without months (the maximum term applies)', () => {
+    const r = createLoanSchema.safeParse({ requested_amount: 1_000_000 });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.payment_plan_months).toBeUndefined();
+  });
+
+  it('leaves the maximum to the domain: 13 months passes the schema', () => {
+    expect(createLoanSchema.safeParse({ requested_amount: 1_000_000, payment_plan_months: 13 }).success).toBe(true);
+  });
+
+  it.each([0, -1, 2.5])('rejects %s months', (meses) => {
+    expect(createLoanSchema.safeParse({ requested_amount: 1_000_000, payment_plan_months: meses }).success).toBe(false);
   });
 
   it('still rejects an amount below 500.000', () => {
@@ -22,16 +30,22 @@ describe('createLoanSchema (RN-4.3)', () => {
   });
 });
 
-describe('updatePaymentPlanSchema (RN-4.3, RN-4.26)', () => {
-  it('accepts the edited capital without months', () => {
-    const r = updatePaymentPlanSchema.safeParse({ capital_overrides: { '5': 200_000 } });
+describe('updatePaymentPlanSchema (RN-4.3, RN-4.3b, RN-4.26)', () => {
+  it('accepts the chosen term with the edited capital', () => {
+    const r = updatePaymentPlanSchema.safeParse({ months: 4, capital_overrides: { '4': 1_000_000 } });
     expect(r.success).toBe(true);
   });
 
-  it('rejects a request that still sends months', () => {
-    const r = updatePaymentPlanSchema.safeParse({ months: 12, capital_overrides: {} });
-    expect(r.success).toBe(false);
-    if (!r.success) expect(r.error.issues[0]).toMatchObject({ path: ['months'], message: MENSAJE_PLAZO });
+  it('accepts the edited capital without months', () => {
+    expect(updatePaymentPlanSchema.safeParse({ capital_overrides: { '5': 200_000 } }).success).toBe(true);
+  });
+
+  it('accepts capital keyed by calendar month', () => {
+    expect(updatePaymentPlanSchema.safeParse({ capital_overrides: { '2026-06-01': 1_000_000 } }).success).toBe(true);
+  });
+
+  it('rejects zero months', () => {
+    expect(updatePaymentPlanSchema.safeParse({ months: 0, capital_overrides: {} }).success).toBe(false);
   });
 
   it('still rejects a negative edited capital', () => {

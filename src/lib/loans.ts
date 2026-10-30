@@ -1,9 +1,10 @@
 // Lógica de negocio del módulo de préstamos.
 
-import type { FechaISO } from '@/shared/domain/fechas';
-import { ok, type Result, type ErrorDeDominio } from '@/shared/domain/result';
-import { planDePagos } from '@/modules/prestamos/domain/plan-de-pagos';
-import { PLAZO_HASTA_PERIODO_SIGUIENTE_POR_DEFECTO, reglasDeInteresDesdeAjuste } from '@/lib/loan-settings';
+import { crearFecha, primerDiaDelMes, sumarMeses, type FechaISO } from '@/shared/domain/fechas';
+import { ok, err, type Result, type ErrorDeDominio } from '@/shared/domain/result';
+import { planAcordadoDesdeCuotas, planDePagos } from '@/modules/prestamos/domain/plan-de-pagos';
+import { mesAplicado } from '@/modules/prestamos/domain/calendario';
+import { PLAZO_HASTA_PERIODO_SIGUIENTE_POR_DEFECTO, reglasDeInteresDelPrestamo } from '@/lib/loan-settings';
 
 export interface PlanRow {
   month_number: number;
@@ -13,24 +14,61 @@ export interface PlanRow {
   estimated_balance_after: number;
 }
 
+const NUMERO_DE_CUOTA = /^-?\d+$/;
+
 // Adapter over the domain plan (src/modules/prestamos/domain/plan-de-pagos.ts):
 // it keeps the `PlanRow` shape stored in `loan_payment_plan_items` and used by
-// the UI. The term is derived from the disbursement date (RN-4.3, RN-4.15);
-// the stored fractional rate is converted in `reglasDeInteresDesdeAjuste`.
+// the UI. The loan's own stored fractional rate is required (no 2% fallback).
+//
+// Term (RN-4.3): `months` counts from the applied month (create, draft edits);
+// `lastMonth` is the agreed last calendar month (disbursement). Without either,
+// the maximum term applies.
+//
+// Capital (RN-4.26, RN-4.3b): `capitalOverrides` keys are either installment
+// numbers ('5', relative to the applied month of `disbursedOn`, as the UI sends
+// them) or calendar months ('2026-06-01').
 export function buildPaymentPlan(params: {
   requestedAmount: number;
   // Stored fraction, e.g. 0.02 for 2% monthly.
   rate: unknown;
   // Disbursement date (or today in Bogota for a draft).
   disbursedOn: FechaISO;
-  capitalOverrides?: Record<number, number>;
+  months?: number;
+  lastMonth?: FechaISO;
+  capitalOverrides?: Record<string, number>;
 }): Result<PlanRow[], ErrorDeDominio> {
+  const reglas = reglasDeInteresDelPrestamo(params.rate);
+  if (!reglas.ok) return reglas;
+  const inicio = mesAplicado(params.disbursedOn, reglas.value.diaDeCorte);
+
+  let mesFinal = params.lastMonth;
+  if (params.months !== undefined) {
+    if (!Number.isInteger(params.months) || params.months < 1) {
+      return err({ codigo: 'plazo_invalido', mensaje: 'El plazo debe ser un número entero de meses, de al menos 1.' });
+    }
+    mesFinal = sumarMeses(inicio, params.months - 1);
+  }
+
+  const capitalPorMes: Record<string, number> = {};
+  for (const [clave, valor] of Object.entries(params.capitalOverrides ?? {})) {
+    let mes: string = clave;
+    if (NUMERO_DE_CUOTA.test(clave)) {
+      const numero = Number(clave);
+      if (numero < 1) {
+        return err({ codigo: 'cuota_invalida', mensaje: `La cuota ${clave} no existe: las cuotas empiezan en 1.` });
+      }
+      mes = sumarMeses(inicio, numero - 1);
+    }
+    capitalPorMes[mes] = valor;
+  }
+
   const plan = planDePagos({
     monto: params.requestedAmount,
     fechaDesembolso: params.disbursedOn,
-    reglas: reglasDeInteresDesdeAjuste(params.rate),
+    reglas: reglas.value,
     hastaPeriodoSiguiente: PLAZO_HASTA_PERIODO_SIGUIENTE_POR_DEFECTO,
-    capitalPorCuota: params.capitalOverrides,
+    mesFinal,
+    capitalPorMes,
   });
   if (!plan.ok) return plan;
   return ok(
@@ -42,6 +80,23 @@ export function buildPaymentPlan(params: {
       estimated_balance_after: cuota.saldoDespues,
     })),
   );
+}
+
+// RN-4.3 and RN-4.3b: the agreed plan stored in `loan_payment_plan_items` as
+// the chosen last calendar month and the capital by calendar month, so the
+// disbursement rebuilds it by month and not by installment number.
+export function agreedPlanFromRows(
+  rows: { due_date: string; capital_amount: number | string }[],
+): Result<{ lastMonth: FechaISO | undefined; capitalOverrides: Record<string, number> }, ErrorDeDominio> {
+  const cuotas: { mes: FechaISO; capital: number }[] = [];
+  for (const row of rows) {
+    const fecha = crearFecha(row.due_date);
+    if (!fecha.ok) return fecha;
+    cuotas.push({ mes: primerDiaDelMes(fecha.value), capital: Number(row.capital_amount) });
+  }
+  const plan = planAcordadoDesdeCuotas(cuotas);
+  if (!plan.ok) return plan;
+  return ok({ lastMonth: plan.value.mesFinal, capitalOverrides: plan.value.capitalPorMes });
 }
 
 export function calcAccruedInterest(params: {

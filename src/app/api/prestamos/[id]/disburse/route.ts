@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
-import { buildPaymentPlan } from '@/lib/loans';
+import { agreedPlanFromRows, buildPaymentPlan } from '@/lib/loans';
 import { desembolsoDePrestamo, getTasaCuatroPorMil } from '@/lib/loan-settings';
 import { disburseSchema, deductionsDetailSchema } from '@/lib/schemas/loan';
 import { getCashBalance } from '@/lib/data/loans';
@@ -133,25 +133,26 @@ export async function POST(
     const disbursedAt = new Date();
     const disbursedAmount = netAmount;
 
-    // Recalcular plan de pagos con la fecha real de desembolso
+    // Recalcular plan de pagos con la fecha real de desembolso (RN-4.3b): el
+    // plan pactado se rehace por mes calendario, con el mismo último mes del
+    // plazo; el capital de un mes que quedó antes del mes aplicado pasa al
+    // último mes. Una tasa inválida del préstamo se reporta, no se cambia por 2%.
     const { data: planItems } = await admin
       .from('loan_payment_plan_items')
-      .select('month_number, capital_amount')
-      .eq('loan_id', id)
-      .order('month_number');
+      .select('due_date, capital_amount')
+      .eq('loan_id', id);
 
-    const capitalOverrides: Record<number, number> = {};
-    for (const item of planItems ?? []) {
-      capitalOverrides[item.month_number] = Number(item.capital_amount);
+    const agreed = agreedPlanFromRows(planItems ?? []);
+    if (!agreed.ok) {
+      return NextResponse.json({ error: agreed.error.mensaje }, { status: 422 });
     }
 
-    // The term is derived from the real disbursement date in Bogota (RN-4.3,
-    // RN-4.15); the agreed capital per installment is kept (RN-4.26).
     const plan = buildPaymentPlan({
       requestedAmount: Number(loan.requested_amount),
       rate: loan.interest_rate,
       disbursedOn: hoyBogota(disbursedAt),
-      capitalOverrides,
+      lastMonth: agreed.value.lastMonth,
+      capitalOverrides: agreed.value.capitalOverrides,
     });
     if (!plan.ok) {
       return NextResponse.json({ error: plan.error.mensaje }, { status: 422 });

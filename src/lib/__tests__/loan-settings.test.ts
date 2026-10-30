@@ -2,8 +2,11 @@ import { describe, it, expect } from 'vitest';
 import {
   accionesPorPrestamo,
   desembolsoDePrestamo,
+  reglasDeInteresDelPrestamo,
   reglasDeInteresDesdeAjuste,
   tasaCuatroPorMilDesdeAjuste,
+  tasaDeInteresGlobalDesdeAjuste,
+  tasaEnPuntosBasicosDelPrestamo,
   tasaEnPuntosBasicosDesdeAjuste,
 } from '@/lib/loan-settings';
 
@@ -98,5 +101,46 @@ describe('reglasDeInteresDesdeAjuste (RN-4.15, RN-4.18, RN-4.20)', () => {
       diaLimiteTasaCompleta: 15,
       diaDeCorte: 25,
     });
+  });
+});
+
+describe('tasaDeInteresGlobalDesdeAjuste (RN-4.18, global setting)', () => {
+  it('keeps the stored fraction of the global setting', () => {
+    expect(tasaDeInteresGlobalDesdeAjuste(0.02)).toBe(0.02);
+    expect(tasaDeInteresGlobalDesdeAjuste('0.025')).toBe(0.025);
+    expect(tasaDeInteresGlobalDesdeAjuste(0)).toBe(0);
+  });
+
+  it('falls back to the default 2% when the global setting is missing or invalid', () => {
+    for (const valor of [null, undefined, '', 'abc', -0.02, Number.NaN]) {
+      expect(tasaDeInteresGlobalDesdeAjuste(valor)).toBe(0.02);
+    }
+  });
+});
+
+describe("tasaEnPuntosBasicosDelPrestamo (RN-4.18, the loan's own rate)", () => {
+  it('converts the stored fraction 0.02 into 200 basis points', () => {
+    expect(tasaEnPuntosBasicosDelPrestamo(0.02)).toEqual({ ok: true, value: 200 });
+    expect(tasaEnPuntosBasicosDelPrestamo('0.03')).toEqual({ ok: true, value: 300 });
+    expect(tasaEnPuntosBasicosDelPrestamo(0)).toEqual({ ok: true, value: 0 });
+  });
+
+  it('fails instead of defaulting to 2% when the loan rate is missing or invalid', () => {
+    for (const valor of [null, undefined, '', 'abc', -0.02, Number.NaN]) {
+      const r = tasaEnPuntosBasicosDelPrestamo(valor);
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.error.codigo).toBe('tasa_invalida');
+        expect(r.error.mensaje).toBe('El préstamo no tiene una tasa de interés válida. Revisá la tasa guardada.');
+      }
+    }
+  });
+
+  it('builds the interest rules with the loan rate', () => {
+    expect(reglasDeInteresDelPrestamo(0.02)).toEqual({
+      ok: true,
+      value: { tasaEnPuntosBasicos: 200, diaLimiteTasaCompleta: 15, diaDeCorte: 25 },
+    });
+    expect(reglasDeInteresDelPrestamo(null).ok).toBe(false);
   });
 });

@@ -71,9 +71,12 @@
 ### 4.1 Solicitud y límites ✅
 - **RN-4.1** **Monto mínimo:** opcional ⚙️. Por defecto **no hay mínimo**.
 - **RN-4.2** **Préstamos activos por persona:** opcional ⚙️. Por defecto **no hay límite**. El administrador evalúa cada caso.
-- **RN-4.3** **Plazo:**
-  - Por defecto, hasta **diciembre del periodo actual**. Un préstamo de enero tiene 12 meses de plazo y uno de octubre, 3.
-  - El administrador puede habilitar ⚙️ plazos hasta **diciembre del periodo siguiente**. Esos préstamos se financian con la capitalización voluntaria (ver RN-8.4).
+- **RN-4.3** **Plazo:** el accionista **elige el plazo** al solicitar, con un **máximo**:
+  - Por defecto, hasta **diciembre del periodo actual**. Un préstamo de enero puede tener hasta 12 meses de plazo y uno de octubre, hasta 3.
+  - El administrador puede habilitar ⚙️, para todos, plazos hasta **diciembre del periodo siguiente**. Esos préstamos se financian con la capitalización voluntaria (ver RN-8.4).
+- **RN-4.3b** **Plan pactado** (informativo, ver 4.7): el accionista reparte el capital por mes como quiera dentro del plazo. Los intereses corren cada mes sobre el saldo que queda (RN-4.18), desde el mes aplicado **hasta que el saldo de capital llegue a 0**. En el plan pactado eso coincide con el último mes del plazo; si el accionista no cumple el plan, los intereses siguen corriendo después del plazo (RN-4.22). *Definido por Cris el 2026-10-29.*
+  - **Ejemplo:** pide en febrero y dice que paga todo en junio: todo el capital va en junio y paga intereses de febrero a junio.
+  - Al desembolsar, el plan se rehace con la fecha real **por mes calendario**. Si el capital pactado de un mes queda antes del mes aplicado (el desembolso se atrasó), ese capital pasa al **último mes** del plan.
 - **RN-4.4** Hay una funcionalidad futura (fuera del MVP): indicadores que **ayuden** al administrador a decidir, como aportes, capacidad de pago e historial de pagos. Solo informan, nunca bloquean.
 
 ### 4.2 Aprobación por votación ✅
@@ -169,7 +172,7 @@
 | Vista | Quién la ve | Qué muestra |
 |---|---|---|
 | **Plan pactado** | Accionista y administrador | Cuotas acordadas al solicitar. Es lo que se le sugiere pagar en el módulo de pagos. |
-| **Cuota para cerrar el año** | Administrador | `saldo pendiente ÷ meses restantes hasta diciembre, incluido el actual` |
+| **Cuota para cerrar el año** (real) | Administrador | `saldo pendiente ÷ meses restantes hasta diciembre, incluido el actual`. Es lo que de verdad le queda por pagar, sumando todos sus préstamos activos. |
 
 **Ejemplo:** en octubre el saldo es 900.000 y faltan 3 meses (octubre, noviembre y diciembre). La cuota para cerrar el año es **300.000**.
 
@@ -318,7 +321,7 @@ En diciembre las utilidades llegan a 10.000.000, pero el gasto **sigue siendo 20
 | 2 | RN-4.12 excepción con auditoría | No existe | Implementar |
 | 3 | RN-4.1 mínimo de préstamo | 500.000 fijo (`schemas/loan.ts`) | Convertir en parámetro opcional |
 | 4 | RN-4.2 préstamos activos | Máximo 2 | Parámetro opcional, sin límite por defecto |
-| 5 | RN-4.3 plazo | 1 a 60 meses | Hasta diciembre, con opción de diciembre del año siguiente |
+| 5 | RN-4.3 plazo | 1 a 60 meses | Lo elige el accionista con máximo hasta diciembre, o diciembre del año siguiente si se habilita |
 | 6 | RN-4.15 mes aplicado después del 25 | Verificar | Implementar si no existe |
 | 6b | RN-4.14 acciones por préstamo pagadas por adelantado | Existe la opción (`toggle-upfront-shares`) | Verificar que bloquee el desembolso mientras el pago no esté aprobado |
 | 7 | RN-4.16 base del 4x1000 | Sobre el neto | ✅ Coincide, se mantiene |

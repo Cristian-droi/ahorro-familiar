@@ -3,7 +3,12 @@ import { requireUser } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { createLoanSchema } from '@/lib/schemas/loan';
 import { buildPaymentPlan } from '@/lib/loans';
-import { accionesPorPrestamo, desembolsoDePrestamo, getTasaCuatroPorMil } from '@/lib/loan-settings';
+import {
+  accionesPorPrestamo,
+  desembolsoDePrestamo,
+  getTasaCuatroPorMil,
+  tasaDeInteresGlobalDesdeAjuste,
+} from '@/lib/loan-settings';
 import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import { validarPuedeComprar } from '@/modules/acciones/domain/valor-de-accion';
 import { checkUserObligations } from '@/lib/obligations';
@@ -23,7 +28,7 @@ export async function POST(request: Request) {
     if (!parsed.success) {
       return NextResponse.json({ error: 'Datos inválidos', details: parsed.error.flatten() }, { status: 400 });
     }
-    const { requested_amount, loan_shares_paid_upfront, deduct_obligations, deducted_capital_amount, deductions_detail } = parsed.data;
+    const { requested_amount, payment_plan_months, loan_shares_paid_upfront, deduct_obligations, deducted_capital_amount, deductions_detail } = parsed.data;
 
     const admin = createSupabaseAdminClient();
 
@@ -46,8 +51,9 @@ export async function POST(request: Request) {
     const maxLoansEnabled = settingsMap.has('max_active_loans_enabled') ? Boolean(settingsMap.get('max_active_loans_enabled')) : true;
     const maxLoansPerUser = settingsMap.has('max_active_loans_per_user') ? Number(settingsMap.get('max_active_loans_per_user')) : 2;
 
+    // RN-4.18: the global setting falls back to the default 2% when missing or invalid.
     const rateVal = settingsMap.get('default_loan_interest_rate') ?? settingsMap.get('loan_interest_rate');
-    const interestRate = rateVal != null ? Number(rateVal) : 0.02;
+    const interestRate = tasaDeInteresGlobalDesdeAjuste(rateVal);
 
     // Verificar límite de préstamos activos si la restricción está activada
     if (maxLoansEnabled) {
@@ -120,13 +126,14 @@ export async function POST(request: Request) {
     }
     const fourPerThousand = desembolso.value.cuatroPorMil;
 
-    // Plan de pagos por defecto con la fecha de hoy en Bogotá como proxy del
-    // desembolso. El plazo va hasta diciembre (RN-4.3, RN-4.15); se recalcula
-    // con la fecha real al desembolsar.
+    // Plan de pagos con la fecha de hoy en Bogotá como proxy del desembolso.
+    // RN-4.3: el plazo lo elige el accionista, con máximo hasta diciembre (si no
+    // lo envía, se usa el máximo). Se rehace por mes calendario al desembolsar.
     const plan = buildPaymentPlan({
       requestedAmount: requested_amount,
       rate: interestRate,
       disbursedOn: hoyBogota(new Date()),
+      months: payment_plan_months,
     });
     if (!plan.ok) {
       return NextResponse.json({ error: plan.error.mensaje }, { status: 422 });

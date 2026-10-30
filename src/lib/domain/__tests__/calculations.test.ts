@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  agreedPlanFromRows,
   buildPaymentPlan,
   calcAccruedInterest,
 } from '@/lib/loans';
@@ -31,7 +32,7 @@ describe('Financial Calculations', () => {
       expect(plan[9]).toMatchObject({ due_date: '2026-12-01', capital_amount: 100_000, estimated_balance_after: 0 });
     });
 
-    it('handles capital overrides', () => {
+    it('keeps installment-number overrides, relative to the applied month (RN-4.26)', () => {
       const plan = rows(
         buildPaymentPlan({
           requestedAmount: 1_000_000,
@@ -40,7 +41,7 @@ describe('Financial Calculations', () => {
           capitalOverrides: { 5: 200_000 },
         }),
       );
-      expect(plan[4].capital_amount).toBe(200_000);
+      expect(plan[4]).toMatchObject({ due_date: '2026-07-01', capital_amount: 200_000 });
       expect(plan[5].capital_amount).toBe(80_000);
     });
 
@@ -65,6 +66,113 @@ describe('Financial Calculations', () => {
       });
       expect(r.ok).toBe(false);
       if (!r.ok) expect(r.error.codigo).toBe('capital_invalido');
+    });
+
+    it('uses the term chosen in months from the applied month (RN-4.3)', () => {
+      const plan = rows(buildPaymentPlan({ requestedAmount: 1_000_000, rate: 0.02, disbursedOn: fecha('2026-03-28'), months: 3 }));
+      expect(plan.map((r) => r.due_date)).toEqual(['2026-04-01', '2026-05-01', '2026-06-01']);
+    });
+
+    it('rejects a term in months beyond December (RN-4.3)', () => {
+      const r = buildPaymentPlan({ requestedAmount: 1_000_000, rate: 0.02, disbursedOn: fecha('2026-03-10'), months: 13 });
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.error.codigo).toBe('plazo_mayor_al_maximo');
+        expect(r.error.mensaje).toBe('El plazo puede ir como máximo hasta diciembre de 2026 (10 meses).');
+      }
+    });
+
+    it.each([0, -1, 2.5])('rejects a term of %s months', (months) => {
+      const r = buildPaymentPlan({ requestedAmount: 1_000_000, rate: 0.02, disbursedOn: fecha('2026-03-10'), months });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error.codigo).toBe('plazo_invalido');
+    });
+
+    it('uses the chosen last calendar month and calendar-month overrides (RN-4.3b)', () => {
+      const plan = rows(
+        buildPaymentPlan({
+          requestedAmount: 1_000_000,
+          rate: 0.02,
+          disbursedOn: fecha('2026-02-02'),
+          lastMonth: fecha('2026-06-01'),
+          capitalOverrides: { '2026-06-01': 1_000_000 },
+        }),
+      );
+      expect(plan.map((r) => r.capital_amount)).toEqual([0, 0, 0, 0, 1_000_000]);
+      expect(plan.map((r) => r.estimated_interest)).toEqual([20_000, 20_000, 20_000, 20_000, 20_000]);
+    });
+
+    it.each([0, -3])('rejects the installment number %s', (n) => {
+      const r = buildPaymentPlan({
+        requestedAmount: 1_000_000,
+        rate: 0.02,
+        disbursedOn: fecha('2026-03-10'),
+        capitalOverrides: { [n]: 100_000 },
+      });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error.codigo).toBe('cuota_invalida');
+    });
+
+    it("fails when the loan's own rate is missing instead of using 2% (RN-4.18)", () => {
+      for (const rate of [null, undefined, 'abc']) {
+        const r = buildPaymentPlan({ requestedAmount: 1_000_000, rate, disbursedOn: fecha('2026-03-10') });
+        expect(r.ok).toBe(false);
+        if (!r.ok) expect(r.error.codigo).toBe('tasa_invalida');
+      }
+    });
+  });
+
+  describe('agreedPlanFromRows (RN-4.3, RN-4.3b)', () => {
+    it('reads the last month of the term and the capital by calendar month', () => {
+      const r = agreedPlanFromRows([
+        { due_date: '2026-03-01', capital_amount: 0 },
+        { due_date: '2026-06-01', capital_amount: '1000000' },
+        { due_date: '2026-04-01', capital_amount: 0 },
+      ]);
+      expect(r).toEqual({
+        ok: true,
+        value: {
+          lastMonth: '2026-06-01',
+          capitalOverrides: { '2026-03-01': 0, '2026-04-01': 0, '2026-06-01': 1_000_000 },
+        },
+      });
+    });
+
+    it('returns no term and no capital for an empty plan', () => {
+      expect(agreedPlanFromRows([])).toEqual({ ok: true, value: { lastMonth: undefined, capitalOverrides: {} } });
+    });
+
+    it('rejects a stored row with an invalid date', () => {
+      const r = agreedPlanFromRows([{ due_date: 'junio', capital_amount: 0 }]);
+      expect(r.ok).toBe(false);
+    });
+  });
+
+  describe('disbursement rebuild (RN-4.3b)', () => {
+    const fecha = (texto: string): FechaISO => {
+      const r = crearFecha(texto);
+      if (!r.ok) throw new Error(`Invalid test date: ${texto}`);
+      return r.value;
+    };
+
+    it('a plan agreed in March and disbursed in April keeps the months and moves March capital to December', () => {
+      const draft = buildPaymentPlan({ requestedAmount: 1_000_000, rate: 0.02, disbursedOn: fecha('2026-03-10') });
+      if (!draft.ok) throw new Error(draft.error.mensaje);
+      const agreed = agreedPlanFromRows(draft.value);
+      if (!agreed.ok) throw new Error(agreed.error.mensaje);
+
+      const real = buildPaymentPlan({
+        requestedAmount: 1_000_000,
+        rate: 0.02,
+        disbursedOn: fecha('2026-04-10'),
+        lastMonth: agreed.value.lastMonth,
+        capitalOverrides: agreed.value.capitalOverrides,
+      });
+      if (!real.ok) throw new Error(real.error.mensaje);
+      expect(real.value).toHaveLength(9);
+      expect(real.value[0].due_date).toBe('2026-04-01');
+      expect(real.value.slice(0, 8).every((r) => r.capital_amount === 100_000)).toBe(true);
+      expect(real.value[8]).toMatchObject({ due_date: '2026-12-01', capital_amount: 200_000, estimated_balance_after: 0 });
     });
   });
 

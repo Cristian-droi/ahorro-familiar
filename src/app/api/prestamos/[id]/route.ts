@@ -2,8 +2,8 @@ import { NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { updatePaymentPlanSchema } from '@/lib/schemas/loan';
-import { buildPaymentPlan } from '@/lib/loans';
-import { hoyBogota } from '@/shared/domain/fechas';
+import { agreedPlanFromRows, buildPaymentPlan } from '@/lib/loans';
+import { hoyBogota, type FechaISO } from '@/shared/domain/fechas';
 
 // PUT /api/prestamos/[id] — accionista actualiza el plan de pagos (solo en draft).
 export async function PUT(
@@ -26,7 +26,7 @@ export async function PUT(
         { status: 400 },
       );
     }
-    const { capital_overrides } = parsed.data;
+    const { months, capital_overrides } = parsed.data;
 
     const admin = createSupabaseAdminClient();
 
@@ -49,17 +49,29 @@ export async function PUT(
     // Draft loans have no disbursement yet: today in Bogota is the proxy.
     const disbursedOn = hoyBogota(loan.disbursed_at ? new Date(loan.disbursed_at) : new Date());
 
-    const overrides: Record<number, number> = {};
-    for (const [k, v] of Object.entries(capital_overrides)) {
-      overrides[Number(k)] = Number(v);
+    // RN-4.3: without a new term, keep the last month of the stored plan.
+    let lastMonth: FechaISO | undefined;
+    if (months === undefined) {
+      const { data: storedRows } = await admin
+        .from('loan_payment_plan_items')
+        .select('due_date, capital_amount')
+        .eq('loan_id', id);
+      const agreed = agreedPlanFromRows(storedRows ?? []);
+      if (!agreed.ok) {
+        return NextResponse.json({ error: agreed.error.mensaje }, { status: 422 });
+      }
+      lastMonth = agreed.value.lastMonth;
     }
 
-    // The term is derived (RN-4.3, RN-4.15); only the capital is editable (RN-4.26).
+    // RN-4.3 (chosen term, up to the maximum) and RN-4.26 (free capital). A
+    // missing or invalid loan rate is reported (422), never replaced by 2%.
     const plan = buildPaymentPlan({
       requestedAmount: Number(loan.requested_amount),
       rate: loan.interest_rate,
       disbursedOn,
-      capitalOverrides: overrides,
+      months,
+      lastMonth,
+      capitalOverrides: capital_overrides,
     });
     if (!plan.ok) {
       return NextResponse.json({ error: plan.error.mensaje }, { status: 422 });

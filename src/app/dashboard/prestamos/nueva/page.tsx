@@ -26,6 +26,7 @@ import {
   DIA_DE_CORTE_POR_DEFECTO,
   PLAZO_HASTA_PERIODO_SIGUIENTE_POR_DEFECTO,
   TASA_CUATRO_POR_MIL_POR_DEFECTO,
+  tasaDeInteresGlobalDesdeAjuste,
   tasaEnPuntosBasicosDesdeAjuste,
 } from '@/lib/loan-settings';
 import { hoyBogota } from '@/shared/domain/fechas';
@@ -45,6 +46,8 @@ export default function NuevaSolicitudPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const [amountInput, setAmountInput] = useState('');
+  // RN-4.3: chosen term in months; null means the maximum.
+  const [monthsInput, setMonthsInput] = useState<number | null>(null);
   const [paidUpfront, setPaidUpfront] = useState(false);
   const [deductObligations, setDeductObligations] = useState(false);
   const [capitalAbonos, setCapitalAbonos] = useState<Record<string, number>>({});
@@ -69,7 +72,8 @@ export default function NuevaSolicitudPage() {
 
       if (cancelled) return;
       setShareValue(periodShareValue);
-      if (rateSetting.data?.value) setInterestRate(Number(rateSetting.data.value));
+      // RN-4.18: global setting, 2% when missing or invalid.
+      setInterestRate(tasaDeInteresGlobalDesdeAjuste(rateSetting.data?.value));
       setCashBalance(balance);
       setObligations(obligationsStatus);
       setTasaPorMil(fourPerThousandRate);
@@ -151,8 +155,8 @@ export default function NuevaSolicitudPage() {
   // recalculated with the real date when the loan is disbursed.
   const hoy = useMemo(() => hoyBogota(new Date()), []);
 
-  // RN-4.3 and RN-4.15: the term is not chosen, it runs until December.
-  const plazo = useMemo(
+  // RN-4.3 and RN-4.15: maximum term, until December of the period.
+  const plazoMaximo = useMemo(
     () =>
       plazoDelPrestamo({
         mesAplicado: mesAplicado(hoy, DIA_DE_CORTE_POR_DEFECTO),
@@ -160,6 +164,9 @@ export default function NuevaSolicitudPage() {
       }),
     [hoy],
   );
+
+  // RN-4.3: the shareholder chooses the term, up to the maximum.
+  const months = Math.min(monthsInput ?? plazoMaximo.meses, plazoMaximo.meses);
 
   // RN-4.18: the stored fraction (0.02) shown as a percentage without float noise.
   const ratePercent = tasaEnPuntosBasicosDesdeAjuste(interestRate) / 100;
@@ -170,10 +177,11 @@ export default function NuevaSolicitudPage() {
       requestedAmount,
       rate: interestRate,
       disbursedOn: hoy,
+      months,
       capitalOverrides,
     });
     return r.ok ? { plan: r.value, planError: null } : { plan: [], planError: r.error.mensaje };
-  }, [requestedAmount, interestRate, hoy, capitalOverrides]);
+  }, [requestedAmount, interestRate, hoy, months, capitalOverrides]);
 
   const exceedsCashBalance = cashBalance !== null && requestedAmount > cashBalance && requestedAmount > 0;
 
@@ -269,6 +277,7 @@ export default function NuevaSolicitudPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           requested_amount: requestedAmount,
+          payment_plan_months: months,
           loan_shares_paid_upfront: paidUpfront,
           deduct_obligations: deductObligations,
           deducted_capital_amount: deductedCapital,
@@ -286,7 +295,7 @@ export default function NuevaSolicitudPage() {
         await fetch(`/api/prestamos/${json.loan.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ capital_overrides: capitalOverrides }),
+          body: JSON.stringify({ months, capital_overrides: capitalOverrides }),
         });
       }
 
@@ -363,14 +372,27 @@ export default function NuevaSolicitudPage() {
                 </div>
               </div>
               <div>
-                <span className="text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase block mb-1.5">
-                  Plazo
-                </span>
-                <div className="flex items-center h-10 rounded-[9px] bg-[var(--color-surface-alt)] border border-[var(--color-border)] px-3 text-[14px] font-semibold text-[var(--color-text)]">
-                  {plazo.meses} {plazo.meses === 1 ? 'mes' : 'meses'}, hasta {monthLabel(plazo.mesFinal, true).toLowerCase()}
-                </div>
+                <label
+                  htmlFor="plazo-meses"
+                  className="text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase block mb-1.5"
+                >
+                  Plazo (meses)
+                </label>
+                <input
+                  id="plazo-meses"
+                  type="number"
+                  min={1}
+                  max={plazoMaximo.meses}
+                  value={months}
+                  onChange={(e) => {
+                    const v = Math.max(1, Math.min(plazoMaximo.meses, Math.floor(Number(e.target.value)) || 1));
+                    setMonthsInput(v);
+                    setCapitalOverrides({});
+                  }}
+                  className="w-full h-10 rounded-[9px] bg-[var(--color-surface)] border border-[var(--color-border)] px-3 text-[14px] font-semibold text-[var(--color-text)] focus:outline-none focus:border-[var(--color-brand)]"
+                />
                 <p className="text-[11px] text-[var(--color-text-subtle)] mt-1.5 leading-snug">
-                  El plazo va hasta diciembre del periodo. Si el desembolso es después del día {DIA_DE_CORTE_POR_DEFECTO}, el préstamo empieza el mes siguiente.
+                  Máximo {plazoMaximo.meses} {plazoMaximo.meses === 1 ? 'mes' : 'meses'}, hasta {monthLabel(plazoMaximo.mesFinal, true).toLowerCase()}. Si el desembolso es después del día {DIA_DE_CORTE_POR_DEFECTO}, el préstamo empieza el mes siguiente.
                 </p>
               </div>
             </div>

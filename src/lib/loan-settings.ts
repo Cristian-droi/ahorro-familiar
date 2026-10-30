@@ -1,5 +1,5 @@
 import type { TypedSupabaseClient } from './data/types';
-import type { Result, ErrorDeDominio } from '@/shared/domain/result';
+import { ok, err, type Result, type ErrorDeDominio } from '@/shared/domain/result';
 import {
   calcularAccionesPorPrestamo,
   type AccionesPorPrestamo,
@@ -43,12 +43,48 @@ export const PLAZO_HASTA_PERIODO_SIGUIENTE_POR_DEFECTO = false;
 // The loan rate (`system_settings.default_loan_interest_rate`,
 // `loans.interest_rate`) is stored as a fraction (0.02). The domain takes
 // integer basis points (200), so the conversion happens here, once, for every
-// caller. Missing or invalid values use the default.
-export function tasaEnPuntosBasicosDesdeAjuste(valor: unknown): number {
-  if (valor === null || valor === undefined || valor === '') return TASA_INTERES_POR_DEFECTO_PUNTOS_BASICOS;
+// caller.
+function fraccionValida(valor: unknown): number | null {
+  if (valor === null || valor === undefined || valor === '') return null;
   const fraccion = Number(valor);
-  if (!Number.isFinite(fraccion) || fraccion < 0) return TASA_INTERES_POR_DEFECTO_PUNTOS_BASICOS;
-  return Math.round(fraccion * 10000);
+  return Number.isFinite(fraccion) && fraccion >= 0 ? fraccion : null;
+}
+
+// Global setting: missing or invalid values use the default 2%.
+export function tasaEnPuntosBasicosDesdeAjuste(valor: unknown): number {
+  const fraccion = fraccionValida(valor);
+  // RN-4.18: unit conversion of the rate (fraction to basis points), not money.
+  return fraccion === null ? TASA_INTERES_POR_DEFECTO_PUNTOS_BASICOS : Math.round(fraccion * 10000);
+}
+
+// Global setting as the fraction stored in a new loan: missing or invalid
+// values use the default 2%.
+export function tasaDeInteresGlobalDesdeAjuste(valor: unknown): number {
+  return fraccionValida(valor) ?? TASA_INTERES_POR_DEFECTO_PUNTOS_BASICOS / 10000;
+}
+
+// A loan's own stored rate never falls back to the default: a missing or
+// invalid `loans.interest_rate` is an error the caller reports.
+export function tasaEnPuntosBasicosDelPrestamo(valor: unknown): Result<number, ErrorDeDominio> {
+  const fraccion = fraccionValida(valor);
+  if (fraccion === null) {
+    return err({
+      codigo: 'tasa_invalida',
+      mensaje: 'El préstamo no tiene una tasa de interés válida. Revisá la tasa guardada.',
+    });
+  }
+  // RN-4.18: unit conversion of the rate (fraction to basis points), not money.
+  return ok(Math.round(fraccion * 10000));
+}
+
+export function reglasDeInteresDelPrestamo(tasa: unknown): Result<ReglasDeInteres, ErrorDeDominio> {
+  const puntos = tasaEnPuntosBasicosDelPrestamo(tasa);
+  if (!puntos.ok) return puntos;
+  return ok({
+    tasaEnPuntosBasicos: puntos.value,
+    diaLimiteTasaCompleta: DIA_LIMITE_TASA_COMPLETA_POR_DEFECTO,
+    diaDeCorte: DIA_DE_CORTE_POR_DEFECTO,
+  });
 }
 
 export function reglasDeInteresDesdeAjuste(tasa: unknown): ReglasDeInteres {
