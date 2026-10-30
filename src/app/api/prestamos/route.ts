@@ -7,6 +7,7 @@ import { accionesPorPrestamo, desembolsoDePrestamo, getTasaCuatroPorMil } from '
 import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import { validarPuedeComprar } from '@/modules/acciones/domain/valor-de-accion';
 import { checkUserObligations } from '@/lib/obligations';
+import { hoyBogota } from '@/shared/domain/fechas';
 
 // POST /api/prestamos — accionista crea un borrador de préstamo.
 export async function POST(request: Request) {
@@ -22,7 +23,7 @@ export async function POST(request: Request) {
     if (!parsed.success) {
       return NextResponse.json({ error: 'Datos inválidos', details: parsed.error.flatten() }, { status: 400 });
     }
-    const { requested_amount, payment_plan_months, loan_shares_paid_upfront, deduct_obligations, deducted_capital_amount, deductions_detail } = parsed.data;
+    const { requested_amount, loan_shares_paid_upfront, deduct_obligations, deducted_capital_amount, deductions_detail } = parsed.data;
 
     const admin = createSupabaseAdminClient();
 
@@ -119,6 +120,19 @@ export async function POST(request: Request) {
     }
     const fourPerThousand = desembolso.value.cuatroPorMil;
 
+    // Plan de pagos por defecto con la fecha de hoy en Bogotá como proxy del
+    // desembolso. El plazo va hasta diciembre (RN-4.3, RN-4.15); se recalcula
+    // con la fecha real al desembolsar.
+    const plan = buildPaymentPlan({
+      requestedAmount: requested_amount,
+      rate: interestRate,
+      disbursedOn: hoyBogota(new Date()),
+    });
+    if (!plan.ok) {
+      return NextResponse.json({ error: plan.error.mensaje }, { status: 422 });
+    }
+    const planRows = plan.value;
+
     // Crear el préstamo
     const { data: loan, error: loanError } = await admin
       .from('loans')
@@ -132,7 +146,7 @@ export async function POST(request: Request) {
         four_per_thousand: fourPerThousand,
         outstanding_balance: 0,
         status: 'draft',
-        payment_plan_months,
+        payment_plan_months: planRows.length,
         deduct_obligations,
         deducted_shares_amount: deductedShares,
         deducted_fines_amount: deductedFines,
@@ -147,14 +161,6 @@ export async function POST(request: Request) {
       console.error('Error creando préstamo:', loanError);
       return NextResponse.json({ error: 'No se pudo crear el préstamo' }, { status: 500 });
     }
-
-    // Generar plan de pagos por defecto (usando fecha actual como proxy de desembolso)
-    const planRows = buildPaymentPlan({
-      requestedAmount: requested_amount,
-      months: payment_plan_months,
-      rate: interestRate,
-      disbursedAt: new Date(),
-    });
 
     if (planRows.length > 0) {
       const planItems = planRows.map((r) => ({ ...r, loan_id: loan.id }));

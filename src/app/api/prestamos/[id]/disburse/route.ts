@@ -8,6 +8,7 @@ import { getCashBalance } from '@/lib/data/loans';
 import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import { validarPuedeComprar } from '@/modules/acciones/domain/valor-de-accion';
 import type { Database } from '@/types/database';
+import { hoyBogota } from '@/shared/domain/fechas';
 
 // POST /api/prestamos/[id]/disburse — admin realiza el desembolso del préstamo.
 // Requisitos:
@@ -144,13 +145,18 @@ export async function POST(
       capitalOverrides[item.month_number] = Number(item.capital_amount);
     }
 
-    const planRows = buildPaymentPlan({
+    // The term is derived from the real disbursement date in Bogota (RN-4.3,
+    // RN-4.15); the agreed capital per installment is kept (RN-4.26).
+    const plan = buildPaymentPlan({
       requestedAmount: Number(loan.requested_amount),
-      months: loan.payment_plan_months ?? 12,
-      rate: Number(loan.interest_rate),
-      disbursedAt,
+      rate: loan.interest_rate,
+      disbursedOn: hoyBogota(disbursedAt),
       capitalOverrides,
     });
+    if (!plan.ok) {
+      return NextResponse.json({ error: plan.error.mensaje }, { status: 422 });
+    }
+    const planRows = plan.value;
 
     // Actualizar préstamo (el trigger assign_disbursement_number asigna CE- automáticamente)
     const { error: updateError } = await admin

@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   accionesPorPrestamo,
   desembolsoDePrestamo,
+  reglasDeInteresDesdeAjuste,
   tasaCuatroPorMilDesdeAjuste,
+  tasaEnPuntosBasicosDesdeAjuste,
 } from '@/lib/loan-settings';
 
 describe('tasaCuatroPorMilDesdeAjuste (RN-4.16)', () => {
@@ -68,5 +70,33 @@ describe('desembolsoDePrestamo (RN-4.14, RN-4.16)', () => {
     const r = desembolsoDePrestamo({ ...base, capital: 950_000 });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.codigo).toBe('deducciones_mayores_al_monto');
+  });
+});
+
+describe('tasaEnPuntosBasicosDesdeAjuste (RN-4.18)', () => {
+  it('converts the stored fraction 0.02 into 200 basis points', () => {
+    expect(tasaEnPuntosBasicosDesdeAjuste(0.02)).toBe(200);
+    expect(tasaEnPuntosBasicosDesdeAjuste('0.02')).toBe(200);
+    expect(tasaEnPuntosBasicosDesdeAjuste(0.0125)).toBe(125);
+  });
+
+  it('keeps an explicit zero rate', () => {
+    expect(tasaEnPuntosBasicosDesdeAjuste(0)).toBe(0);
+  });
+
+  it('uses the default 2% when the setting is missing or invalid', () => {
+    for (const valor of [null, undefined, '', 'abc', -0.02, Number.NaN]) {
+      expect(tasaEnPuntosBasicosDesdeAjuste(valor)).toBe(200);
+    }
+  });
+});
+
+describe('reglasDeInteresDesdeAjuste (RN-4.15, RN-4.18, RN-4.20)', () => {
+  it('uses the stored rate with the default day 15 and cut-off day 25', () => {
+    expect(reglasDeInteresDesdeAjuste(0.03)).toEqual({
+      tasaEnPuntosBasicos: 300,
+      diaLimiteTasaCompleta: 15,
+      diaDeCorte: 25,
+    });
   });
 });

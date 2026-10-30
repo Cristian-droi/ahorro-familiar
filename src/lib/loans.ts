@@ -1,5 +1,10 @@
 // Lógica de negocio del módulo de préstamos.
 
+import type { FechaISO } from '@/shared/domain/fechas';
+import { ok, type Result, type ErrorDeDominio } from '@/shared/domain/result';
+import { planDePagos } from '@/modules/prestamos/domain/plan-de-pagos';
+import { PLAZO_HASTA_PERIODO_SIGUIENTE_POR_DEFECTO, reglasDeInteresDesdeAjuste } from '@/lib/loan-settings';
+
 export interface PlanRow {
   month_number: number;
   due_date: string;
@@ -8,122 +13,35 @@ export interface PlanRow {
   estimated_balance_after: number;
 }
 
+// Adapter over the domain plan (src/modules/prestamos/domain/plan-de-pagos.ts):
+// it keeps the `PlanRow` shape stored in `loan_payment_plan_items` and used by
+// the UI. The term is derived from the disbursement date (RN-4.3, RN-4.15);
+// the stored fractional rate is converted in `reglasDeInteresDesdeAjuste`.
 export function buildPaymentPlan(params: {
   requestedAmount: number;
-  months: number;
-  rate: number;
-  disbursedAt: Date;
+  // Stored fraction, e.g. 0.02 for 2% monthly.
+  rate: unknown;
+  // Disbursement date (or today in Bogota for a draft).
+  disbursedOn: FechaISO;
   capitalOverrides?: Record<number, number>;
-}): PlanRow[] {
-  const { requestedAmount, months, rate, disbursedAt, capitalOverrides = {} } = params;
-  const baseCapital = Math.floor(requestedAmount / months);
-  const disbursedDay = disbursedAt.getDate();
-  const hasOverrides = Object.keys(capitalOverrides).length > 0;
-
-  // ===== 1) Calcular el capital de cada cuota antes de iterar =====
-  //
-  // Reglas (acordadas con el user):
-  //   - Sin overrides: distribución uniforme (último mes absorbe redondeo).
-  //   - Con overrides:
-  //       a) Cuotas con override → su valor exacto.
-  //       b) Cuotas anteriores al ÚLTIMO override sin override propio →
-  //          mantienen `baseCapital` siempre que la suma total no exceda
-  //          el requested. Si excede, se ponen en 0.
-  //       c) Cuotas posteriores al último override sin override propio →
-  //          comparten el saldo restante en partes iguales (último de
-  //          ellas absorbe redondeo).
-  //
-  // Ejemplo: 1.000.000 a 10 meses, edita cuota 5 = 200k →
-  //   cuotas 1-4 = 100k (mantienen base), cuota 5 = 200k (override),
-  //   cuotas 6-10 = 80k (400k restantes / 5).
-  //
-  // Ejemplo: 1.000.000 a 10 meses, edita cuota 10 = 1M →
-  //   anteriores con baseCapital sumarían 900k, + 1M override = 1.9M >
-  //   1M → se borran las anteriores, todo queda en cuota 10.
-  const capitals: number[] = new Array(months).fill(0);
-
-  if (!hasOverrides) {
-    for (let i = 0; i < months; i++) {
-      capitals[i] =
-        i === months - 1 ? requestedAmount - baseCapital * (months - 1) : baseCapital;
-    }
-  } else {
-    const overrideKeys = Object.keys(capitalOverrides).map(Number).sort((a, b) => a - b);
-    const lastOverrideIdx = overrideKeys[overrideKeys.length - 1];
-
-    // Pasada inicial: overrides + baseCapital para anteriores no editadas.
-    for (let m = 1; m <= months; m++) {
-      if (capitalOverrides[m] !== undefined) {
-        capitals[m - 1] = Math.max(0, capitalOverrides[m]);
-      } else if (m < lastOverrideIdx) {
-        capitals[m - 1] = baseCapital;
-      } else {
-        capitals[m - 1] = 0; // posteriores se redistribuyen abajo
-      }
-    }
-
-    let consumed = capitals.reduce((s, v) => s + v, 0);
-    let remaining = requestedAmount - consumed;
-
-    if (remaining < 0) {
-      // Las anteriores baseCapital + overrides exceden el total. Bajamos
-      // las anteriores no editadas a 0 y recalculamos.
-      for (let m = 1; m < lastOverrideIdx; m++) {
-        if (capitalOverrides[m] === undefined) capitals[m - 1] = 0;
-      }
-      consumed = capitals.reduce((s, v) => s + v, 0);
-      remaining = Math.max(0, requestedAmount - consumed);
-    }
-
-    // Distribuir remaining entre los posteriores al último override sin
-    // override propio.
-    const posteriorsNoOverride: number[] = [];
-    for (let m = lastOverrideIdx + 1; m <= months; m++) {
-      if (capitalOverrides[m] === undefined) posteriorsNoOverride.push(m);
-    }
-
-    if (posteriorsNoOverride.length > 0) {
-      const chunk = Math.floor(remaining / posteriorsNoOverride.length);
-      for (let i = 0; i < posteriorsNoOverride.length - 1; i++) {
-        capitals[posteriorsNoOverride[i] - 1] = chunk;
-      }
-      const last = posteriorsNoOverride[posteriorsNoOverride.length - 1];
-      capitals[last - 1] = remaining - chunk * (posteriorsNoOverride.length - 1);
-    } else if (remaining !== 0) {
-      // No hay posteriores no editados: el último mes absorbe el ajuste
-      // (puede tener override propio que se incrementa).
-      capitals[months - 1] += remaining;
-    }
-  }
-
-  // ===== 2) Construir las rows con los capitales calculados =====
-  const rows: PlanRow[] = [];
-  let balance = requestedAmount;
-
-  for (let i = 1; i <= months; i++) {
-    const isFirst = i === 1;
-    const effectiveRate = isFirst && disbursedDay > 15 ? rate / 2 : rate;
-    const interest = Math.round(balance * effectiveRate);
-
-    const capital = Math.max(0, Math.min(capitals[i - 1], balance));
-    const balanceAfter = Math.max(0, balance - capital);
-
-    const due = new Date(disbursedAt);
-    due.setMonth(due.getMonth() + (i - 1));
-    due.setDate(1);
-
-    rows.push({
-      month_number: i,
-      due_date: due.toISOString().split('T')[0],
-      capital_amount: capital,
-      estimated_interest: interest,
-      estimated_balance_after: balanceAfter,
-    });
-
-    balance = balanceAfter;
-  }
-
-  return rows;
+}): Result<PlanRow[], ErrorDeDominio> {
+  const plan = planDePagos({
+    monto: params.requestedAmount,
+    fechaDesembolso: params.disbursedOn,
+    reglas: reglasDeInteresDesdeAjuste(params.rate),
+    hastaPeriodoSiguiente: PLAZO_HASTA_PERIODO_SIGUIENTE_POR_DEFECTO,
+    capitalPorCuota: params.capitalOverrides,
+  });
+  if (!plan.ok) return plan;
+  return ok(
+    plan.value.map((cuota) => ({
+      month_number: cuota.numero,
+      due_date: cuota.mes,
+      capital_amount: cuota.capital,
+      estimated_interest: cuota.interes,
+      estimated_balance_after: cuota.saldoDespues,
+    })),
+  );
 }
 
 export function calcAccruedInterest(params: {

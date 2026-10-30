@@ -3,6 +3,7 @@ import { requireUser } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { updatePaymentPlanSchema } from '@/lib/schemas/loan';
 import { buildPaymentPlan } from '@/lib/loans';
+import { hoyBogota } from '@/shared/domain/fechas';
 
 // PUT /api/prestamos/[id] — accionista actualiza el plan de pagos (solo en draft).
 export async function PUT(
@@ -20,9 +21,12 @@ export async function PUT(
     const body = await request.json();
     const parsed = updatePaymentPlanSchema.safeParse(body);
     if (!parsed.success) {
-      return NextResponse.json({ error: 'Datos inválidos' }, { status: 400 });
+      return NextResponse.json(
+        { error: parsed.error.issues[0]?.message ?? 'Datos inválidos' },
+        { status: 400 },
+      );
     }
-    const { months, capital_overrides } = parsed.data;
+    const { capital_overrides } = parsed.data;
 
     const admin = createSupabaseAdminClient();
 
@@ -42,20 +46,25 @@ export async function PUT(
       return NextResponse.json({ error: 'Solo se puede editar el plan en estado borrador' }, { status: 409 });
     }
 
-    const disbursedAt = loan.disbursed_at ? new Date(loan.disbursed_at) : new Date();
+    // Draft loans have no disbursement yet: today in Bogota is the proxy.
+    const disbursedOn = hoyBogota(loan.disbursed_at ? new Date(loan.disbursed_at) : new Date());
 
     const overrides: Record<number, number> = {};
     for (const [k, v] of Object.entries(capital_overrides)) {
       overrides[Number(k)] = Number(v);
     }
 
-    const planRows = buildPaymentPlan({
+    // The term is derived (RN-4.3, RN-4.15); only the capital is editable (RN-4.26).
+    const plan = buildPaymentPlan({
       requestedAmount: Number(loan.requested_amount),
-      months,
-      rate: Number(loan.interest_rate),
-      disbursedAt,
+      rate: loan.interest_rate,
+      disbursedOn,
       capitalOverrides: overrides,
     });
+    if (!plan.ok) {
+      return NextResponse.json({ error: plan.error.mensaje }, { status: 422 });
+    }
+    const planRows = plan.value;
 
     // Reemplazar el plan existente
     await admin.from('loan_payment_plan_items').delete().eq('loan_id', id);
@@ -69,7 +78,7 @@ export async function PUT(
     // Actualizar meses en el préstamo
     await admin
       .from('loans')
-      .update({ payment_plan_months: months, updated_at: new Date().toISOString() })
+      .update({ payment_plan_months: planRows.length, updated_at: new Date().toISOString() })
       .eq('id', id);
 
     return NextResponse.json({ plan: planRows });

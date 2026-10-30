@@ -1,9 +1,15 @@
 import { z } from 'zod';
 import type { DeductionDetail } from '@/types/entities';
 
+// RN-4.3 (docs/reglas-negocio.md, section 11, n.º 5): the term is derived
+// from the disbursement date and runs until December, so a months field is
+// rejected instead of silently ignored.
+const MENSAJE_PLAZO = 'El plazo ya no se elige: va hasta diciembre del periodo (RN-4.3).';
+const sinPlazoElegido = z.undefined({ error: MENSAJE_PLAZO }).optional();
+
 export const createLoanSchema = z.object({
   requested_amount: z.number().int().positive().min(500_000),
-  payment_plan_months: z.number().int().min(1).max(60),
+  payment_plan_months: sinPlazoElegido,
   loan_shares_paid_upfront: z.boolean().default(false),
   deduct_obligations: z.boolean().default(false),
   deducted_capital_amount: z.number().nonnegative().default(0),
@@ -11,7 +17,7 @@ export const createLoanSchema = z.object({
 });
 
 export const updatePaymentPlanSchema = z.object({
-  months: z.number().int().min(1).max(60),
+  months: sinPlazoElegido,
   capital_overrides: z.record(z.string(), z.number().nonnegative()),
 });
 

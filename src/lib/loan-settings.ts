@@ -5,6 +5,7 @@ import {
   type AccionesPorPrestamo,
 } from '@/modules/prestamos/domain/acciones-por-prestamo';
 import { calcularDesembolso, type Desembolso } from '@/modules/prestamos/domain/desembolso';
+import type { ReglasDeInteres } from '@/modules/prestamos/domain/intereses';
 
 // Adapter between the legacy loan callers and the loan domain
 // (docs/reglas-negocio.md, RN-4.10, RN-4.14 and RN-4.16). It only maps the
@@ -24,6 +25,38 @@ export function tasaCuatroPorMilDesdeAjuste(valor: unknown): number {
   const fraccion = Number(valor);
   if (!Number.isFinite(fraccion) || fraccion < 0) return TASA_CUATRO_POR_MIL_POR_DEFECTO;
   return Math.round(fraccion * 1000);
+}
+
+// RN-4.18: 2% monthly by default, expressed in basis points.
+export const TASA_INTERES_POR_DEFECTO_PUNTOS_BASICOS = 200;
+
+// RN-4.20 and RN-4.15 (⚙️ in section 10). There is no `system_settings` key
+// for them yet, so the documented defaults apply.
+export const DIA_LIMITE_TASA_COMPLETA_POR_DEFECTO = 15;
+export const DIA_DE_CORTE_POR_DEFECTO = 25;
+
+// RN-4.3: "Permitir plazo hasta diciembre del año siguiente" defaults to no.
+// There is no setting for it yet, so every term runs until December of the
+// applied month's period.
+export const PLAZO_HASTA_PERIODO_SIGUIENTE_POR_DEFECTO = false;
+
+// The loan rate (`system_settings.default_loan_interest_rate`,
+// `loans.interest_rate`) is stored as a fraction (0.02). The domain takes
+// integer basis points (200), so the conversion happens here, once, for every
+// caller. Missing or invalid values use the default.
+export function tasaEnPuntosBasicosDesdeAjuste(valor: unknown): number {
+  if (valor === null || valor === undefined || valor === '') return TASA_INTERES_POR_DEFECTO_PUNTOS_BASICOS;
+  const fraccion = Number(valor);
+  if (!Number.isFinite(fraccion) || fraccion < 0) return TASA_INTERES_POR_DEFECTO_PUNTOS_BASICOS;
+  return Math.round(fraccion * 10000);
+}
+
+export function reglasDeInteresDesdeAjuste(tasa: unknown): ReglasDeInteres {
+  return {
+    tasaEnPuntosBasicos: tasaEnPuntosBasicosDesdeAjuste(tasa),
+    diaLimiteTasaCompleta: DIA_LIMITE_TASA_COMPLETA_POR_DEFECTO,
+    diaDeCorte: DIA_DE_CORTE_POR_DEFECTO,
+  };
 }
 
 export async function getTasaCuatroPorMil(client: TypedSupabaseClient): Promise<number> {

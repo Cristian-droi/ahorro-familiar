@@ -17,14 +17,19 @@ import {
 } from 'lucide-react';
 import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import { getCashBalance } from '@/lib/data/loans';
-import { cop } from '@/lib/format';
+import { cop, monthLabel } from '@/lib/format';
 import { buildPaymentPlan, type PlanRow } from '@/lib/loans';
 import {
   accionesPorPrestamo,
   desembolsoDePrestamo,
   getTasaCuatroPorMil,
+  DIA_DE_CORTE_POR_DEFECTO,
+  PLAZO_HASTA_PERIODO_SIGUIENTE_POR_DEFECTO,
   TASA_CUATRO_POR_MIL_POR_DEFECTO,
+  tasaEnPuntosBasicosDesdeAjuste,
 } from '@/lib/loan-settings';
+import { hoyBogota } from '@/shared/domain/fechas';
+import { mesAplicado, plazoDelPrestamo } from '@/modules/prestamos/domain/calendario';
 import { checkUserObligations, type UserObligationsStatus } from '@/lib/obligations';
 import { DeductionDetail } from '@/types/entities';
 
@@ -40,7 +45,6 @@ export default function NuevaSolicitudPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const [amountInput, setAmountInput] = useState('');
-  const [months, setMonths] = useState(12);
   const [paidUpfront, setPaidUpfront] = useState(false);
   const [deductObligations, setDeductObligations] = useState(false);
   const [capitalAbonos, setCapitalAbonos] = useState<Record<string, number>>({});
@@ -143,26 +147,43 @@ export default function NuevaSolicitudPage() {
     [calcularNeto],
   );
 
-  const plan: PlanRow[] = useMemo(() => {
-    if (requestedAmount < 500_000 || months < 1) return [];
-    return buildPaymentPlan({
+  // Today in Bogota is the proxy for the disbursement date; the plan is
+  // recalculated with the real date when the loan is disbursed.
+  const hoy = useMemo(() => hoyBogota(new Date()), []);
+
+  // RN-4.3 and RN-4.15: the term is not chosen, it runs until December.
+  const plazo = useMemo(
+    () =>
+      plazoDelPrestamo({
+        mesAplicado: mesAplicado(hoy, DIA_DE_CORTE_POR_DEFECTO),
+        hastaPeriodoSiguiente: PLAZO_HASTA_PERIODO_SIGUIENTE_POR_DEFECTO,
+      }),
+    [hoy],
+  );
+
+  // RN-4.18: the stored fraction (0.02) shown as a percentage without float noise.
+  const ratePercent = tasaEnPuntosBasicosDesdeAjuste(interestRate) / 100;
+
+  const { plan, planError } = useMemo((): { plan: PlanRow[]; planError: string | null } => {
+    if (requestedAmount < 500_000) return { plan: [], planError: null };
+    const r = buildPaymentPlan({
       requestedAmount,
-      months,
       rate: interestRate,
-      disbursedAt: new Date(),
+      disbursedOn: hoy,
       capitalOverrides,
     });
-  }, [requestedAmount, months, interestRate, capitalOverrides]);
+    return r.ok ? { plan: r.value, planError: null } : { plan: [], planError: r.error.mensaje };
+  }, [requestedAmount, interestRate, hoy, capitalOverrides]);
 
   const exceedsCashBalance = cashBalance !== null && requestedAmount > cashBalance && requestedAmount > 0;
 
   const validationError = useMemo(() => {
     if (requestedAmount < 500_000) return 'El monto mínimo es $500.000';
     if (!shareValue) return 'Debes definir tu valor de acción en Ajustes';
-    if (months < 1 || months > 60) return 'Los meses deben estar entre 1 y 60';
+    if (planError) return planError;
     if (disbursementError) return disbursementError;
     return null;
-  }, [requestedAmount, shareValue, months, disbursementError]);
+  }, [requestedAmount, shareValue, planError, disbursementError]);
 
   const canSubmit = useMemo(() => {
     if (submitting || !!validationError || requestedAmount === 0) return false;
@@ -248,7 +269,6 @@ export default function NuevaSolicitudPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           requested_amount: requestedAmount,
-          payment_plan_months: months,
           loan_shares_paid_upfront: paidUpfront,
           deduct_obligations: deductObligations,
           deducted_capital_amount: deductedCapital,
@@ -266,7 +286,7 @@ export default function NuevaSolicitudPage() {
         await fetch(`/api/prestamos/${json.loan.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ months, capital_overrides: capitalOverrides }),
+          body: JSON.stringify({ capital_overrides: capitalOverrides }),
         });
       }
 
@@ -343,21 +363,15 @@ export default function NuevaSolicitudPage() {
                 </div>
               </div>
               <div>
-                <label className="text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase block mb-1.5">
-                  Plazo (meses)
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  max={60}
-                  value={months}
-                  onChange={(e) => {
-                    const v = Math.max(1, Math.min(60, Number(e.target.value)));
-                    setMonths(v);
-                    setCapitalOverrides({});
-                  }}
-                  className="w-full h-10 rounded-[9px] bg-[var(--color-surface)] border border-[var(--color-border)] px-3 text-[14px] font-semibold text-[var(--color-text)] focus:outline-none focus:border-[var(--color-brand)]"
-                />
+                <span className="text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase block mb-1.5">
+                  Plazo
+                </span>
+                <div className="flex items-center h-10 rounded-[9px] bg-[var(--color-surface-alt)] border border-[var(--color-border)] px-3 text-[14px] font-semibold text-[var(--color-text)]">
+                  {plazo.meses} {plazo.meses === 1 ? 'mes' : 'meses'}, hasta {monthLabel(plazo.mesFinal, true).toLowerCase()}
+                </div>
+                <p className="text-[11px] text-[var(--color-text-subtle)] mt-1.5 leading-snug">
+                  El plazo va hasta diciembre del periodo. Si el desembolso es después del día {DIA_DE_CORTE_POR_DEFECTO}, el préstamo empieza el mes siguiente.
+                </p>
               </div>
             </div>
 
@@ -556,7 +570,7 @@ export default function NuevaSolicitudPage() {
                     Podés editar el capital de cada cuota. Las cuotas sin asignación se ajustan a cero.
                   </p>
                 </div>
-                <Badge tone="info">{interestRate * 100}% mensual</Badge>
+                <Badge tone="info">{ratePercent}% mensual</Badge>
               </div>
 
               <div className="overflow-x-auto">
@@ -705,7 +719,7 @@ export default function NuevaSolicitudPage() {
                 </span>
               </div>
               <p className="text-[11px] text-[var(--color-text-subtle)] leading-snug">
-                Intereses al {interestRate * 100}% mensual sobre {cop(requestedAmount)}.
+                Intereses al {ratePercent}% mensual sobre {cop(requestedAmount)}.
               </p>
             </div>
 
