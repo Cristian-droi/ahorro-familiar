@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { EXPIRED_REQUEST_MESSAGE, expireLoanRequestIfDue } from '@/lib/loan-expiry';
 import { reviewPlanSchema } from '@/lib/schemas/loan';
 
 // POST /api/prestamos/[id]/review — admin aprueba o rechaza el plan de pagos.
@@ -31,12 +32,16 @@ export async function POST(
 
     const { data: loan, error: fetchError } = await admin
       .from('loans')
-      .select('id, status')
+      .select('id, status, submitted_at')
       .eq('id', id)
       .maybeSingle();
 
     if (fetchError || !loan) {
       return NextResponse.json({ error: 'Préstamo no encontrado' }, { status: 404 });
+    }
+    // RN-4.5b: an expired request is annulled before any action.
+    if (await expireLoanRequestIfDue(admin, loan)) {
+      return NextResponse.json({ error: EXPIRED_REQUEST_MESSAGE }, { status: 409 });
     }
     if (loan.status !== 'pending_review') {
       return NextResponse.json({ error: `El préstamo no está en revisión (estado: ${loan.status})` }, { status: 409 });

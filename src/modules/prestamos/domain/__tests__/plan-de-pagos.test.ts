@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { crearFecha, type FechaISO } from '@/shared/domain/fechas';
 import type { ReglasDeInteres } from '@/modules/prestamos/domain/intereses';
-import { planDePagos, type CuotaDelPlan, planAcordadoDesdeCuotas } from '@/modules/prestamos/domain/plan-de-pagos';
+import {
+  planDePagos,
+  type CuotaDelPlan,
+  planAcordadoDesdeCuotas,
+  validarPlanSolicitado,
+} from '@/modules/prestamos/domain/plan-de-pagos';
 
 // Default parameters from docs/reglas-negocio.md, section 10: 2% monthly
 // (200 basis points), full rate until day 15, applied-month cut-off day 25.
@@ -113,13 +118,18 @@ describe('planDePagos: term chosen by the shareholder (RN-4.3)', () => {
     if (!r.ok) expect(r.error.mensaje).toBe('El plazo puede ir como máximo hasta diciembre de 2027 (22 meses).');
   });
 
-  it('rejects a term that ends before the applied month (RN-4.15)', () => {
-    const r = intentar('2026-03-28', { mesFinal: '2026-03-01' });
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.error.codigo).toBe('plazo_antes_del_mes_aplicado');
-      expect(r.error.mensaje).toBe('El plazo no puede terminar antes del primer mes del préstamo.');
-    }
+  it('RN-4.3b: a term that ends before the applied month becomes the applied month with all the capital', () => {
+    const cuotas = plan('2026-03-28', { mesFinal: '2026-03-01' });
+    expect(cuotas).toEqual([{ numero: 1, mes: '2026-04-01', capital: 1_000_000, interes: 20_000, saldoDespues: 0 }]);
+  });
+
+  it('RN-4.3b: a whole agreed term already behind leaves all the agreed capital in the first month', () => {
+    // Agreed in March: 500.000 in March and 500.000 in April. Disbursed in May.
+    const cuotas = plan('2026-05-10', {
+      mesFinal: '2026-04-01',
+      capitalPorMes: { '2026-03-01': 500_000, '2026-04-01': 500_000 },
+    });
+    expect(cuotas).toEqual([{ numero: 1, mes: '2026-05-01', capital: 1_000_000, interes: 20_000, saldoDespues: 0 }]);
   });
 });
 
@@ -207,16 +217,16 @@ describe('planDePagos: agreed plan by calendar month (RN-4.3b)', () => {
     expect(cuotas[4].saldoDespues).toBe(0);
   });
 
-  it('a disbursement moved from March to April sends the capital agreed for March to the last month', () => {
+  it('RN-4.3b: a disbursement moved from March to April sends the capital agreed for March to the first month', () => {
     // Agreed in March: 100.000 per month from March to December.
     const acordado: Record<string, number> = {};
     for (let m = 3; m <= 12; m++) acordado[`2026-${String(m).padStart(2, '0')}-01`] = 100_000;
 
     const cuotas = plan('2026-04-10', { mesFinal: '2026-12-01', capitalPorMes: acordado });
-    expect(cuotas[0].mes).toBe('2026-04-01');
     expect(cuotas).toHaveLength(9);
-    expect(cuotas.slice(0, 8).every((c) => c.capital === 100_000)).toBe(true);
-    expect(cuotas[8]).toMatchObject({ mes: '2026-12-01', capital: 200_000, saldoDespues: 0 });
+    expect(cuotas[0]).toMatchObject({ mes: '2026-04-01', capital: 200_000, saldoDespues: 800_000 });
+    expect(cuotas.slice(1).every((c) => c.capital === 100_000)).toBe(true);
+    expect(cuotas[8]).toMatchObject({ mes: '2026-12-01', capital: 100_000, saldoDespues: 0 });
     expect(sumaCapital(cuotas)).toBe(1_000_000);
   });
 
@@ -236,9 +246,9 @@ describe('planDePagos: agreed plan by calendar month (RN-4.3b)', () => {
     expect(cuotas.map((c) => c.capital)).toEqual([0, 0, 0, 1_000_000]);
   });
 
-  it('adds past-month capital to the last month even when the last month was not edited', () => {
+  it('RN-4.3b: adds past-month capital to the first month even when the first month was not edited', () => {
     const cuotas = plan('2026-10-05', { capitalPorMes: { '2026-09-01': 300_000 } });
-    expect(cuotas.map((c) => c.capital)).toEqual([233_333, 233_333, 533_334]);
+    expect(cuotas.map((c) => c.capital)).toEqual([533_333, 233_333, 233_334]);
     expect(sumaCapital(cuotas)).toBe(1_000_000);
   });
 
@@ -260,6 +270,57 @@ describe('planDePagos: agreed plan by calendar month (RN-4.3b)', () => {
     const r = intentar('2026-03-10', { capitalPorMes: { '5': 100_000 } });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.codigo).toBe('mes_invalido');
+  });
+});
+
+describe('validarPlanSolicitado: no past months when requesting (RN-4.3b)', () => {
+  const solicitar = (fechaSolicitud: string, opciones: { mesFinal?: string; capitalPorMes?: Record<string, number> }) =>
+    validarPlanSolicitado({
+      fechaSolicitud: fecha(fechaSolicitud),
+      diaDeCorte: REGLAS.diaDeCorte,
+      mesFinal: opciones.mesFinal === undefined ? undefined : fecha(opciones.mesFinal),
+      capitalPorMes: opciones.capitalPorMes,
+    });
+
+  it('RN-4.3b: accepts a plan from the current month to the limit', () => {
+    expect(solicitar('2026-10-30', { mesFinal: '2026-12-01', capitalPorMes: { '2026-11-01': 500_000 } }).ok).toBe(true);
+  });
+
+  it('RN-4.3b: accepts no term and no capital', () => {
+    expect(solicitar('2026-10-05', {}).ok).toBe(true);
+  });
+
+  it('RN-4.3b: rejects capital in a month before the current month', () => {
+    const r = solicitar('2026-10-05', { capitalPorMes: { '2026-09-01': 300_000 } });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.codigo).toBe('cuota_en_mes_pasado');
+      expect(r.error.mensaje).toBe('No se pueden poner cuotas en meses pasados: el plan va desde el mes actual hasta el límite.');
+    }
+  });
+
+  it('RN-4.3b and RN-4.15: after the cut-off day the current month is the next one', () => {
+    // Requested on 28 October: the applied month is November, so October is past.
+    const r = solicitar('2026-10-28', { capitalPorMes: { '2026-10-01': 100_000 } });
+    expect(!r.ok && r.error.codigo).toBe('cuota_en_mes_pasado');
+  });
+
+  it('RN-4.3b: a zero capital in a past month is not an installment and is accepted', () => {
+    expect(solicitar('2026-10-05', { capitalPorMes: { '2026-09-01': 0 } }).ok).toBe(true);
+  });
+
+  it('RN-4.3b: rejects a term that ends before the current month', () => {
+    const r = solicitar('2026-10-05', { mesFinal: '2026-09-01' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.codigo).toBe('plazo_antes_del_mes_aplicado');
+      expect(r.error.mensaje).toBe('El plazo no puede terminar antes del mes actual del préstamo.');
+    }
+  });
+
+  it('rejects a key that is not a date', () => {
+    const r = solicitar('2026-10-05', { capitalPorMes: { junio: 100_000 } });
+    expect(!r.ok && r.error.codigo).toBe('mes_invalido');
   });
 });
 

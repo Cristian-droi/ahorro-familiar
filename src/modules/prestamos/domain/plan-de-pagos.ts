@@ -71,24 +71,10 @@ function capitalDeCadaCuota(monto: number, meses: number, editadas: Record<numbe
   return capitales;
 }
 
-export function planDePagos(params: {
-  monto: number;
-  fechaDesembolso: FechaISO;
-  reglas: ReglasDeInteres;
-  // RN-4.3: the admin can allow (⚙️) terms until December of the next period.
-  hastaPeriodoSiguiente: boolean;
-  // RN-4.3: last month of the term chosen by the shareholder (any day of that
-  // month). Without it the plan uses the maximum term.
-  mesFinal?: FechaISO;
-  // RN-4.3b: agreed capital by calendar month, keyed by a 'YYYY-MM-DD' date of
-  // that month. Capital of a month before the applied month goes to the last month.
-  capitalPorMes?: Record<string, number>;
-}): Result<CuotaDelPlan[], ErrorDeDominio> {
-  const { monto, fechaDesembolso, reglas, hastaPeriodoSiguiente, capitalPorMes = {} } = params;
-  if (!Number.isInteger(monto) || monto <= 0) {
-    return err({ codigo: 'monto_invalido', mensaje: 'El monto del préstamo debe ser un número entero positivo.' });
-  }
-
+// Agreed capital keys ('YYYY-MM-DD', any day) read as first days of the month.
+function capitalAcordadoPorMes(
+  capitalPorMes: Record<string, number>,
+): Result<{ mes: FechaISO; capital: number }[], ErrorDeDominio> {
   const acordado: { mes: FechaISO; capital: number }[] = [];
   for (const [clave, valor] of Object.entries(capitalPorMes)) {
     if (!Number.isInteger(valor) || valor < 0) {
@@ -103,16 +89,64 @@ export function planDePagos(params: {
     }
     acordado.push({ mes: primerDiaDelMes(mes.value), capital: valor });
   }
+  return ok(acordado);
+}
+
+// RN-4.3b: when requesting (or editing the request), the plan runs from the
+// current month (the applied month, RN-4.15) to the limit: no installment and
+// no end of the term in a past month. A zero capital is not an installment.
+export function validarPlanSolicitado(params: {
+  fechaSolicitud: FechaISO;
+  diaDeCorte: number;
+  mesFinal?: FechaISO;
+  capitalPorMes?: Record<string, number>;
+}): Result<void, ErrorDeDominio> {
+  const inicio = mesAplicado(params.fechaSolicitud, params.diaDeCorte);
+  if (params.mesFinal !== undefined && mesesEntre(inicio, params.mesFinal) < 0) {
+    return err({
+      codigo: 'plazo_antes_del_mes_aplicado',
+      mensaje: 'El plazo no puede terminar antes del mes actual del préstamo.',
+    });
+  }
+  const acordado = capitalAcordadoPorMes(params.capitalPorMes ?? {});
+  if (!acordado.ok) return acordado;
+  if (acordado.value.some(({ mes, capital }) => capital > 0 && mesesEntre(inicio, mes) < 0)) {
+    return err({
+      codigo: 'cuota_en_mes_pasado',
+      mensaje: 'No se pueden poner cuotas en meses pasados: el plan va desde el mes actual hasta el límite.',
+    });
+  }
+  return ok(undefined);
+}
+
+export function planDePagos(params: {
+  monto: number;
+  fechaDesembolso: FechaISO;
+  reglas: ReglasDeInteres;
+  // RN-4.3: the admin can allow (⚙️) terms until December of the next period.
+  hastaPeriodoSiguiente: boolean;
+  // RN-4.3: last month of the term chosen by the shareholder (any day of that
+  // month). Without it the plan uses the maximum term.
+  mesFinal?: FechaISO;
+  // RN-4.3b: agreed capital by calendar month, keyed by a 'YYYY-MM-DD' date of
+  // that month. Capital of a month before the applied month goes to the first
+  // month. A request must not have such months: see `validarPlanSolicitado`.
+  capitalPorMes?: Record<string, number>;
+}): Result<CuotaDelPlan[], ErrorDeDominio> {
+  const { monto, fechaDesembolso, reglas, hastaPeriodoSiguiente, capitalPorMes = {} } = params;
+  if (!Number.isInteger(monto) || monto <= 0) {
+    return err({ codigo: 'monto_invalido', mensaje: 'El monto del préstamo debe ser un número entero positivo.' });
+  }
+
+  const acordado = capitalAcordadoPorMes(capitalPorMes);
+  if (!acordado.ok) return acordado;
 
   const inicio = mesAplicado(fechaDesembolso, reglas.diaDeCorte);
   const maximo = plazoDelPrestamo({ mesAplicado: inicio, hastaPeriodoSiguiente });
-  const mesFinal = params.mesFinal === undefined ? maximo.mesFinal : primerDiaDelMes(params.mesFinal);
-  if (mesesEntre(inicio, mesFinal) < 0) {
-    return err({
-      codigo: 'plazo_antes_del_mes_aplicado',
-      mensaje: 'El plazo no puede terminar antes del primer mes del préstamo.',
-    });
-  }
+  // RN-4.3b: when the whole agreed term is already behind the applied month
+  // (the disbursement came late), the plan is just the applied month.
+  const elegido = params.mesFinal === undefined ? maximo.mesFinal : primerDiaDelMes(params.mesFinal);
+  const mesFinal = mesesEntre(inicio, elegido) < 0 ? inicio : elegido;
   if (mesesEntre(mesFinal, maximo.mesFinal) < 0) {
     return err({
       codigo: 'plazo_mayor_al_maximo',
@@ -122,10 +156,10 @@ export function planDePagos(params: {
   const meses = mesesEntre(inicio, mesFinal) + 1;
 
   // RN-4.3b: capital agreed for a month before the applied month (the
-  // disbursement was delayed) moves to the last month of the plan.
-  let movidoAlFinal = 0;
+  // request crossed months before the disbursement) moves to the first month.
+  let movidoAlInicio = 0;
   const editadas: Record<number, number> = {};
-  for (const { mes, capital } of acordado) {
+  for (const { mes, capital } of acordado.value) {
     const indice = mesesEntre(inicio, mes);
     if (indice >= meses) {
       return err({
@@ -133,14 +167,14 @@ export function planDePagos(params: {
         mensaje: 'Hay capital asignado a un mes después del último mes del plazo.',
       });
     }
-    if (indice < 0) movidoAlFinal += capital;
+    if (indice < 0) movidoAlInicio += capital;
     else editadas[indice + 1] = (editadas[indice + 1] ?? 0) + capital;
   }
 
   // The rest of the amount follows the RN-4.26 distribution; the moved capital
-  // is then added to the last month.
-  const capitales = capitalDeCadaCuota(Math.max(0, monto - movidoAlFinal), meses, editadas);
-  capitales[meses - 1] += movidoAlFinal;
+  // is then added to the first month.
+  const capitales = capitalDeCadaCuota(Math.max(0, monto - movidoAlInicio), meses, editadas);
+  capitales[0] += movidoAlInicio;
 
   const cuotas: CuotaDelPlan[] = [];
   let saldo = monto;

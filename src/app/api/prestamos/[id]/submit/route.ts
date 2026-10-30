@@ -159,6 +159,9 @@ export async function POST(
       finalFourPerThousand = desembolso.value.cuatroPorMil;
     }
 
+    // RN-4.5b: the 15-day validity counts from the moment the request leaves
+    // draft (compared as Bogota calendar days by `isLoanRequestExpired`).
+    const submittedAt = new Date().toISOString();
     const { error: updateError } = await admin
       .from('loans')
       .update({
@@ -169,7 +172,8 @@ export async function POST(
         deducted_interest_amount: deductedInterest,
         deductions_detail: finalDeductionsDetail,
         four_per_thousand: finalFourPerThousand,
-        updated_at: new Date().toISOString()
+        submitted_at: submittedAt,
+        updated_at: submittedAt
       })
       .eq('id', id);
 

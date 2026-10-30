@@ -104,7 +104,9 @@ export type LoanStatus =
   | 'active'
   | 'paid'
   | 'rejected_by_admin'
-  | 'rejected_by_shareholders';
+  | 'rejected_by_shareholders'
+  // RN-4.5b: more than 15 days from submission without a disbursement.
+  | 'expired';
 
 export type LoanVoteValue = 'approved' | 'rejected';
 
@@ -132,6 +134,8 @@ export interface Loan {
   disbursement_proof_path: string | null;
   disbursement_number: string | null;
   loan_number: number;
+  // RN-4.5b: when the request left draft; null while it is a draft.
+  submitted_at?: string | null;
   created_at: string;
   updated_at: string;
   deduct_obligations?: boolean;

@@ -129,11 +129,13 @@ export async function POST(request: Request) {
     // Plan de pagos con la fecha de hoy en Bogotá como proxy del desembolso.
     // RN-4.3: el plazo lo elige el accionista, con máximo hasta diciembre (si no
     // lo envía, se usa el máximo). Se rehace por mes calendario al desembolsar.
+    // RN-4.3b: al solicitar no se aceptan meses pasados.
     const plan = buildPaymentPlan({
       requestedAmount: requested_amount,
       rate: interestRate,
       disbursedOn: hoyBogota(new Date()),
       months: payment_plan_months,
+      requesting: true,
     });
     if (!plan.ok) {
       return NextResponse.json({ error: plan.error.mensaje }, { status: 422 });

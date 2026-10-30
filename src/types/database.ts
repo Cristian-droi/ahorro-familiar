@@ -233,6 +233,7 @@ export type Database = {
           rejection_reason: string | null
           requested_amount: number
           status: Database["public"]["Enums"]["loan_status"]
+          submitted_at: string | null
           updated_at: string
           user_id: string
         }
@@ -265,6 +266,7 @@ export type Database = {
           rejection_reason?: string | null
           requested_amount: number
           status?: Database["public"]["Enums"]["loan_status"]
+          submitted_at?: string | null
           updated_at?: string
           user_id: string
         }
@@ -297,6 +299,7 @@ export type Database = {
           rejection_reason?: string | null
           requested_amount?: number
           status?: Database["public"]["Enums"]["loan_status"]
+          submitted_at?: string | null
           updated_at?: string
           user_id?: string
         }
@@ -756,6 +759,7 @@ export type Database = {
         | "paid"
         | "rejected_by_admin"
         | "rejected_by_shareholders"
+        | "expired"
       loan_vote_value: "approved" | "rejected"
       period_status: "open" | "closing" | "closed"
       receipt_concept:
@@ -907,6 +911,7 @@ export const Constants = {
         "paid",
         "rejected_by_admin",
         "rejected_by_shareholders",
+        "expired",
       ],
       loan_vote_value: ["approved", "rejected"],
       period_status: ["open", "closing", "closed"],

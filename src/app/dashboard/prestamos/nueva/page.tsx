@@ -179,6 +179,8 @@ export default function NuevaSolicitudPage() {
       disbursedOn: hoy,
       months,
       capitalOverrides,
+      // RN-4.3b: same validation as the API when requesting.
+      requesting: true,
     });
     return r.ok ? { plan: r.value, planError: null } : { plan: [], planError: r.error.mensaje };
   }, [requestedAmount, interestRate, hoy, months, capitalOverrides]);

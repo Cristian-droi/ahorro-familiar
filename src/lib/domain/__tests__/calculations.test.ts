@@ -155,7 +155,7 @@ describe('Financial Calculations', () => {
       return r.value;
     };
 
-    it('a plan agreed in March and disbursed in April keeps the months and moves March capital to December', () => {
+    it('a plan agreed in March and disbursed in April keeps the months and moves March capital to the first month (April)', () => {
       const draft = buildPaymentPlan({ requestedAmount: 1_000_000, rate: 0.02, disbursedOn: fecha('2026-03-10') });
       if (!draft.ok) throw new Error(draft.error.mensaje);
       const agreed = agreedPlanFromRows(draft.value);
@@ -170,9 +170,9 @@ describe('Financial Calculations', () => {
       });
       if (!real.ok) throw new Error(real.error.mensaje);
       expect(real.value).toHaveLength(9);
-      expect(real.value[0].due_date).toBe('2026-04-01');
-      expect(real.value.slice(0, 8).every((r) => r.capital_amount === 100_000)).toBe(true);
-      expect(real.value[8]).toMatchObject({ due_date: '2026-12-01', capital_amount: 200_000, estimated_balance_after: 0 });
+      expect(real.value[0]).toMatchObject({ due_date: '2026-04-01', capital_amount: 200_000, estimated_balance_after: 800_000 });
+      expect(real.value.slice(1).every((r) => r.capital_amount === 100_000)).toBe(true);
+      expect(real.value[8]).toMatchObject({ due_date: '2026-12-01', capital_amount: 100_000, estimated_balance_after: 0 });
     });
   });
 

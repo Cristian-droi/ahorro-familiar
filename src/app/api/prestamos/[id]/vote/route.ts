@@ -3,6 +3,7 @@ import { requireUser } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { voteSchema } from '@/lib/schemas/loan';
 import { getShareholderIds } from '@/lib/data/votes';
+import { EXPIRED_REQUEST_MESSAGE, expireLoanRequestIfDue } from '@/lib/loan-expiry';
 import { resultadoDeVotacion, validarVotante, votantesHabilitados } from '@/modules/prestamos/domain/votacion';
 
 // POST /api/prestamos/[id]/vote — accionista emite su voto.
@@ -36,12 +37,16 @@ export async function POST(
     // Verificar estado del préstamo
     const { data: loan, error: loanError } = await admin
       .from('loans')
-      .select('id, status, user_id')
+      .select('id, status, user_id, submitted_at')
       .eq('id', id)
       .maybeSingle();
 
     if (loanError || !loan) {
       return NextResponse.json({ error: 'Préstamo no encontrado' }, { status: 404 });
+    }
+    // RN-4.5b: an expired request is annulled before any vote.
+    if (await expireLoanRequestIfDue(admin, loan)) {
+      return NextResponse.json({ error: EXPIRED_REQUEST_MESSAGE }, { status: 409 });
     }
     if (loan.status !== 'pending_shareholder_vote') {
       return NextResponse.json({ error: 'Este préstamo no está en votación' }, { status: 409 });

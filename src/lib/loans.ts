@@ -2,7 +2,7 @@
 
 import { crearFecha, primerDiaDelMes, sumarMeses, type FechaISO } from '@/shared/domain/fechas';
 import { ok, err, type Result, type ErrorDeDominio } from '@/shared/domain/result';
-import { planAcordadoDesdeCuotas, planDePagos } from '@/modules/prestamos/domain/plan-de-pagos';
+import { planAcordadoDesdeCuotas, planDePagos, validarPlanSolicitado } from '@/modules/prestamos/domain/plan-de-pagos';
 import { mesAplicado } from '@/modules/prestamos/domain/calendario';
 import { PLAZO_HASTA_PERIODO_SIGUIENTE_POR_DEFECTO, reglasDeInteresDelPrestamo } from '@/lib/loan-settings';
 
@@ -27,6 +27,10 @@ const NUMERO_DE_CUOTA = /^-?\d+$/;
 // Capital (RN-4.26, RN-4.3b): `capitalOverrides` keys are either installment
 // numbers ('5', relative to the applied month of `disbursedOn`, as the UI sends
 // them) or calendar months ('2026-06-01').
+//
+// `requesting` (create and draft edits, RN-4.3b): the plan must run from the
+// current month to the limit, so a past month is rejected instead of moved.
+// At the disbursement it is false and past-month capital goes to the first month.
 export function buildPaymentPlan(params: {
   requestedAmount: number;
   // Stored fraction, e.g. 0.02 for 2% monthly.
@@ -36,6 +40,7 @@ export function buildPaymentPlan(params: {
   months?: number;
   lastMonth?: FechaISO;
   capitalOverrides?: Record<string, number>;
+  requesting?: boolean;
 }): Result<PlanRow[], ErrorDeDominio> {
   const reglas = reglasDeInteresDelPrestamo(params.rate);
   if (!reglas.ok) return reglas;
@@ -60,6 +65,16 @@ export function buildPaymentPlan(params: {
       mes = sumarMeses(inicio, numero - 1);
     }
     capitalPorMes[mes] = valor;
+  }
+
+  if (params.requesting) {
+    const solicitado = validarPlanSolicitado({
+      fechaSolicitud: params.disbursedOn,
+      diaDeCorte: reglas.value.diaDeCorte,
+      mesFinal,
+      capitalPorMes,
+    });
+    if (!solicitado.ok) return solicitado;
   }
 
   const plan = planDePagos({
@@ -444,6 +459,8 @@ export const LOAN_STATUS_LABELS: Record<string, string> = {
   paid: 'Pagado',
   rejected_by_admin: 'Rechazado (admin)',
   rejected_by_shareholders: 'Rechazado (votación)',
+  // RN-4.5b: more than 15 days from submission without a disbursement.
+  expired: 'Anulada por vencimiento',
 };
 
 export const LOAN_STATUS_TONE: Record<string, string> = {
@@ -455,4 +472,5 @@ export const LOAN_STATUS_TONE: Record<string, string> = {
   paid: 'success',
   rejected_by_admin: 'danger',
   rejected_by_shareholders: 'danger',
+  expired: 'neutral',
 };

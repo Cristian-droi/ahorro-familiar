@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { agreedPlanFromRows, buildPaymentPlan } from '@/lib/loans';
+import { EXPIRED_REQUEST_MESSAGE, expireLoanRequestIfDue } from '@/lib/loan-expiry';
 import { desembolsoDePrestamo, getTasaCuatroPorMil } from '@/lib/loan-settings';
 import { disburseSchema, deductionsDetailSchema } from '@/lib/schemas/loan';
 import { getCashBalance } from '@/lib/data/loans';
@@ -55,6 +56,10 @@ export async function POST(
 
     if (fetchError || !loan) {
       return NextResponse.json({ error: 'Préstamo no encontrado' }, { status: 404 });
+    }
+    // RN-4.5b: an expired request is annulled instead of disbursed.
+    if (await expireLoanRequestIfDue(admin, loan)) {
+      return NextResponse.json({ error: EXPIRED_REQUEST_MESSAGE }, { status: 409 });
     }
     if (loan.status !== 'pending_disbursement') {
       return NextResponse.json({ error: `El préstamo no está listo para desembolso (estado: ${loan.status})` }, { status: 409 });
@@ -136,7 +141,8 @@ export async function POST(
     // Recalcular plan de pagos con la fecha real de desembolso (RN-4.3b): el
     // plan pactado se rehace por mes calendario, con el mismo último mes del
     // plazo; el capital de un mes que quedó antes del mes aplicado pasa al
-    // último mes. Una tasa inválida del préstamo se reporta, no se cambia por 2%.
+    // primer mes, y si todo el plazo quedó atrás, todo el capital va en el mes
+    // aplicado. Una tasa inválida del préstamo se reporta, no se cambia por 2%.
     const { data: planItems } = await admin
       .from('loan_payment_plan_items')
       .select('due_date, capital_amount')

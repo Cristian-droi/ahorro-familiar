@@ -76,11 +76,13 @@
   - El administrador puede habilitar ⚙️, para todos, plazos hasta **diciembre del periodo siguiente**. Esos préstamos se financian con la capitalización voluntaria (ver RN-8.4).
 - **RN-4.3b** **Plan pactado** (informativo, ver 4.7): el accionista reparte el capital por mes como quiera dentro del plazo. Los intereses corren cada mes sobre el saldo que queda (RN-4.18), desde el mes aplicado **hasta que el saldo de capital llegue a 0**. En el plan pactado eso coincide con el último mes del plazo; si el accionista no cumple el plan, los intereses siguen corriendo después del plazo (RN-4.22). *Definido por Cris el 2026-10-29.*
   - **Ejemplo:** pide en febrero y dice que paga todo en junio: todo el capital va en junio y paga intereses de febrero a junio.
-  - Al desembolsar, el plan se rehace con la fecha real **por mes calendario**. Si el capital pactado de un mes queda antes del mes aplicado (el desembolso se atrasó), ese capital pasa al **último mes** del plan.
+  - Al **solicitar**, el plan va desde el **mes actual** (el mes aplicado) hasta el límite: no se pueden poner cuotas en meses pasados.
+  - Al **desembolsar**, el plan se rehace con la fecha real **por mes calendario**. Si el capital pactado de un mes queda antes del mes aplicado (la solicitud cruzó de mes, dentro de los 15 días de RN-4.5b), ese capital pasa al **primer mes** del plan. Si todo el plazo pactado quedó atrás, todo el capital queda en ese primer mes. *Cris, 2026-10-30.*
 - **RN-4.4** Hay una funcionalidad futura (fuera del MVP): indicadores que **ayuden** al administrador a decidir, como aportes, capacidad de pago e historial de pagos. Solo informan, nunca bloquean.
 
 ### 4.2 Aprobación por votación ✅
 - **RN-4.5** Flujo: **borrador → revisión del administrador → votación → desembolso → activo → pagado**.
+- **RN-4.5b** **Vencimiento de la solicitud:** si pasan **más de 15 días** desde que el accionista **envía** la solicitud (sale de borrador) y el préstamo no se ha desembolsado, la solicitud queda **anulada** y hay que volver a hacerla. *Definido por Cris el 2026-10-30.*
 - **RN-4.6** Votan **todos los accionistas activos excepto el solicitante**. Sea `n` = número de votantes habilitados.
 - **RN-4.7** Se aprueba con **⌊n/2⌋ + 1 votos A FAVOR**. Se cuentan votos a favor, no participación. Quien no vota acepta el resultado.
 - **RN-4.8** **Rechazo automático:** se rechaza apenas `votos_en_contra > n − (⌊n/2⌋ + 1)`, es decir, cuando ya es imposible aprobar. Queda una **observación registrada**, por ejemplo: *"Rechazado por votación: 10 en contra de 19 votantes"*.

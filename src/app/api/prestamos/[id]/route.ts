@@ -65,6 +65,7 @@ export async function PUT(
 
     // RN-4.3 (chosen term, up to the maximum) and RN-4.26 (free capital). A
     // missing or invalid loan rate is reported (422), never replaced by 2%.
+    // RN-4.3b: editing the request rejects past months (capital or term end).
     const plan = buildPaymentPlan({
       requestedAmount: Number(loan.requested_amount),
       rate: loan.interest_rate,
@@ -72,6 +73,7 @@ export async function PUT(
       months,
       lastMonth,
       capitalOverrides: capital_overrides,
+      requesting: true,
     });
     if (!plan.ok) {
       return NextResponse.json({ error: plan.error.mensaje }, { status: 422 });
