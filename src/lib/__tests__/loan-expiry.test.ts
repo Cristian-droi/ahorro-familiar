@@ -39,7 +39,7 @@ describe('isLoanRequestExpired (RN-4.5b)', () => {
 });
 
 // Records the update the helper sends to `loans`.
-function fakeAdmin(resultError: { message: string } | null = null) {
+function fakeAdmin(resultError: { message: string } | null = null, filasActualizadas = 1) {
   const calls: { table: string; values: unknown; filters: [string, unknown][] }[] = [];
   const client = {
     from(table: string) {
@@ -52,8 +52,14 @@ function fakeAdmin(resultError: { message: string } | null = null) {
               call.filters.push([column, value]);
               return builder;
             },
-            then(resolve: (r: { error: { message: string } | null }) => void) {
-              resolve({ error: resultError });
+            select() {
+              return builder;
+            },
+            then(resolve: (r: { data: { id: string }[] | null; error: { message: string } | null }) => void) {
+              resolve({
+                data: resultError ? null : Array.from({ length: filasActualizadas }, () => ({ id: 'loan-1' })),
+                error: resultError,
+              });
             },
           };
           return builder;
@@ -104,6 +110,16 @@ describe('expireLoanRequestIfDue (RN-4.5b)', () => {
       DIA_16,
     );
     expect(vencida).toBe(true);
+  });
+
+  it('RN-4.5b: does not report an expiry when another action changed the status meanwhile', async () => {
+    const { admin } = fakeAdmin(null, 0);
+    const vencida = await expireLoanRequestIfDue(
+      admin,
+      { id: 'loan-1', status: 'pending_disbursement', submitted_at: ENVIADA },
+      DIA_16,
+    );
+    expect(vencida).toBe(false);
   });
 
   it('RN-4.5b: the message tells the shareholder to request again', () => {

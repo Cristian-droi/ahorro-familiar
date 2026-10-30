@@ -39,11 +39,17 @@ export async function expireLoanRequestIfDue(
   now: Date = new Date(),
 ): Promise<boolean> {
   if (!isLoanRequestExpired(loan, now)) return false;
-  const { error } = await admin
+  const { data, error } = await admin
     .from('loans')
     .update({ status: 'expired', updated_at: now.toISOString() })
     .eq('id', loan.id)
-    .eq('status', loan.status as LoanStatus);
-  if (error) console.error('expireLoanRequestIfDue: no se pudo marcar la solicitud como vencida', error);
-  return true;
+    .eq('status', loan.status as LoanStatus)
+    .select('id');
+  if (error) {
+    console.error('expireLoanRequestIfDue: no se pudo marcar la solicitud como vencida', error);
+    return true;
+  }
+  // No row matched: another action changed the status meanwhile, so this
+  // request was not expired here and the caller keeps its own status checks.
+  return (data ?? []).length > 0;
 }
