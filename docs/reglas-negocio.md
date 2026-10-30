@@ -122,13 +122,13 @@
 - **RN-4.18** Tasa: **2% mensual** ⚙️ sobre el **saldo pendiente real**, nunca sobre el plan pactado.
 - **RN-4.19** **Interés simple:** los intereses atrasados **no** generan intereses.
 - **RN-4.20** **Primer mes:** si el desembolso es **después del día 15** ⚙️, se cobra **media tasa (1%)**. Es una regla nueva en la app: el Sheet no la aplica.
-- 🟡 **RN-4.21** **Desembolso después del día 25:** el préstamo pasa al mes siguiente, ese mes no cobra intereses y el mes siguiente cobra **tasa completa (2%)**, como si se hubiera desembolsado el día 1. *Validar con el gerente.*
+- **RN-4.21** **Desembolso después del día 25** ⚙️: el préstamo pasa al mes siguiente, ese mes no cobra intereses y el mes siguiente cobra **tasa completa (2%)**, como si se hubiera desembolsado el día 1. Entre el día 16 y el 25 se cobra media tasa ese mismo mes (RN-4.20). *Confirmado por Cris el 2026-10-29.*
 - **RN-4.22** Los intereses se **acumulan mes a mes** como deuda de intereses **de cada préstamo**. No generan multa.
 
 **Ejemplos con un saldo de 1.000.000:**
 - Desembolso el 10 de marzo: interés de marzo = **20.000**.
 - Desembolso el 20 de marzo: interés de marzo = **10.000** (media tasa).
-- Desembolso el 28 de marzo: marzo sin intereses, abril = **20.000** 🟡.
+- Desembolso el 28 de marzo: marzo sin intereses, abril = **20.000**.
 - Tres meses sin pagar: 3 × 2% × 1.000.000 = **60.000**.
 
 ### 4.6 Pagos a préstamos ✅
@@ -338,7 +338,6 @@ En diciembre las utilidades llegan a 10.000.000, pero el gasto **sigue siendo 20
 ## 12. Pendientes
 
 ### 🟡 Para validar con el gerente
-1. **RN-4.21:** interés de un préstamo desembolsado después del día 25.
 2. **RN-8.6:** capitalización reservada frente a intereses impagos al cierre.
 
 ### ❓ Abiertas

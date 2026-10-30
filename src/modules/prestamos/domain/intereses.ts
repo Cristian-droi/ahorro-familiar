@@ -21,12 +21,12 @@ type Tasa = 'ninguna' | 'media' | 'completa';
 
 function tasaDelMes(mes: FechaISO, fechaDesembolso: FechaISO, reglas: ReglasDeInteres): Tasa {
   const aplicado = mesAplicado(fechaDesembolso, reglas.diaDeCorte);
-  // 🟡 RN-4.21: before the applied month there is no interest. A disbursement
+  // RN-4.21 (confirmed by Cris, 2026-10-29): before the applied month there is no interest. A disbursement
   // after the cut-off day therefore owes nothing in its own month.
   if (mesesEntre(aplicado, mes) < 0) return 'ninguna';
 
   // RN-4.20: half rate only in the applied month and only when the money left
-  // that same month after the day limit. 🟡 RN-4.21: a loan moved to the next
+  // that same month after the day limit. RN-4.21: a loan moved to the next
   // month pays the full rate there, as if disbursed on day 1.
   const esPrimerMes = mesesEntre(aplicado, mes) === 0;
   const desembolsadoEseMes = mesesEntre(fechaDesembolso, mes) === 0;
