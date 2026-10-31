@@ -1,11 +1,11 @@
 // Lógica de negocio del módulo de préstamos.
 
-import { crearFecha, hoyBogota, primerDiaDelMes, sumarMeses, type FechaISO } from '@/shared/domain/fechas';
+import { crearFecha, hoyBogota, mesesEntre, primerDiaDelMes, sumarMeses, type FechaISO } from '@/shared/domain/fechas';
 import { ok, err, type Result, type ErrorDeDominio } from '@/shared/domain/result';
 import { planAcordadoDesdeCuotas, planDePagos, validarPlanSolicitado } from '@/modules/prestamos/domain/plan-de-pagos';
 import { mesAplicado } from '@/modules/prestamos/domain/calendario';
-import { interesesAdeudados } from '@/modules/prestamos/domain/intereses-adeudados';
-import { PLAZO_HASTA_PERIODO_SIGUIENTE_POR_DEFECTO, reglasDeInteresDelPrestamo } from '@/lib/loan-settings';
+import { interesesAdeudados, saldoDeCapital } from '@/modules/prestamos/domain/intereses-adeudados';
+import { DIA_DE_CORTE_POR_DEFECTO, PLAZO_HASTA_PERIODO_SIGUIENTE_POR_DEFECTO, reglasDeInteresDelPrestamo } from '@/lib/loan-settings';
 
 export interface PlanRow {
   month_number: number;
@@ -170,6 +170,55 @@ export function calcAccruedInterest(params: {
     reglas: reglas.value,
   });
   return r.ok ? ok(r.value.adeudado) : r;
+}
+
+export interface ActiveLoanDebtSummary {
+  // Disbursed amount minus every approved capital payment (RN-4.29: never negative).
+  outstandingCapital: number;
+  // From `calcAccruedInterest`, the single source of interest (section 11, n.º 13).
+  interestOwed: number;
+  // Finished calendar months since the disbursement month (RN-4.22b).
+  monthsOverdue: number;
+  // Month for the payment items: the last finished month, never before the
+  // disbursement month.
+  nextDueMonth: FechaISO;
+}
+
+// Replaces the SQL `get_user_active_loans_debt` per loan: same fields, with
+// the interest owed taken from the domain instead of SQL.
+export function summarizeActiveLoanDebt(params: {
+  requestedAmount: number | string;
+  rate: unknown;
+  disbursedAt: string;
+  items: LoanInterestItem[];
+  today?: FechaISO;
+}): Result<ActiveLoanDebtSummary, ErrorDeDominio> {
+  const today = params.today ?? hoyBogota(new Date());
+  const interestOwed = calcAccruedInterest({ ...params, today });
+  if (!interestOwed.ok) return interestOwed;
+  const fechaDesembolso = fechaDeDesembolso(params.disbursedAt);
+  if (!fechaDesembolso.ok) return fechaDesembolso;
+
+  const abonosACapital: { mes: FechaISO; monto: number }[] = [];
+  for (const item of params.items) {
+    if (item.concept !== 'pago_capital') continue;
+    const mes = crearFecha(item.target_month);
+    if (!mes.ok) return mes;
+    abonosACapital.push({ mes: mes.value, monto: Number(item.amount) });
+  }
+  const saldo = saldoDeCapital({ monto: Number(params.requestedAmount), abonosACapital });
+  if (!saldo.ok) return saldo;
+  // RN-4.21: after the cut-off day the loan counts from the next month.
+  const disbursementMonth = mesAplicado(fechaDesembolso.value, DIA_DE_CORTE_POR_DEFECTO);
+  const currentMonth = primerDiaDelMes(today);
+  const monthsOverdue = Math.max(mesesEntre(disbursementMonth, currentMonth), 0);
+
+  return ok({
+    outstandingCapital: saldo.value,
+    interestOwed: interestOwed.value,
+    monthsOverdue,
+    nextDueMonth: monthsOverdue > 0 ? sumarMeses(currentMonth, -1) : disbursementMonth,
+  });
 }
 
 // ============================================================

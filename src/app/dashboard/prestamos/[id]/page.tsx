@@ -87,7 +87,7 @@ export default function LoanDetailPage() {
     }
 
     // Si soy el dueño y el préstamo está activo, traemos el interest_owed
-    // desde el RPC get_user_active_loans_debt — calcula sobre el saldo
+    // desde getMyActiveLoansDebt (dominio, interesesAdeudados) — calcula sobre el saldo
     // al inicio de cada mes vencido (no sobre el saldo actual).
     if (data && data.user_id === user.id && data.status === 'active') {
       try {

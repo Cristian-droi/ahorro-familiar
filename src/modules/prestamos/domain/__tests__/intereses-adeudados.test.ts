@@ -4,8 +4,7 @@ import type { ReglasDeInteres } from '@/modules/prestamos/domain/intereses';
 import {
   interesesAdeudados,
   type AbonoACapital,
-  type InteresesAdeudados,
-} from '@/modules/prestamos/domain/intereses-adeudados';
+  type InteresesAdeudados, saldoDeCapital } from '@/modules/prestamos/domain/intereses-adeudados';
 
 // Default parameters from docs/reglas-negocio.md, section 10.
 const REGLAS: ReglasDeInteres = { tasaEnPuntosBasicos: 200, diaLimiteTasaCompleta: 15, diaDeCorte: 25 };
@@ -166,5 +165,28 @@ describe('interesesAdeudados (RN-4.18 to RN-4.22, RN-4.25, RN-4.3b)', () => {
     });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.codigo).toBe(codigo);
+  });
+});
+
+describe('saldoDeCapital (RN-4.29)', () => {
+  it('RN-4.29: the balance is the amount minus every capital payment', () => {
+    const r = saldoDeCapital({
+      monto: 1_000_000,
+      abonosACapital: [
+        { mes: fecha('2026-04-01'), monto: 300_000 },
+        { mes: fecha('2026-05-01'), monto: 200_000 },
+      ],
+    });
+    expect(r).toEqual({ ok: true, value: 500_000 });
+  });
+
+  it('RN-4.29: rejects capital payments above the amount instead of returning a negative balance', () => {
+    const r = saldoDeCapital({ monto: 100, abonosACapital: [{ mes: fecha('2026-04-01'), monto: 101 }] });
+    expect(!r.ok && r.error.codigo).toBe('abonos_mayores_al_monto');
+  });
+
+  it('RN-4.29: rejects a negative payment', () => {
+    const r = saldoDeCapital({ monto: 100, abonosACapital: [{ mes: fecha('2026-04-01'), monto: -1 }] });
+    expect(!r.ok && r.error.codigo).toBe('abono_invalido');
   });
 });

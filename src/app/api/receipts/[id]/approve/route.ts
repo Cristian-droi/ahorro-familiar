@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { getLoanInterestOwed } from '@/lib/data/loans';
 
 // POST /api/receipts/[id]/approve — aprobación por parte del admin.
 //
@@ -64,9 +65,10 @@ export async function POST(
     );
 
     // Validar: si hay pagos de capital, verificar contra el cálculo real
-    // del interés adeudado (RPC get_loan_interest_owed). Si el MISMO
+    // del interés adeudado del dominio (getLoanInterestOwed, que cuenta solo
+    // recibos aprobados, así que este recibo pendiente no entra). Si el MISMO
     // recibo trae pago_intereses para ese loan, su monto se considera
-    // como cobertura. Si después de eso queda deuda > 0, bloqueamos.
+    // como cobertura. Si después de eso queda deuda > 0, bloqueamos (RN-4.24).
     const capitalItems = loanItems.filter((i) => i.concept === 'pago_capital');
     // Acumular pagos de intereses por loan_id incluidos en este recibo.
     const interestPaidInReceiptByLoan = new Map<string, number>();
@@ -80,18 +82,16 @@ export async function POST(
 
     for (const ci of capitalItems) {
       const loanId = ci.loan_id as string;
-      const { data: owedRaw, error: owedErr } = await admin.rpc(
-        'get_loan_interest_owed',
-        { p_loan_id: loanId },
-      );
-      if (owedErr) {
+      let interestOwed: number;
+      try {
+        interestOwed = await getLoanInterestOwed(admin, loanId);
+      } catch (owedErr) {
         console.error('Error calculando interest_owed:', owedErr);
         return NextResponse.json(
           { error: 'No se pudo validar la deuda de intereses.' },
           { status: 500 },
         );
       }
-      const interestOwed = Number(owedRaw ?? 0);
       const inReceipt = interestPaidInReceiptByLoan.get(loanId) ?? 0;
       const remaining = interestOwed - inReceipt;
       if (remaining > 0) {

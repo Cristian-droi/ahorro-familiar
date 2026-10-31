@@ -50,22 +50,13 @@ export function interesesAdeudados(params: {
   }
   const interesesPagados = pagosDeIntereses.reduce((suma, p) => suma + p.monto, 0);
 
+  // RN-4.29: the capital payments are valid and never exceed the amount.
+  const validacion = saldoDeCapital({ monto, abonosACapital });
+  if (!validacion.ok) return validacion;
   const abonosPorMes = new Map<FechaISO, number>();
-  let totalAbonos = 0;
   for (const abono of abonosACapital) {
-    if (!esEnteroNoNegativo(abono.monto)) {
-      return err({ codigo: 'abono_invalido', mensaje: 'Cada abono a capital debe ser un número entero no negativo.' });
-    }
     const mes = primerDiaDelMes(abono.mes);
     abonosPorMes.set(mes, (abonosPorMes.get(mes) ?? 0) + abono.monto);
-    totalAbonos += abono.monto;
-  }
-  // RN-4.29: no loan can end with a negative balance.
-  if (totalAbonos > monto) {
-    return err({
-      codigo: 'abonos_mayores_al_monto',
-      mensaje: 'Los abonos a capital suman más que el monto del préstamo.',
-    });
   }
 
   // RN-4.18: each month accrues on the real balance at its start, that is the
@@ -91,4 +82,26 @@ export function interesesAdeudados(params: {
     pagados: interesesPagados,
     adeudado: Math.max(causados - interesesPagados, 0),
   });
+}
+
+// RN-4.29: the capital balance of a loan is its amount minus every capital
+// payment; it never goes negative, so payments above the amount are rejected.
+export function saldoDeCapital(params: {
+  monto: number;
+  abonosACapital: AbonoACapital[];
+}): Result<number, ErrorDeDominio> {
+  let total = 0;
+  for (const abono of params.abonosACapital) {
+    if (!esEnteroNoNegativo(abono.monto)) {
+      return err({ codigo: 'abono_invalido', mensaje: 'Cada abono a capital debe ser un número entero no negativo.' });
+    }
+    total += abono.monto;
+  }
+  if (total > params.monto) {
+    return err({
+      codigo: 'abonos_mayores_al_monto',
+      mensaje: 'Los abonos a capital suman más que el monto del préstamo.',
+    });
+  }
+  return ok(params.monto - total);
 }
