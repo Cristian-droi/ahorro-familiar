@@ -33,6 +33,7 @@ export default function LoanDetailPage() {
   // aplica para el dueño del préstamo cuando está activo.
   const [accruedInterest, setAccruedInterest] = useState<number>(0);
   const [loanBook, setLoanBook] = useState<LoanBook | null>(null);
+  const [loanBookError, setLoanBookError] = useState<string | null>(null);
 
   const load = async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -80,8 +81,11 @@ export default function LoanDetailPage() {
           interestRate: Number(data.interest_rate),
           disbursedAt: data.disbursed_at,
         });
-        if (!book.ok) throw new Error(book.error.mensaje);
-        setLoanBook(book.value);
+        if (book.ok) {
+          setLoanBook(book.value);
+        } else {
+          setLoanBookError(`No se pudo calcular la conciliación del préstamo: ${book.error.mensaje}`);
+        }
       } catch (err) {
         console.error('Error calculando conciliación del préstamo:', err);
       }
@@ -290,6 +294,9 @@ export default function LoanDetailPage() {
             ) : null}
           </Card>
           {/* Plan de pagos */}
+          {loanBookError && (
+            <p className="text-sm text-[var(--color-danger)]">{loanBookError}</p>
+          )}
           {loanBook && loanBook.months.length > 0 && (
             <Card padding="none">
               <div className="px-[22px] pt-[18px] pb-3.5">

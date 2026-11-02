@@ -52,12 +52,17 @@ type BookedEntry = {
     interest_debt: number;
     current_balance: number;
   };
-  unified: UnifiedLoanBook;
+  unified: UnifiedLoanBook | null;
+  // A loan with data the domain rejects only affects this shareholder.
+  error: string | null;
 };
+
+const SIN_TOTALES = { requested: 0, paid_capital: 0, paid_interest: 0, interest_debt: 0, current_balance: 0 };
 
 function computeBookedEntries(entries: LibroAccionistaEntry[]): BookedEntry[] {
   return entries.map((e) => {
-    const loans: BookedLoan[] = e.loans.map((l) => {
+    const loans: BookedLoan[] = [];
+    for (const l of e.loans) {
       const book = computeLoanBook({
         requestedAmount: Number(l.loan.requested_amount),
         plan: l.plan,
@@ -65,10 +70,18 @@ function computeBookedEntries(entries: LibroAccionistaEntry[]): BookedEntry[] {
         interestRate: Number(l.loan.interest_rate),
         disbursedAt: l.loan.disbursed_at ?? null,
       });
-      // The caller (fetchAll) shows the load error toast.
-      if (!book.ok) throw new Error(book.error.mensaje);
-      return { source: l, book: book.value };
-    });
+      if (!book.ok) {
+        const numero = l.loan.loan_number ? ` #${l.loan.loan_number}` : '';
+        return {
+          user: e.user,
+          loans: [],
+          totals: SIN_TOTALES,
+          unified: null,
+          error: `No se pudo calcular el préstamo${numero}: ${book.error.mensaje}`,
+        };
+      }
+      loans.push({ source: l, book: book.value });
+    }
     const unified = computeUnifiedLoanBook(
       loans.map((bl) => ({
         requested: bl.book.summary.requested_amount,
@@ -76,7 +89,9 @@ function computeBookedEntries(entries: LibroAccionistaEntry[]): BookedEntry[] {
         disbursedAt: bl.source.loan.disbursed_at ?? null,
       })),
     );
-    if (!unified.ok) throw new Error(unified.error.mensaje);
+    if (!unified.ok) {
+      return { user: e.user, loans: [], totals: SIN_TOTALES, unified: null, error: unified.error.mensaje };
+    }
     const totals = {
       requested: unified.value.summary.total_requested,
       paid_capital: unified.value.summary.total_paid_capital,
@@ -84,7 +99,7 @@ function computeBookedEntries(entries: LibroAccionistaEntry[]): BookedEntry[] {
       interest_debt: unified.value.summary.overdue_interest_debt,
       current_balance: unified.value.summary.current_capital_balance,
     };
-    return { user: e.user, loans, totals, unified: unified.value };
+    return { user: e.user, loans, totals, unified: unified.value, error: null };
   });
 }
 
@@ -340,7 +355,12 @@ export default function LibroAccionistaPage() {
 
               {/* Tabla unificada — todos los préstamos del accionista
                   combinados mes a mes (vista principal). */}
-              {selected.loans.length > 0 && (
+              {selected.error && (
+                <Card>
+                  <p className="text-sm text-[var(--color-danger)]">{selected.error}</p>
+                </Card>
+              )}
+              {selected.unified && selected.loans.length > 0 && (
                 <UnifiedBookCard unified={selected.unified} />
               )}
 
