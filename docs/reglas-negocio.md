@@ -183,6 +183,13 @@
 
 **Ejemplo:** en octubre el saldo es 1.000.000 y faltan 3 meses → 333.333,33 → la cuota para cerrar el año es **333.334**.
 
+
+- **RN-4.31** **Libro del préstamo** (tabla mes a mes). *Definido por Cris el 2026-11-01.*
+  - Cada fila muestra los **intereses pendientes acumulados** hasta ese mes: lo que venía pendiente más el interés del mes, menos lo pagado para ese mes. La última fila coincide con el total que debe.
+  - Como el pago es a mes vencido (RN-4.22b), un pago de intereses hecho en un mes se aplica al **mes anterior**.
+  - **Ejemplo:** debe marzo, abril y mayo (20.000 cada uno) y en junio paga 30.000. Se aplican a mayo: mayo queda en 60.000 − 30.000 = **30.000**, y junio suma sus 20.000: **50.000**.
+  - El plazo pactado es informativo: si termina y queda saldo, la tabla sigue con filas sobre el **saldo real**.
+  - Un préstamo pagado (RN-4.28) **no muestra próxima cuota**.
 ---
 
 ## 5. Capitalizaciones ✅

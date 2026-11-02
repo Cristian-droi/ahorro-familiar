@@ -46,6 +46,7 @@ describe('computeLoanBook (adapter over libroDelPrestamo)', () => {
       paid_capital: 250_000,
       paid_interest: 20_000,
       interest_debt: 0,
+      pending_interest: 0,
       capital_balance_after: 750_000,
       installment_value: 270_000,
       is_next_installment: false,
@@ -101,6 +102,30 @@ describe('computeLoanBook (adapter over libroDelPrestamo)', () => {
     expect(r.ok).toBe(false);
   });
 
+  it('RN-4.31: maps the cumulative pending interest of each row; the payment for May leaves 30.000 and June adds 20.000', () => {
+    const b = book({ today: '2026-07-15', payments: [{ target_month: '2026-05-01', concept: 'pago_intereses', amount: 30_000 }] });
+    expect(b.months.map((m) => [m.due_date, m.pending_interest])).toEqual([
+      ['2026-03-01', 20_000],
+      ['2026-04-01', 40_000],
+      ['2026-05-01', 30_000],
+      ['2026-06-01', 50_000],
+      ['2026-07-01', 50_000],
+    ]);
+    expect(b.summary.overdue_interest_debt).toBe(50_000);
+  });
+
+  it('RN-4.28: a paid loan has no next installment', () => {
+    const b = book({
+      today: '2026-05-15',
+      payments: [
+        { target_month: '2026-03-01', concept: 'pago_capital', amount: 1_000_000 },
+        { target_month: '2026-03-01', concept: 'pago_intereses', amount: 20_000 },
+      ],
+    });
+    expect(b.summary.next_installment_amount).toBeNull();
+    expect(b.summary.next_installment_month).toBeNull();
+  });
+
   it('a loan not disbursed yet shows its plan without interest in arrears', () => {
     const b = book({ today: '2026-08-15', disbursedAt: null, rate: null });
     expect(b.summary.overdue_interest_debt).toBe(0);
@@ -124,6 +149,8 @@ describe('computeUnifiedLoanBook (adapter over libroUnificado)', () => {
       ['2026-05', 0, 520_000],
       ['2026-06', 0, 510_000],
     ]);
+    // RN-4.31: A owes 20.000 after March; in April A adds 20.000 and B 20.000.
+    expect(r.value.rows.map((row) => row.pending_interest)).toEqual([20_000, 60_000, 60_000, 60_000]);
     expect(r.value.summary.total_requested).toBe(2_000_000);
     // A: March and April on 1.000.000 → 40.000. B: 31 March is after the
     // cut-off day, so only April → 20.000 (RN-4.21).

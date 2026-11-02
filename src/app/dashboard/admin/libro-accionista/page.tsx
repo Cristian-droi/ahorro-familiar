@@ -6,7 +6,7 @@
 // una tabla mes a mes con:
 //   - Cuota esperada (capital + interés plan)
 //   - Capital pagado / Interés pagado
-//   - Intereses en mora (interés plan − interés pagado, si positivo)
+//   - Intereses pendientes acumulados hasta el mes (RN-4.31)
 //   - Saldo de capital tras el mes
 // Además calcula la próxima cuota (primer mes sin capital pagado completo) y
 // un resumen por préstamo y por accionista.
@@ -438,7 +438,7 @@ export default function LibroAccionistaPage() {
                                 Interés pagado
                               </th>
                               <th className="text-right font-semibold px-4 py-2.5">
-                                Interés en mora
+                                Intereses pendientes
                               </th>
                               <th className="text-right font-semibold px-4 py-2.5">
                                 Saldo capital
@@ -449,7 +449,7 @@ export default function LibroAccionistaPage() {
                             {bl.book.months.map((row) => {
                               const monthStr = row.due_date.slice(0, 7);
                               const isNext = row.is_next_installment;
-                              const hasDebt = row.interest_debt > 0;
+                              const hasDebt = row.pending_interest > 0;
                               return (
                                 <tr
                                   key={row.month_number}
@@ -493,7 +493,7 @@ export default function LibroAccionistaPage() {
                                         : 'text-[var(--color-text-subtle)]'
                                     }`}
                                   >
-                                    {hasDebt ? cop(row.interest_debt) : '—'}
+                                    {hasDebt ? cop(row.pending_interest) : '—'}
                                   </td>
                                   <td className="px-4 py-2.5 text-right font-semibold">
                                     {cop(row.capital_balance_after)}
@@ -606,7 +606,7 @@ function UnifiedBookCard({ unified }: { unified: UnifiedLoanBook }) {
           <tbody className="divide-y divide-[var(--color-border)]">
             {unified.rows.map((row) => {
               const totalCuotaRow = row.installment_value;
-              const hasDebt = row.interest_debt > 0;
+              const hasDebt = row.pending_interest > 0;
               return (
                 <tr key={row.month_key}>
                   <td className="px-4 py-2.5 font-medium text-[var(--color-text)]">
@@ -639,7 +639,7 @@ function UnifiedBookCard({ unified }: { unified: UnifiedLoanBook }) {
                         : 'text-[var(--color-text-subtle)]'
                     }`}
                   >
-                    {hasDebt ? cop(row.interest_debt) : '—'}
+                    {hasDebt ? cop(row.pending_interest) : '—'}
                   </td>
                   <td className="px-4 py-2.5 text-right font-semibold">
                     {cop(row.capital_balance_after)}

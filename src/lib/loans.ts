@@ -249,11 +249,14 @@ export interface LoanBookMonthRow {
   // Intereses en mora del mes: interés sobre el saldo real (RN-4.18) que no
   // cubren los intereses pagados para ese mes. Solo meses terminados (RN-4.22b).
   interest_debt: number;
+  // RN-4.31: intereses pendientes acumulados hasta este mes.
+  pending_interest: number;
   // Saldo de capital al cierre del mes (tras restar lo efectivamente pagado hasta aquí).
   capital_balance_after: number;
   // Cuota "ideal" del mes según plan (capital + interés plan).
   installment_value: number;
-  // true en el primer mes cuyo capital aún no se paga completo.
+  // true en el primer mes cuyo capital aún no se paga completo; nunca en un
+  // préstamo pagado (RN-4.28).
   is_next_installment: boolean;
 }
 
@@ -355,6 +358,7 @@ export function computeLoanBook(params: {
       paid_capital: m.capitalPagado,
       paid_interest: m.interesPagado,
       interest_debt: m.interesEnMora,
+      pending_interest: m.interesesPendientesAcumulados,
       capital_balance_after: m.saldoCapitalDespues,
       installment_value: m.cuotaPactada,
       is_next_installment: m.esLaProximaCuota,
@@ -383,6 +387,8 @@ export interface UnifiedLoanBookRow {
   paid_interest: number;
   // Intereses en mora de ese mes (RN-4.18, saldo real).
   interest_debt: number;
+  // RN-4.31: suma de los intereses pendientes acumulados de cada préstamo.
+  pending_interest: number;
   // Saldo de capital acumulado al cierre del mes (suma de saldos de cada
   // préstamo). Un préstamo no aporta antes de su primer mes y aporta su
   // último saldo después de su último mes.
@@ -423,6 +429,7 @@ function libroDesdeLoanBook(book: LoanBook): Result<LibroDelPrestamo, ErrorDeDom
       interesPagado: m.paid_interest,
       interesReal: 0,
       interesEnMora: m.interest_debt,
+      interesesPendientesAcumulados: m.pending_interest,
       saldoCapitalDespues: m.capital_balance_after,
       esLaProximaCuota: m.is_next_installment,
     });
@@ -473,6 +480,7 @@ export function computeUnifiedLoanBook(
       paid_capital: f.capitalPagado,
       paid_interest: f.interesPagado,
       interest_debt: f.interesEnMora,
+      pending_interest: f.interesesPendientesAcumulados,
       capital_balance_after: f.saldoCapitalDespues,
     })),
     summary: {

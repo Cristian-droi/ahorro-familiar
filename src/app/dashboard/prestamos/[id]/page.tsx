@@ -312,7 +312,7 @@ export default function LoanDetailPage() {
                           ? [
                               { name: 'Abono Capital', align: 'right' },
                               { name: 'Abono Interés', align: 'right' },
-                              { name: 'Mora Interés', align: 'right' },
+                              { name: 'Intereses pendientes', align: 'right' },
                             ]
                           : []),
                         { name: 'Saldo Capital', align: 'right' },
@@ -331,7 +331,7 @@ export default function LoanDetailPage() {
                   <tbody>
                     {loanBook.months.map((row) => {
                       const showPayments = loan.status === 'active' || loan.status === 'paid';
-                      const hasDebt = row.interest_debt > 0;
+                      const hasDebt = row.pending_interest > 0;
                       return (
                         <tr key={row.month_number} className="border-t border-[var(--color-border)]">
                           <td className="px-4 py-3 text-[var(--color-text-muted)] font-semibold text-left">
@@ -365,7 +365,7 @@ export default function LoanDetailPage() {
                                   hasDebt ? 'text-[var(--color-danger)] font-semibold' : 'text-[var(--color-text-subtle)]'
                                 }`}
                               >
-                                {hasDebt ? cop(row.interest_debt) : '—'}
+                                {hasDebt ? cop(row.pending_interest) : '—'}
                               </td>
                             </>
                           )}
