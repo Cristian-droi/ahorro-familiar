@@ -83,7 +83,9 @@ export default function LoanDetailPage() {
         });
         if (book.ok) {
           setLoanBook(book.value);
+          setLoanBookError(null);
         } else {
+          setLoanBook(null);
           setLoanBookError(`No se pudo calcular la conciliación del préstamo: ${book.error.mensaje}`);
         }
       } catch (err) {
