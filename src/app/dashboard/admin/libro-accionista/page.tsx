@@ -57,27 +57,18 @@ type BookedEntry = {
 
 function computeBookedEntries(entries: LibroAccionistaEntry[]): BookedEntry[] {
   return entries.map((e) => {
-    const loans: BookedLoan[] = e.loans.map((l) => ({
-      source: l,
-      book: computeLoanBook({
+    const loans: BookedLoan[] = e.loans.map((l) => {
+      const book = computeLoanBook({
         requestedAmount: Number(l.loan.requested_amount),
         plan: l.plan,
         payments: l.payments,
         interestRate: Number(l.loan.interest_rate),
         disbursedAt: l.loan.disbursed_at ?? null,
-      }),
-    }));
-    const totals = loans.reduce(
-      (acc, bl) => ({
-        requested: acc.requested + bl.book.summary.requested_amount,
-        paid_capital: acc.paid_capital + bl.book.summary.total_paid_capital,
-        paid_interest: acc.paid_interest + bl.book.summary.total_paid_interest,
-        interest_debt: acc.interest_debt + bl.book.summary.overdue_interest_debt,
-        current_balance:
-          acc.current_balance + bl.book.summary.current_capital_balance,
-      }),
-      { requested: 0, paid_capital: 0, paid_interest: 0, interest_debt: 0, current_balance: 0 },
-    );
+      });
+      // The caller (fetchAll) shows the load error toast.
+      if (!book.ok) throw new Error(book.error.mensaje);
+      return { source: l, book: book.value };
+    });
     const unified = computeUnifiedLoanBook(
       loans.map((bl) => ({
         requested: bl.book.summary.requested_amount,
@@ -85,7 +76,15 @@ function computeBookedEntries(entries: LibroAccionistaEntry[]): BookedEntry[] {
         disbursedAt: bl.source.loan.disbursed_at ?? null,
       })),
     );
-    return { user: e.user, loans, totals, unified };
+    if (!unified.ok) throw new Error(unified.error.mensaje);
+    const totals = {
+      requested: unified.value.summary.total_requested,
+      paid_capital: unified.value.summary.total_paid_capital,
+      paid_interest: unified.value.summary.total_paid_interest,
+      interest_debt: unified.value.summary.overdue_interest_debt,
+      current_balance: unified.value.summary.current_capital_balance,
+    };
+    return { user: e.user, loans, totals, unified: unified.value };
   });
 }
 
@@ -507,20 +506,10 @@ export default function LibroAccionistaPage() {
                             <tr>
                               <td className="px-4 py-2.5">Totales</td>
                               <td className="px-4 py-2.5 text-right text-[var(--color-text-muted)]">
-                                {cop(
-                                  bl.book.months.reduce(
-                                    (s, r) => s + r.plan_capital,
-                                    0,
-                                  ),
-                                )}
+                                {cop(bl.book.summary.total_plan_capital)}
                               </td>
                               <td className="px-4 py-2.5 text-right text-[var(--color-text-muted)]">
-                                {cop(
-                                  bl.book.months.reduce(
-                                    (s, r) => s + r.plan_interest,
-                                    0,
-                                  ),
-                                )}
+                                {cop(bl.book.summary.total_plan_interest)}
                               </td>
                               <td className="px-4 py-2.5 text-right text-[var(--color-success)]">
                                 {cop(bl.book.summary.total_paid_capital)}
@@ -565,19 +554,10 @@ function UnifiedBookCard({ unified }: { unified: UnifiedLoanBook }) {
   if (unified.rows.length === 0) {
     return null;
   }
-  const totalRequested = unified.rows.reduce(
-    (s, r) => s + r.disbursed_this_month,
-    0,
-  );
-  const totalPlanCapital = unified.rows.reduce(
-    (s, r) => s + r.plan_capital,
-    0,
-  );
-  const totalPlanInterest = unified.rows.reduce(
-    (s, r) => s + r.plan_interest,
-    0,
-  );
-  const totalCuota = totalPlanCapital + totalPlanInterest;
+  const totalRequested = unified.summary.total_disbursed_in_rows;
+  const totalPlanCapital = unified.summary.total_plan_capital;
+  const totalPlanInterest = unified.summary.total_plan_interest;
+  const totalCuota = unified.summary.total_installment_value;
   const totalPaidCapital = unified.summary.total_paid_capital;
   const totalPaidInterest = unified.summary.total_paid_interest;
   const totalInterestDebt = unified.summary.overdue_interest_debt;
@@ -625,7 +605,7 @@ function UnifiedBookCard({ unified }: { unified: UnifiedLoanBook }) {
           </thead>
           <tbody className="divide-y divide-[var(--color-border)]">
             {unified.rows.map((row) => {
-              const totalCuotaRow = row.plan_capital + row.plan_interest;
+              const totalCuotaRow = row.installment_value;
               const hasDebt = row.interest_debt > 0;
               return (
                 <tr key={row.month_key}>

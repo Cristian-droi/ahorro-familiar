@@ -80,7 +80,8 @@ export default function LoanDetailPage() {
           interestRate: Number(data.interest_rate),
           disbursedAt: data.disbursed_at,
         });
-        setLoanBook(book);
+        if (!book.ok) throw new Error(book.error.mensaje);
+        setLoanBook(book.value);
       } catch (err) {
         console.error('Error calculando conciliación del préstamo:', err);
       }
@@ -381,13 +382,13 @@ export default function LoanDetailPage() {
                         Totales
                       </td>
                       <td className="px-4 py-3 text-right text-[var(--color-text-muted)]">
-                        {cop(loanBook.months.reduce((s, r) => s + r.plan_capital, 0))}
+                        {cop(loanBook.summary.total_plan_capital)}
                       </td>
                       <td className="px-4 py-3 text-right text-[var(--color-text-muted)]">
-                        {cop(loanBook.months.reduce((s, r) => s + r.plan_interest, 0))}
+                        {cop(loanBook.summary.total_plan_interest)}
                       </td>
                       <td className="px-4 py-3 text-right font-semibold">
-                        {cop(loanBook.months.reduce((s, r) => s + r.installment_value, 0))}
+                        {cop(loanBook.summary.total_installment_value)}
                       </td>
                       {/* Si se muestran los pagos, agregamos los totales de los abonos */}
                       {(loan.status === 'active' || loan.status === 'paid') && (
