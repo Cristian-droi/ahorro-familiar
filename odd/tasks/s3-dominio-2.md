@@ -39,7 +39,8 @@ Scope note (S4): the domain only returns totals; it never receives or returns wh
 | T4e3 | S6 | delegated writer (context backstop) | done | `libroDelPrestamo`/`libroUnificado`; suite 477/477 |
 | T4e3b | S6 | delegated writer (context backstop) | done | RN-4.31 cumulative pending interest; suite 487/487 |
 | T4f | S6 | inline | done | `LOAN_STATUS_*` moved to `src/components/loans/status.ts` |
-| T5 | S8 | inline | pending | |
+| T5a | S8 | delegated writer (context backstop) | done | bigint capitalization params, loan shares CHECK, gen:types, permission error, ESLint test timeout |
+| T5b | S8 | pending | pending | `parametros`: validate configuration values; configurable day 15, day 25 and extended term |
 
 T4 runs after T1–T3 so the callers move to domain functions that already exist.
 
@@ -105,3 +106,4 @@ T4 runs after T1–T3 so the callers move to domain functions that already exist
 - **L58 (2026-11-01)** R3-001/R3-002 fixed inline: in the admin shareholder book a loan the domain rejects only affects its shareholder, who shows "No se pudo calcular el préstamo #N: …" with zero totals instead of breaking the page for everyone; the loan detail page shows "No se pudo calcular la conciliación del préstamo: …" instead of hiding the table, and keeps loading the rest. Not tried in a browser. Suite 487/487.
 - **L59 (2026-11-01)** Cris: "REvisa unicamnete los nuevos cambio 5e61d9c  y 4316111". Review of `70a590d..4316111` (lens reliability) approved and acknowledged. R3-001 fixed: the loan detail page clears the stale book or error on each load. Follow-ups: no test for the per-shareholder failure path (R3-002); interest overpayment lowering later rows is untested and still open for Cris (R3-003).
 - **L60 (2026-11-03)** Cris: "Sí, T4f". `LOAN_STATUS_LABELS` and `LOAN_STATUS_TONE` moved from `src/lib/loans.ts` to `src/components/loans/status.ts`; the 7 pages import them from there. Suite 487/487, ESLint 0 errors, `tsc` 0 errors. T4 (S6) is complete.
+- **L61 (2026-11-03)** Cris: "Sí, T5". T5a done by a delegated writer: migration `20261103000000_capitalization_bigint_and_loan_shares_check.sql` (both `open_capitalization_window` functions recreated with `bigint` money params, grants to `authenticated` only — anon still had EXECUTE locally from old defaults; CHECK `loans_loan_shares_amount_multiple`, aborting first if existing rows violate it), applied locally and probed (cents rejected, anon denied, CHECK rejects 3/300001); the compras page shows "Tu sesión expiró. Inicia sesión de nuevo para continuar." and redirects on a 42501 instead of hiding the section silently (`isPermissionDeniedError`, tested); `npm run gen:types` runs `scripts/gen-types.mjs` (`--local`, writes only on success, uses the global scoop CLI); the ESLint boundaries test has its own 30 s timeout. Suite 491/491 without a global timeout, ESLint 0 errors, `tsc` 0 errors.

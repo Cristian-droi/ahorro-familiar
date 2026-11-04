@@ -9,7 +9,7 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "gen:types": "supabase gen types typescript --linked --schema public > src/types/database.ts"
+    "gen:types": "node scripts/gen-types.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.10.2",

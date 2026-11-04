@@ -48,6 +48,7 @@ import {
 import {
   getMyActiveLoansDebt,
   getMyPendingLoanSharePurchases,
+  isPermissionDeniedError,
   type ActiveLoanDebt,
   type PendingLoanSharePurchase,
 } from '@/lib/data/loans';
@@ -357,6 +358,16 @@ export default function ComprasPage() {
           setLoanSharesSelected(new Set(pending.map((p) => p.loan_id)));
         }
       } catch (err) {
+        // Sin sesión válida la RPC responde "permission denied" (anon no
+        // tiene EXECUTE). Antes se ocultaba la sección sin avisar; ahora se
+        // pide iniciar sesión, igual que cuando no hay usuario.
+        if (isPermissionDeniedError(err)) {
+          if (!cancelled) {
+            showToast('error', 'Tu sesión expiró. Inicia sesión de nuevo para continuar.');
+            router.replace('/login');
+          }
+          return;
+        }
         console.error('Error cargando acciones por préstamo:', err);
       }
 

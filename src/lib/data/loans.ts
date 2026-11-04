@@ -103,6 +103,17 @@ export type PendingLoanSharePurchase = {
   unit_value: number | null;
 };
 
+// PostgreSQL responde 42501 cuando el rol no tiene EXECUTE sobre la RPC. Le
+// pasa a anon (sesión vencida o ausente) desde 20261026000000, que dejó las
+// RPC del accionista solo para authenticated.
+export function isPermissionDeniedError(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as { code?: unknown }).code === '42501'
+  );
+}
+
 export async function getMyPendingLoanSharePurchases(
   supabase: SB,
 ): Promise<PendingLoanSharePurchase[]> {
