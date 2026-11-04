@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -52,6 +52,19 @@ import {
 import { showToast } from '@/components/ui/Toast';
 import { BankAccount } from '@/types/entities';
 import { parseBankAccounts } from '@/lib/schemas/bank-account';
+import {
+  AJUSTE_DIA_DE_CORTE,
+  AJUSTE_DIA_LIMITE_TASA_COMPLETA,
+  AJUSTE_PLAZO_HASTA_PERIODO_SIGUIENTE,
+  AJUSTES_DE_PRESTAMO_POR_DEFECTO,
+  ajustesDePrestamoDesdeFilas,
+} from '@/lib/loan-settings';
+import {
+  validarAjustesDePrestamo,
+  validarFraccion,
+  validarMaximoDePrestamosActivos,
+  validarValoresDeAccion,
+} from '@/modules/parametros/domain/parametros';
 
 const cop = (n: number) => '$ ' + new Intl.NumberFormat('es-CO').format(n);
 
@@ -71,6 +84,12 @@ export default function AjustesPage() {
   const [defaultInterestRate, setDefaultInterestRate] = useState<number>(2);
   const [maxLoansEnabled, setMaxLoansEnabled] = useState<boolean>(true);
   const [maxLoansPerUser, setMaxLoansPerUser] = useState<number>(2);
+  // RN-4.20, RN-4.15/RN-4.21 and RN-4.3 (⚙️ in section 10).
+  const [fullRateDayLimit, setFullRateDayLimit] = useState<number>(AJUSTES_DE_PRESTAMO_POR_DEFECTO.diaLimiteTasaCompleta);
+  const [cutoffDay, setCutoffDay] = useState<number>(AJUSTES_DE_PRESTAMO_POR_DEFECTO.diaDeCorte);
+  const [extendedTermEnabled, setExtendedTermEnabled] = useState<boolean>(
+    AJUSTES_DE_PRESTAMO_POR_DEFECTO.plazoHastaPeriodoSiguiente,
+  );
   const [resumenSaving, setResumenSaving] = useState<boolean>(false);
 
   // User state (RN-2.2): a saved value changes only once the admin allowed
@@ -385,7 +404,10 @@ export default function AjustesPage() {
           'four_per_thousand_rate',
           'default_loan_interest_rate',
           'max_active_loans_enabled',
-          'max_active_loans_per_user'
+          'max_active_loans_per_user',
+          AJUSTE_DIA_LIMITE_TASA_COMPLETA,
+          AJUSTE_DIA_DE_CORTE,
+          AJUSTE_PLAZO_HASTA_PERIODO_SIGUIENTE,
         ]);
 
       if (!cancelled && settingsList) {
@@ -412,6 +434,11 @@ export default function AjustesPage() {
 
         const mlp = settingsList.find(s => s.key === 'max_active_loans_per_user')?.value;
         if (mlp !== undefined) setMaxLoansPerUser(Number(mlp));
+
+        const loanSettings = ajustesDePrestamoDesdeFilas(settingsList);
+        setFullRateDayLimit(loanSettings.diaLimiteTasaCompleta);
+        setCutoffDay(loanSettings.diaDeCorte);
+        setExtendedTermEnabled(loanSettings.plazoHastaPeriodoSiguiente);
       }
 
 
@@ -620,10 +647,15 @@ export default function AjustesPage() {
   };
 
   const saveAdminSettings = async () => {
+    const shares = validarValoresDeAccion(allowedShares);
+    if (!shares.ok) {
+      showToast('error', shares.error.mensaje);
+      return;
+    }
     setSaving(true);
     const { error } = await supabase
       .from('system_settings')
-      .upsert({ key: 'allowed_share_values', value: allowedShares });
+      .upsert({ key: 'allowed_share_values', value: shares.value });
 
     if (error) {
       showToast('error', 'Error al guardar configuración');
@@ -633,7 +665,31 @@ export default function AjustesPage() {
     setSaving(false);
   };
 
+  // Validation of the values the admin saves (parametros domain).
+  const loanSettingsCheck = useMemo(
+    () =>
+      validarAjustesDePrestamo({
+        diaLimiteTasaCompleta: fullRateDayLimit,
+        diaDeCorte: cutoffDay,
+        plazoHastaPeriodoSiguiente: extendedTermEnabled,
+      }),
+    [fullRateDayLimit, cutoffDay, extendedTermEnabled],
+  );
+
   const saveResumenSettings = async () => {
+    const checks = [
+      validarFraccion(Number(expensesPercentage) / 100, 'El porcentaje de gastos'),
+      validarFraccion(Number(nextYearSharesPercentage) / 100, 'El porcentaje de acciones del siguiente año'),
+      validarFraccion(Number(fourPerThousandRate) / 100, 'El gravamen 4×1000'),
+      validarFraccion(Number(defaultInterestRate) / 100, 'La tasa de interés'),
+      ...(maxLoansEnabled ? [validarMaximoDePrestamosActivos(Number(maxLoansPerUser))] : []),
+      loanSettingsCheck,
+    ];
+    const failed = checks.find((c) => !c.ok);
+    if (failed && !failed.ok) {
+      showToast('error', failed.error.mensaje);
+      return;
+    }
     setResumenSaving(true);
     const updates = [
       { key: 'resumen_expenses_percentage', value: Number(expensesPercentage) / 100 },
@@ -643,6 +699,9 @@ export default function AjustesPage() {
       { key: 'default_loan_interest_rate', value: Number(defaultInterestRate) / 100 },
       { key: 'max_active_loans_enabled', value: Boolean(maxLoansEnabled) },
       { key: 'max_active_loans_per_user', value: Number(maxLoansPerUser) },
+      { key: AJUSTE_DIA_LIMITE_TASA_COMPLETA, value: Number(fullRateDayLimit) },
+      { key: AJUSTE_DIA_DE_CORTE, value: Number(cutoffDay) },
+      { key: AJUSTE_PLAZO_HASTA_PERIODO_SIGUIENTE, value: Boolean(extendedTermEnabled) },
     ];
 
     const { error } = await supabase
@@ -1055,7 +1114,49 @@ export default function AjustesPage() {
                         Tasa de interés mensual aplicada por defecto a las nuevas solicitudes.
                       </span>
                     </div>
+
+                    <div className="flex flex-col gap-1.5">
+                      <label htmlFor="full_rate_day_limit" className="text-[11px] font-semibold text-[var(--color-text-muted)] uppercase tracking-[0.12em]">
+                        Día límite para tasa completa
+                      </label>
+                      <Input
+                        id="full_rate_day_limit"
+                        type="number"
+                        min="1"
+                        max="27"
+                        step="1"
+                        value={fullRateDayLimit}
+                        onChange={(e) => setFullRateDayLimit(Number(e.target.value))}
+                      />
+                      <span className="text-[11px] text-[var(--color-text-subtle)]">
+                        Si el préstamo se desembolsa después de este día, el primer mes cobra media tasa (15 por defecto).
+                      </span>
+                    </div>
+
+                    <div className="flex flex-col gap-1.5">
+                      <label htmlFor="loan_cutoff_day" className="text-[11px] font-semibold text-[var(--color-text-muted)] uppercase tracking-[0.12em]">
+                        Día de corte del mes aplicado
+                      </label>
+                      <Input
+                        id="loan_cutoff_day"
+                        type="number"
+                        min="2"
+                        max="28"
+                        step="1"
+                        value={cutoffDay}
+                        onChange={(e) => setCutoffDay(Number(e.target.value))}
+                      />
+                      <span className="text-[11px] text-[var(--color-text-subtle)]">
+                        Si el préstamo se desembolsa después de este día, los intereses empiezan a contar el mes siguiente (25 por defecto).
+                      </span>
+                    </div>
                   </div>
+
+                  {!loanSettingsCheck.ok && (
+                    <p role="alert" className="text-[12px] text-[var(--color-danger)]">
+                      {loanSettingsCheck.error.mensaje}
+                    </p>
+                  )}
 
                   <div className="flex flex-col gap-3 pt-2 border-t border-[var(--color-border)] mt-2">
                     <div className="flex items-center gap-2.5">
@@ -1068,6 +1169,19 @@ export default function AjustesPage() {
                       />
                       <label htmlFor="next_year_capitalization_active" className="text-xs font-semibold text-[var(--color-text)] uppercase tracking-wider cursor-pointer select-none">
                         Habilitar capitalización próximo año (los accionistas podrán seleccionar su monto desde el dashboard)
+                      </label>
+                    </div>
+
+                    <div className="flex items-center gap-2.5">
+                      <input
+                        type="checkbox"
+                        id="loan_extended_term_enabled"
+                        checked={extendedTermEnabled}
+                        onChange={(e) => setExtendedTermEnabled(e.target.checked)}
+                        className="rounded border-[var(--color-border)] text-[var(--color-brand)] focus:ring-[var(--color-ring)] h-4 w-4"
+                      />
+                      <label htmlFor="loan_extended_term_enabled" className="text-xs font-semibold text-[var(--color-text)] uppercase tracking-wider cursor-pointer select-none">
+                        Permitir plazos de préstamo hasta diciembre del periodo siguiente (para todos los accionistas)
                       </label>
                     </div>
 

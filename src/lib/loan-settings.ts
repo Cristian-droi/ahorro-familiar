@@ -6,6 +6,14 @@ import {
 } from '@/modules/prestamos/domain/acciones-por-prestamo';
 import { calcularDesembolso, type Desembolso } from '@/modules/prestamos/domain/desembolso';
 import type { ReglasDeInteres } from '@/modules/prestamos/domain/intereses';
+import {
+  AJUSTES_DE_PRESTAMO_POR_DEFECTO,
+  validarAjustesDePrestamo,
+  validarDiaDeCorte,
+  validarDiaLimiteTasaCompleta,
+  validarPlazoHastaPeriodoSiguiente,
+  type AjustesDePrestamo,
+} from '@/modules/parametros/domain/parametros';
 
 // Adapter between the legacy loan callers and the loan domain
 // (docs/reglas-negocio.md, RN-4.10, RN-4.14 and RN-4.16). It only maps the
@@ -30,15 +38,62 @@ export function tasaCuatroPorMilDesdeAjuste(valor: unknown): number {
 // RN-4.18: 2% monthly by default, expressed in basis points.
 export const TASA_INTERES_POR_DEFECTO_PUNTOS_BASICOS = 200;
 
-// RN-4.20 and RN-4.15 (⚙️ in section 10). There is no `system_settings` key
-// for them yet, so the documented defaults apply.
-export const DIA_LIMITE_TASA_COMPLETA_POR_DEFECTO = 15;
-export const DIA_DE_CORTE_POR_DEFECTO = 25;
+// RN-4.20 (day 15), RN-4.15/RN-4.21 (day 25) and RN-4.3 (terms until December
+// of the next period), all ⚙️ in section 10. They live in `system_settings`
+// under these keys; missing or invalid values use the section 10 defaults.
+export const AJUSTE_DIA_LIMITE_TASA_COMPLETA = 'loan_full_rate_day_limit';
+export const AJUSTE_DIA_DE_CORTE = 'loan_cutoff_day';
+export const AJUSTE_PLAZO_HASTA_PERIODO_SIGUIENTE = 'loan_extended_term_enabled';
+const CLAVES_DE_AJUSTES_DE_PRESTAMO = [
+  AJUSTE_DIA_LIMITE_TASA_COMPLETA,
+  AJUSTE_DIA_DE_CORTE,
+  AJUSTE_PLAZO_HASTA_PERIODO_SIGUIENTE,
+];
 
-// RN-4.3: "Permitir plazo hasta diciembre del año siguiente" defaults to no.
-// There is no setting for it yet, so every term runs until December of the
-// applied month's period.
-export const PLAZO_HASTA_PERIODO_SIGUIENTE_POR_DEFECTO = false;
+export { AJUSTES_DE_PRESTAMO_POR_DEFECTO, type AjustesDePrestamo };
+
+function campoValido<T>(clave: string, valor: unknown, r: Result<T, ErrorDeDominio>, porDefecto: T): T {
+  if (valor === undefined || valor === null) return porDefecto;
+  if (r.ok) return r.value;
+  console.error(`Ajuste ${clave} inválido (${JSON.stringify(valor)}): ${r.error.mensaje} Se usa ${String(porDefecto)}.`);
+  return porDefecto;
+}
+
+// Maps the stored rows to the loan settings. Each missing value uses its
+// default; an invalid one is logged and uses its default; if the days end up
+// inconsistent, every default applies.
+export function ajustesDePrestamoDesdeFilas(filas: { key: string; value: unknown }[]): AjustesDePrestamo {
+  const valor = (clave: string) => filas.find((f) => f.key === clave)?.value;
+  const d = AJUSTES_DE_PRESTAMO_POR_DEFECTO;
+  const limite = valor(AJUSTE_DIA_LIMITE_TASA_COMPLETA);
+  const corte = valor(AJUSTE_DIA_DE_CORTE);
+  const plazo = valor(AJUSTE_PLAZO_HASTA_PERIODO_SIGUIENTE);
+  const ajustes = validarAjustesDePrestamo({
+    diaLimiteTasaCompleta: campoValido(AJUSTE_DIA_LIMITE_TASA_COMPLETA, limite, validarDiaLimiteTasaCompleta(limite), d.diaLimiteTasaCompleta),
+    diaDeCorte: campoValido(AJUSTE_DIA_DE_CORTE, corte, validarDiaDeCorte(corte), d.diaDeCorte),
+    plazoHastaPeriodoSiguiente: campoValido(
+      AJUSTE_PLAZO_HASTA_PERIODO_SIGUIENTE,
+      plazo,
+      validarPlazoHastaPeriodoSiguiente(plazo),
+      d.plazoHastaPeriodoSiguiente,
+    ),
+  });
+  if (ajustes.ok) return ajustes.value;
+  console.error(`Ajustes de préstamo inválidos: ${ajustes.error.mensaje} Se usan los valores por defecto.`);
+  return { ...d };
+}
+
+// The single reader of the loan settings for every caller.
+export async function getAjustesDePrestamo(client: TypedSupabaseClient): Promise<AjustesDePrestamo> {
+  const { data, error } = await client
+    .from('system_settings')
+    .select('key, value')
+    .in('key', CLAVES_DE_AJUSTES_DE_PRESTAMO);
+  // A failed read must not silently fall back to the defaults: a plan saved
+  // with the wrong cut-off day would start in the wrong month (RN-4.21).
+  if (error) throw new Error(`No se pudieron leer los ajustes de préstamo: ${error.message}`);
+  return ajustesDePrestamoDesdeFilas(data ?? []);
+}
 
 // The loan rate (`system_settings.default_loan_interest_rate`,
 // `loans.interest_rate`) is stored as a fraction (0.02). The domain takes
@@ -63,6 +118,18 @@ export function tasaDeInteresGlobalDesdeAjuste(valor: unknown): number {
   return fraccionValida(valor) ?? TASA_INTERES_POR_DEFECTO_PUNTOS_BASICOS / 10000;
 }
 
+// The global rate setting: ajustes saves `default_loan_interest_rate`; older
+// data may only have `loan_interest_rate`. Same precedence as POST /api/prestamos.
+export async function getTasaDeInteresGlobal(client: TypedSupabaseClient): Promise<number> {
+  const { data, error } = await client
+    .from('system_settings')
+    .select('key, value')
+    .in('key', ['default_loan_interest_rate', 'loan_interest_rate']);
+  if (error) throw new Error(`No se pudo leer la tasa de interés: ${error.message}`);
+  const porClave = new Map((data ?? []).map((fila) => [fila.key, fila.value]));
+  return tasaDeInteresGlobalDesdeAjuste(porClave.get('default_loan_interest_rate') ?? porClave.get('loan_interest_rate'));
+}
+
 // A loan's own stored rate never falls back to the default: a missing or
 // invalid `loans.interest_rate` is an error the caller reports.
 export function tasaEnPuntosBasicosDelPrestamo(valor: unknown): Result<number, ErrorDeDominio> {
@@ -77,21 +144,27 @@ export function tasaEnPuntosBasicosDelPrestamo(valor: unknown): Result<number, E
   return ok(Math.round(fraccion * 10000));
 }
 
-export function reglasDeInteresDelPrestamo(tasa: unknown): Result<ReglasDeInteres, ErrorDeDominio> {
+export function reglasDeInteresDelPrestamo(
+  tasa: unknown,
+  ajustes: AjustesDePrestamo = AJUSTES_DE_PRESTAMO_POR_DEFECTO,
+): Result<ReglasDeInteres, ErrorDeDominio> {
   const puntos = tasaEnPuntosBasicosDelPrestamo(tasa);
   if (!puntos.ok) return puntos;
   return ok({
     tasaEnPuntosBasicos: puntos.value,
-    diaLimiteTasaCompleta: DIA_LIMITE_TASA_COMPLETA_POR_DEFECTO,
-    diaDeCorte: DIA_DE_CORTE_POR_DEFECTO,
+    diaLimiteTasaCompleta: ajustes.diaLimiteTasaCompleta,
+    diaDeCorte: ajustes.diaDeCorte,
   });
 }
 
-export function reglasDeInteresDesdeAjuste(tasa: unknown): ReglasDeInteres {
+export function reglasDeInteresDesdeAjuste(
+  tasa: unknown,
+  ajustes: AjustesDePrestamo = AJUSTES_DE_PRESTAMO_POR_DEFECTO,
+): ReglasDeInteres {
   return {
     tasaEnPuntosBasicos: tasaEnPuntosBasicosDesdeAjuste(tasa),
-    diaLimiteTasaCompleta: DIA_LIMITE_TASA_COMPLETA_POR_DEFECTO,
-    diaDeCorte: DIA_DE_CORTE_POR_DEFECTO,
+    diaLimiteTasaCompleta: ajustes.diaLimiteTasaCompleta,
+    diaDeCorte: ajustes.diaDeCorte,
   };
 }
 

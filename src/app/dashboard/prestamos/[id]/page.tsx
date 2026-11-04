@@ -12,6 +12,7 @@ import { ChevronLeft, ThumbsUp, ThumbsDown, Users, AlertTriangle, RotateCcw, Sen
 import { getLoanWithDetails, getMyActiveLoansDebt, type LoanWithVoting } from '@/lib/data/loans';
 import { cop } from '@/lib/format';
 import { computeLoanBook, type LoanBook } from '@/lib/loans';
+import { getAjustesDePrestamo } from '@/lib/loan-settings';
 import { LOAN_STATUS_LABELS, LOAN_STATUS_TONE } from '@/components/loans/status';
 import { votosNecesarios } from '@/modules/prestamos/domain/votacion';
 
@@ -76,6 +77,7 @@ export default function LoanDetailPage() {
           payments: approvedPayments,
           interestRate: Number(data.interest_rate),
           disbursedAt: data.disbursed_at,
+          ajustes: await getAjustesDePrestamo(supabase),
         });
         if (book.ok) {
           setLoanBook(book.value);

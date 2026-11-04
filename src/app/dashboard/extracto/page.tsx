@@ -44,6 +44,7 @@ import {
   type MonthlyUtility,
 } from '@/lib/data/loans';
 import { computeLoanBook, computeUnifiedLoanBook } from '@/lib/loans';
+import { getAjustesDePrestamo } from '@/lib/loan-settings';
 import { LOAN_STATUS_LABELS } from '@/components/loans/status';
 import { cop, monthLabel } from '@/lib/format';
 import {
@@ -300,7 +301,10 @@ export function ExtractoView({ targetUserId }: ExtractoViewProps = {}) {
 
     (async () => {
       try {
-        const entries = await getLibroAccionistaData(supabase, userId);
+        const [entries, ajustes] = await Promise.all([
+          getLibroAccionistaData(supabase, userId),
+          getAjustesDePrestamo(supabase),
+        ]);
         if (cancelled) return;
         if (entries.length === 0) {
           setLoanSummary(null);
@@ -314,6 +318,7 @@ export function ExtractoView({ targetUserId }: ExtractoViewProps = {}) {
             payments: l.payments,
             interestRate: Number(l.loan.interest_rate),
             disbursedAt: l.loan.disbursed_at,
+            ajustes,
           });
           // Caught below: the monthly table renders without the summary.
           if (!book.ok) throw new Error(book.error.mensaje);

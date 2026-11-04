@@ -32,6 +32,7 @@ import { getLoanWithDetails, getCashBalance, getLoanInterestItems, type LoanWith
 import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import { cop } from '@/lib/format';
 import { calcAccruedInterest, type LoanInterestItem } from '@/lib/loans';
+import { getAjustesDePrestamo, type AjustesDePrestamo } from '@/lib/loan-settings';
 import { LOAN_STATUS_LABELS, LOAN_STATUS_TONE } from '@/components/loans/status';
 import { votosNecesarios } from '@/modules/prestamos/domain/votacion';
 
@@ -50,6 +51,7 @@ export default function AdminLoanDetailPage() {
   const [shareValue, setShareValue] = useState<number | null>(null);
   // Approved capital and interest items, for the interest owed (null: not loaded).
   const [interestItems, setInterestItems] = useState<LoanInterestItem[] | null>(null);
+  const [ajustes, setAjustes] = useState<AjustesDePrestamo | null>(null);
   const [rejectionReason, setRejectionReason] = useState('');
   const [revisionNote, setRevisionNote] = useState('');
   const [adminNotes, setAdminNotes] = useState('');
@@ -71,6 +73,8 @@ export default function AdminLoanDetailPage() {
     setShareValue(
       data ? await getOpenPeriodShareValue(supabase, data.user_id).catch(() => null) : null,
     );
+    // Without the settings the interest owed shows as not available.
+    setAjustes(await getAjustesDePrestamo(supabase).catch(() => null));
     setInterestItems(
       data?.status === 'active'
         ? await getLoanInterestItems(supabase, [data.id])
@@ -210,12 +214,13 @@ export default function AdminLoanDetailPage() {
 
   // Interest owed from the domain (section 11, n.º 13); null when it cannot be computed.
   const accruedInterestResult =
-    loan.status === 'active' && loan.disbursed_at && interestItems
+    loan.status === 'active' && loan.disbursed_at && interestItems && ajustes
       ? calcAccruedInterest({
           requestedAmount: loan.requested_amount,
           rate: loan.interest_rate,
           disbursedAt: loan.disbursed_at,
           items: interestItems,
+          ajustes,
         })
       : null;
   const accruedInterest = accruedInterestResult?.ok ? accruedInterestResult.value : null;

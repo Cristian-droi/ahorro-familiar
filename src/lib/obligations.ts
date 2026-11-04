@@ -1,3 +1,4 @@
+import { getAjustesDePrestamo } from '@/lib/loan-settings';
 import { type SupabaseClient } from '@supabase/supabase-js';
 import { type Database } from '@/types/database';
 import { getOpenPeriodShareValue } from '@/lib/data/share-value';
@@ -125,6 +126,7 @@ export async function checkUserObligations(
     throw interestItemsError;
   }
 
+  const ajustes = await getAjustesDePrestamo(supabase);
   const prestamos: PrestamoActivo[] = [];
   for (const loan of loans) {
     const interes = calcAccruedInterest({
@@ -133,6 +135,7 @@ export async function checkUserObligations(
       disbursedAt: loan.disbursed_at as string,
       items: itemsByLoan.get(loan.id) ?? [],
       today: hoy,
+      ajustes,
     });
     if (!interes.ok) {
       console.error(`Error al calcular el interés adeudado del préstamo ${loan.id}:`, interes.error);

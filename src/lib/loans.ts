@@ -13,7 +13,7 @@ import {
   type LibroDelPrestamo,
   type PagoAlPrestamo,
 } from '@/modules/prestamos/domain/libro-del-prestamo';
-import { DIA_DE_CORTE_POR_DEFECTO, PLAZO_HASTA_PERIODO_SIGUIENTE_POR_DEFECTO, reglasDeInteresDelPrestamo } from '@/lib/loan-settings';
+import { AJUSTES_DE_PRESTAMO_POR_DEFECTO, reglasDeInteresDelPrestamo, type AjustesDePrestamo } from '@/lib/loan-settings';
 
 export interface PlanRow {
   month_number: number;
@@ -40,6 +40,9 @@ const NUMERO_DE_CUOTA = /^-?\d+$/;
 // `requesting` (create and draft edits, RN-4.3b): the plan must run from the
 // current month to the limit, so a past month is rejected instead of moved.
 // At the disbursement it is false and past-month capital goes to the first month.
+//
+// `ajustes` (RN-4.20, RN-4.21, RN-4.3 ⚙️): the loan settings from
+// `getAjustesDePrestamo`; without them the section 10 defaults apply.
 export function buildPaymentPlan(params: {
   requestedAmount: number;
   // Stored fraction, e.g. 0.02 for 2% monthly.
@@ -50,8 +53,10 @@ export function buildPaymentPlan(params: {
   lastMonth?: FechaISO;
   capitalOverrides?: Record<string, number>;
   requesting?: boolean;
+  ajustes?: AjustesDePrestamo;
 }): Result<PlanRow[], ErrorDeDominio> {
-  const reglas = reglasDeInteresDelPrestamo(params.rate);
+  const ajustes = params.ajustes ?? AJUSTES_DE_PRESTAMO_POR_DEFECTO;
+  const reglas = reglasDeInteresDelPrestamo(params.rate, ajustes);
   if (!reglas.ok) return reglas;
   const inicio = mesAplicado(params.disbursedOn, reglas.value.diaDeCorte);
 
@@ -90,7 +95,7 @@ export function buildPaymentPlan(params: {
     monto: params.requestedAmount,
     fechaDesembolso: params.disbursedOn,
     reglas: reglas.value,
-    hastaPeriodoSiguiente: PLAZO_HASTA_PERIODO_SIGUIENTE_POR_DEFECTO,
+    hastaPeriodoSiguiente: ajustes.plazoHastaPeriodoSiguiente,
     mesFinal,
     capitalPorMes,
   });
@@ -151,8 +156,10 @@ export function calcAccruedInterest(params: {
   disbursedAt: string;
   items: LoanInterestItem[];
   today?: FechaISO;
+  // RN-4.20, RN-4.21 ⚙️: defaults to section 10.
+  ajustes?: AjustesDePrestamo;
 }): Result<number, ErrorDeDominio> {
-  const reglas = reglasDeInteresDelPrestamo(params.rate);
+  const reglas = reglasDeInteresDelPrestamo(params.rate, params.ajustes);
   if (!reglas.ok) return reglas;
   const fechaDesembolso = fechaDeDesembolso(params.disbursedAt);
   if (!fechaDesembolso.ok) return fechaDesembolso;
@@ -200,6 +207,8 @@ export function summarizeActiveLoanDebt(params: {
   disbursedAt: string;
   items: LoanInterestItem[];
   today?: FechaISO;
+  // RN-4.20, RN-4.21 ⚙️: defaults to section 10.
+  ajustes?: AjustesDePrestamo;
 }): Result<ActiveLoanDebtSummary, ErrorDeDominio> {
   const today = params.today ?? hoyBogota(new Date());
   const interestOwed = calcAccruedInterest({ ...params, today });
@@ -217,7 +226,10 @@ export function summarizeActiveLoanDebt(params: {
   const saldo = saldoDeCapital({ monto: Number(params.requestedAmount), abonosACapital });
   if (!saldo.ok) return saldo;
   // RN-4.21: after the cut-off day the loan counts from the next month.
-  const disbursementMonth = mesAplicado(fechaDesembolso.value, DIA_DE_CORTE_POR_DEFECTO);
+  const disbursementMonth = mesAplicado(
+    fechaDesembolso.value,
+    (params.ajustes ?? AJUSTES_DE_PRESTAMO_POR_DEFECTO).diaDeCorte,
+  );
   const currentMonth = primerDiaDelMes(today);
   const monthsOverdue = Math.max(mesesEntre(disbursementMonth, currentMonth), 0);
 
@@ -303,6 +315,8 @@ export function computeLoanBook(params: {
   interestRate?: unknown;
   disbursedAt?: string | null;
   today?: FechaISO;
+  // RN-4.20, RN-4.21 ⚙️: defaults to section 10.
+  ajustes?: AjustesDePrestamo;
 }): Result<LoanBook, ErrorDeDominio> {
   const plan: CuotaPactada[] = [];
   for (const row of params.plan) {
@@ -320,7 +334,7 @@ export function computeLoanBook(params: {
 
   let desembolso: { fecha: FechaISO; reglas: ReglasDeInteres } | null = null;
   if (params.disbursedAt) {
-    const reglas = reglasDeInteresDelPrestamo(params.interestRate);
+    const reglas = reglasDeInteresDelPrestamo(params.interestRate, params.ajustes);
     if (!reglas.ok) return reglas;
     const fecha = fechaDeDesembolso(params.disbursedAt);
     if (!fecha.ok) return fecha;

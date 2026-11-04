@@ -3,7 +3,7 @@ import { requireAdmin } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { agreedPlanFromRows, buildPaymentPlan } from '@/lib/loans';
 import { EXPIRED_REQUEST_MESSAGE, expireLoanRequestIfDue } from '@/lib/loan-expiry';
-import { desembolsoDePrestamo, getTasaCuatroPorMil } from '@/lib/loan-settings';
+import { desembolsoDePrestamo, getAjustesDePrestamo, getTasaCuatroPorMil } from '@/lib/loan-settings';
 import { disburseSchema, deductionsDetailSchema } from '@/lib/schemas/loan';
 import { getCashBalance } from '@/lib/data/loans';
 import { getOpenPeriodShareValue } from '@/lib/data/share-value';
@@ -159,6 +159,8 @@ export async function POST(
       disbursedOn: hoyBogota(disbursedAt),
       lastMonth: agreed.value.lastMonth,
       capitalOverrides: agreed.value.capitalOverrides,
+      // RN-4.20, RN-4.21 and RN-4.3 ⚙️.
+      ajustes: await getAjustesDePrestamo(admin),
     });
     if (!plan.ok) {
       return NextResponse.json({ error: plan.error.mensaje }, { status: 422 });

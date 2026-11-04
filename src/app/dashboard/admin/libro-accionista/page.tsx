@@ -29,6 +29,7 @@ import {
   type LibroAccionistaLoan,
 } from '@/lib/data/loans';
 import { computeLoanBook, computeUnifiedLoanBook, type LoanBook, type UnifiedLoanBook } from '@/lib/loans';
+import { getAjustesDePrestamo, type AjustesDePrestamo } from '@/lib/loan-settings';
 import { LOAN_STATUS_LABELS } from '@/components/loans/status';
 import { cop, monthLabel } from '@/lib/format';
 
@@ -54,7 +55,7 @@ type BookedEntry = {
 
 const SIN_TOTALES = { requested: 0, paid_capital: 0, paid_interest: 0, interest_debt: 0, current_balance: 0 };
 
-function computeBookedEntries(entries: LibroAccionistaEntry[]): BookedEntry[] {
+function computeBookedEntries(entries: LibroAccionistaEntry[], ajustes: AjustesDePrestamo): BookedEntry[] {
   return entries.map((e) => {
     const loans: BookedLoan[] = [];
     for (const l of e.loans) {
@@ -64,6 +65,7 @@ function computeBookedEntries(entries: LibroAccionistaEntry[]): BookedEntry[] {
         payments: l.payments,
         interestRate: Number(l.loan.interest_rate),
         disbursedAt: l.loan.disbursed_at ?? null,
+        ajustes,
       });
       if (!book.ok) {
         const numero = l.loan.loan_number ? ` #${l.loan.loan_number}` : '';
@@ -110,8 +112,8 @@ export default function LibroAccionistaPage() {
 
   const fetchAll = useCallback(async () => {
     try {
-      const raw = await getLibroAccionistaData(supabase);
-      const booked = computeBookedEntries(raw);
+      const [raw, ajustes] = await Promise.all([getLibroAccionistaData(supabase), getAjustesDePrestamo(supabase)]);
+      const booked = computeBookedEntries(raw, ajustes);
       setEntries(booked);
       if (booked.length > 0) {
         // Mantener la selección actual si sigue existiendo, sino elegir la primera.

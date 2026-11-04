@@ -3,6 +3,7 @@ import { requireUser } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { updatePaymentPlanSchema } from '@/lib/schemas/loan';
 import { agreedPlanFromRows, buildPaymentPlan } from '@/lib/loans';
+import { getAjustesDePrestamo } from '@/lib/loan-settings';
 import { hoyBogota, type FechaISO } from '@/shared/domain/fechas';
 
 // PUT /api/prestamos/[id] — accionista actualiza el plan de pagos (solo en draft).
@@ -74,6 +75,8 @@ export async function PUT(
       lastMonth,
       capitalOverrides: capital_overrides,
       requesting: true,
+      // RN-4.20, RN-4.21 and RN-4.3 ⚙️.
+      ajustes: await getAjustesDePrestamo(admin),
     });
     if (!plan.ok) {
       return NextResponse.json({ error: plan.error.mensaje }, { status: 422 });

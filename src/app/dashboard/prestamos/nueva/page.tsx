@@ -22,11 +22,12 @@ import { buildPaymentPlan, type PlanRow } from '@/lib/loans';
 import {
   accionesPorPrestamo,
   desembolsoDePrestamo,
+  AJUSTES_DE_PRESTAMO_POR_DEFECTO,
+  getAjustesDePrestamo,
   getTasaCuatroPorMil,
-  DIA_DE_CORTE_POR_DEFECTO,
-  PLAZO_HASTA_PERIODO_SIGUIENTE_POR_DEFECTO,
+  type AjustesDePrestamo,
   TASA_CUATRO_POR_MIL_POR_DEFECTO,
-  tasaDeInteresGlobalDesdeAjuste,
+  getTasaDeInteresGlobal,
   tasaEnPuntosBasicosDesdeAjuste,
 } from '@/lib/loan-settings';
 import { hoyBogota } from '@/shared/domain/fechas';
@@ -43,6 +44,7 @@ export default function NuevaSolicitudPage() {
   const [cashBalance, setCashBalance] = useState<number | null>(null);
   const [obligations, setObligations] = useState<UserObligationsStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const [amountInput, setAmountInput] = useState('');
@@ -55,6 +57,8 @@ export default function NuevaSolicitudPage() {
   const [capitalOverrides, setCapitalOverrides] = useState<Record<number, number>>({});
   const [editingMonth, setEditingMonth] = useState<number | null>(null);
   const [editingValue, setEditingValue] = useState('');
+  // RN-4.20, RN-4.21 and RN-4.3 ⚙️: section 10 defaults until the settings load.
+  const [ajustes, setAjustes] = useState<AjustesDePrestamo>(AJUSTES_DE_PRESTAMO_POR_DEFECTO);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,21 +66,33 @@ export default function NuevaSolicitudPage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.replace('/login'); return; }
 
-      const [periodShareValue, rateSetting, balance, obligationsStatus, fourPerThousandRate] = await Promise.all([
-        getOpenPeriodShareValue(supabase, user.id),
-        supabase.from('system_settings').select('value').eq('key', 'loan_interest_rate').maybeSingle(),
-        getCashBalance(supabase).catch(() => null),
-        checkUserObligations(supabase, user.id).catch(() => null),
-        getTasaCuatroPorMil(supabase).catch(() => TASA_CUATRO_POR_MIL_POR_DEFECTO),
-      ]);
+      let resultados;
+      try {
+        resultados = await Promise.all([
+          getOpenPeriodShareValue(supabase, user.id),
+          getTasaDeInteresGlobal(supabase),
+          getCashBalance(supabase).catch(() => null),
+          checkUserObligations(supabase, user.id).catch(() => null),
+          getTasaCuatroPorMil(supabase).catch(() => TASA_CUATRO_POR_MIL_POR_DEFECTO),
+          getAjustesDePrestamo(supabase),
+        ]);
+      } catch (err) {
+        console.error('No se pudo cargar la solicitud de préstamo:', err);
+        if (cancelled) return;
+        setLoadError('No se pudo cargar la configuración del préstamo. Intenta de nuevo en un momento.');
+        setLoading(false);
+        return;
+      }
+      const [periodShareValue, rateSetting, balance, obligationsStatus, fourPerThousandRate, loanSettings] = resultados;
 
       if (cancelled) return;
       setShareValue(periodShareValue);
-      // RN-4.18: global setting, 2% when missing or invalid.
-      setInterestRate(tasaDeInteresGlobalDesdeAjuste(rateSetting.data?.value));
+      // RN-4.18: global setting, 2% when missing or invalid; a failed read stops the page above.
+      setInterestRate(rateSetting);
       setCashBalance(balance);
       setObligations(obligationsStatus);
       setTasaPorMil(fourPerThousandRate);
+      setAjustes(loanSettings);
       setLoading(false);
     })();
     return () => { cancelled = true; };
@@ -155,14 +171,15 @@ export default function NuevaSolicitudPage() {
   // recalculated with the real date when the loan is disbursed.
   const hoy = useMemo(() => hoyBogota(new Date()), []);
 
-  // RN-4.3 and RN-4.15: maximum term, until December of the period.
+  // RN-4.3 and RN-4.15: maximum term, until December of the period (or of
+  // the next period when the admin enables it).
   const plazoMaximo = useMemo(
     () =>
       plazoDelPrestamo({
-        mesAplicado: mesAplicado(hoy, DIA_DE_CORTE_POR_DEFECTO),
-        hastaPeriodoSiguiente: PLAZO_HASTA_PERIODO_SIGUIENTE_POR_DEFECTO,
+        mesAplicado: mesAplicado(hoy, ajustes.diaDeCorte),
+        hastaPeriodoSiguiente: ajustes.plazoHastaPeriodoSiguiente,
       }),
-    [hoy],
+    [hoy, ajustes],
   );
 
   // RN-4.3: the shareholder chooses the term, up to the maximum.
@@ -181,9 +198,10 @@ export default function NuevaSolicitudPage() {
       capitalOverrides,
       // RN-4.3b: same validation as the API when requesting.
       requesting: true,
+      ajustes,
     });
     return r.ok ? { plan: r.value, planError: null } : { plan: [], planError: r.error.mensaje };
-  }, [requestedAmount, interestRate, hoy, months, capitalOverrides]);
+  }, [requestedAmount, interestRate, hoy, months, capitalOverrides, ajustes]);
 
   const exceedsCashBalance = cashBalance !== null && requestedAmount > cashBalance && requestedAmount > 0;
 
@@ -315,6 +333,10 @@ export default function NuevaSolicitudPage() {
     return <div className="animate-pulse text-[var(--color-text-subtle)] text-sm">Cargando…</div>;
   }
 
+  if (loadError) {
+    return <p className="text-sm text-[var(--color-danger)]">{loadError}</p>;
+  }
+
   return (
     <div className="flex flex-col gap-7 animate-in fade-in duration-300">
       <header>
@@ -394,7 +416,7 @@ export default function NuevaSolicitudPage() {
                   className="w-full h-10 rounded-[9px] bg-[var(--color-surface)] border border-[var(--color-border)] px-3 text-[14px] font-semibold text-[var(--color-text)] focus:outline-none focus:border-[var(--color-brand)]"
                 />
                 <p className="text-[11px] text-[var(--color-text-subtle)] mt-1.5 leading-snug">
-                  Máximo {plazoMaximo.meses} {plazoMaximo.meses === 1 ? 'mes' : 'meses'}, hasta {monthLabel(plazoMaximo.mesFinal, true).toLowerCase()}. Si el desembolso es después del día {DIA_DE_CORTE_POR_DEFECTO}, el préstamo empieza el mes siguiente.
+                  Máximo {plazoMaximo.meses} {plazoMaximo.meses === 1 ? 'mes' : 'meses'}, hasta {monthLabel(plazoMaximo.mesFinal, true).toLowerCase()}. Si el desembolso es después del día {ajustes.diaDeCorte}, el préstamo empieza el mes siguiente.
                 </p>
               </div>
             </div>

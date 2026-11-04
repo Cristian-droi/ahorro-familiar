@@ -6,6 +6,7 @@ import { buildPaymentPlan } from '@/lib/loans';
 import {
   accionesPorPrestamo,
   desembolsoDePrestamo,
+  getAjustesDePrestamo,
   getTasaCuatroPorMil,
   tasaDeInteresGlobalDesdeAjuste,
 } from '@/lib/loan-settings';
@@ -136,6 +137,8 @@ export async function POST(request: Request) {
       disbursedOn: hoyBogota(new Date()),
       months: payment_plan_months,
       requesting: true,
+      // RN-4.20, RN-4.21 y RN-4.3 ⚙️.
+      ajustes: await getAjustesDePrestamo(admin),
     });
     if (!plan.ok) {
       return NextResponse.json({ error: plan.error.mensaje }, { status: 422 });

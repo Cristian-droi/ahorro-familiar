@@ -3,6 +3,7 @@ import type { Database } from '@/types/database';
 import type { Loan, LoanVote, LoanWithDetails, Profile } from '@/types/entities';
 import { eligibleVoterCount } from './votes';
 import { calcAccruedInterest, summarizeActiveLoanDebt, type LoanInterestItem } from '@/lib/loans';
+import { getAjustesDePrestamo } from '@/lib/loan-settings';
 import type { FechaISO } from '@/shared/domain/fechas';
 
 type SB = SupabaseClient<Database>;
@@ -178,6 +179,7 @@ export async function getMyActiveLoansDebt(supabase: SB, today?: FechaISO): Prom
   if (rows.length === 0) return [];
 
   const itemsByLoan = await getLoanInterestItems(supabase, rows.map((l) => l.id));
+  const ajustes = await getAjustesDePrestamo(supabase);
   return rows.map((loan) => {
     const summary = summarizeActiveLoanDebt({
       requestedAmount: loan.requested_amount,
@@ -185,6 +187,7 @@ export async function getMyActiveLoansDebt(supabase: SB, today?: FechaISO): Prom
       disbursedAt: loan.disbursed_at,
       items: itemsByLoan.get(loan.id) ?? [],
       today,
+      ajustes,
     });
     if (!summary.ok) {
       throw new Error(`No se pudo calcular la deuda del préstamo ${loan.id}: ${summary.error.mensaje}`);
@@ -223,6 +226,7 @@ export async function getLoanInterestOwed(supabase: SB, loanId: string, today?: 
     disbursedAt: loan.disbursed_at,
     items: itemsByLoan.get(loan.id) ?? [],
     today,
+    ajustes: await getAjustesDePrestamo(supabase),
   });
   if (!owed.ok) {
     throw new Error(`No se pudo calcular el interés del préstamo ${loan.id}: ${owed.error.mensaje}`);
