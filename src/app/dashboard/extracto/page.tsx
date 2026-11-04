@@ -43,7 +43,8 @@ import {
   getUserUtilitiesByYear,
   type MonthlyUtility,
 } from '@/lib/data/loans';
-import { computeLoanBook, computeUnifiedLoanBook, LOAN_STATUS_LABELS } from '@/lib/loans';
+import { computeLoanBook, computeUnifiedLoanBook } from '@/lib/loans';
+import { LOAN_STATUS_LABELS } from '@/components/loans/status';
 import { cop, monthLabel } from '@/lib/format';
 import {
   computeFineForMonth,

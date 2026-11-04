@@ -10,7 +10,7 @@ import { supabase } from '@/lib/supabase';
 import { getAllLoans, type LoanWithBorrower } from '@/lib/data/loans';
 import { cop } from '@/lib/format';
 import { eligibleVoterCount } from '@/lib/data/votes';
-import { LOAN_STATUS_LABELS, LOAN_STATUS_TONE } from '@/lib/loans';
+import { LOAN_STATUS_LABELS, LOAN_STATUS_TONE } from '@/components/loans/status';
 import { votosNecesarios } from '@/modules/prestamos/domain/votacion';
 
 const STATUS_ORDER: Record<string, number> = {

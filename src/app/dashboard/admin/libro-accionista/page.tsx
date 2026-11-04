@@ -28,13 +28,8 @@ import {
   type LibroAccionistaEntry,
   type LibroAccionistaLoan,
 } from '@/lib/data/loans';
-import {
-  computeLoanBook,
-  computeUnifiedLoanBook,
-  type LoanBook,
-  type UnifiedLoanBook,
-  LOAN_STATUS_LABELS,
-} from '@/lib/loans';
+import { computeLoanBook, computeUnifiedLoanBook, type LoanBook, type UnifiedLoanBook } from '@/lib/loans';
+import { LOAN_STATUS_LABELS } from '@/components/loans/status';
 import { cop, monthLabel } from '@/lib/format';
 
 type BookedLoan = {

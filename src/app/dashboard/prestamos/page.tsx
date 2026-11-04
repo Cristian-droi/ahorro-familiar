@@ -10,7 +10,7 @@ import { Plus, ChevronRight, Vote, ThumbsUp, ThumbsDown, Clock } from 'lucide-re
 import { cop } from '@/lib/format';
 import { getProfileRole } from '@/lib/data/profiles';
 import { eligibleVoterCount } from '@/lib/data/votes';
-import { LOAN_STATUS_LABELS, LOAN_STATUS_TONE } from '@/lib/loans';
+import { LOAN_STATUS_LABELS, LOAN_STATUS_TONE } from '@/components/loans/status';
 import { votosNecesarios } from '@/modules/prestamos/domain/votacion';
 import { PrestamosRealtime } from './PrestamosRealtime';
 import type { Loan } from '@/types/entities';

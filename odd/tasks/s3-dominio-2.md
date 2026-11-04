@@ -38,7 +38,7 @@ Scope note (S4): the domain only returns totals; it never receives or returns wh
 | T4e2b | S6 | delegated writer + inline (applied month) | done | one source of interest; suite 445/445 |
 | T4e3 | S6 | delegated writer (context backstop) | done | `libroDelPrestamo`/`libroUnificado`; suite 477/477 |
 | T4e3b | S6 | delegated writer (context backstop) | done | RN-4.31 cumulative pending interest; suite 487/487 |
-| T4f | S6 | pending | pending | `LOAN_STATUS_*` UI constants out of `src/lib` |
+| T4f | S6 | inline | done | `LOAN_STATUS_*` moved to `src/components/loans/status.ts` |
 | T5 | S8 | inline | pending | |
 
 T4 runs after T1–T3 so the callers move to domain functions that already exist.
@@ -104,3 +104,4 @@ T4 runs after T1–T3 so the callers move to domain functions that already exist
 - **L57 (2026-11-01)** T4e3b done by a delegated writer: rows carry `interesesPendientesAcumulados` (pending carried + month interest − paid for that month, shown with a floor of 0; the last row equals the total); payments apply to their `target_month`, which the data already sets to the month being paid (`next_due_month`, the last finished month), so no shift is applied; rows continue after the agreed term on the real balance up to the current month; a paid loan has no next installment; the unified book carries each loan running total. Pages show "Intereses pendientes". RED → GREEN; suite 487/487. Open for Cris: an interest overpayment lowers later rows; a loan with capital 0 but interest owed still shows a capital installment as next; the current unfinished month shows a row with 0 interest.
 - **L58 (2026-11-01)** R3-001/R3-002 fixed inline: in the admin shareholder book a loan the domain rejects only affects its shareholder, who shows "No se pudo calcular el préstamo #N: …" with zero totals instead of breaking the page for everyone; the loan detail page shows "No se pudo calcular la conciliación del préstamo: …" instead of hiding the table, and keeps loading the rest. Not tried in a browser. Suite 487/487.
 - **L59 (2026-11-01)** Cris: "REvisa unicamnete los nuevos cambio 5e61d9c  y 4316111". Review of `70a590d..4316111` (lens reliability) approved and acknowledged. R3-001 fixed: the loan detail page clears the stale book or error on each load. Follow-ups: no test for the per-shareholder failure path (R3-002); interest overpayment lowering later rows is untested and still open for Cris (R3-003).
+- **L60 (2026-11-03)** Cris: "Sí, T4f". `LOAN_STATUS_LABELS` and `LOAN_STATUS_TONE` moved from `src/lib/loans.ts` to `src/components/loans/status.ts`; the 7 pages import them from there. Suite 487/487, ESLint 0 errors, `tsc` 0 errors. T4 (S6) is complete.

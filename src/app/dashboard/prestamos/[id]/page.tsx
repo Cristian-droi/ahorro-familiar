@@ -11,12 +11,8 @@ import { showToast } from '@/components/ui/Toast';
 import { ChevronLeft, ThumbsUp, ThumbsDown, Users, AlertTriangle, RotateCcw, Send } from 'lucide-react';
 import { getLoanWithDetails, getMyActiveLoansDebt, type LoanWithVoting } from '@/lib/data/loans';
 import { cop } from '@/lib/format';
-import {
-  LOAN_STATUS_LABELS,
-  LOAN_STATUS_TONE,
-  computeLoanBook,
-  type LoanBook,
-} from '@/lib/loans';
+import { computeLoanBook, type LoanBook } from '@/lib/loans';
+import { LOAN_STATUS_LABELS, LOAN_STATUS_TONE } from '@/components/loans/status';
 import { votosNecesarios } from '@/modules/prestamos/domain/votacion';
 
 export default function LoanDetailPage() {

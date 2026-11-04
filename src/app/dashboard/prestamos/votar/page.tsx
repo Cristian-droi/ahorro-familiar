@@ -12,7 +12,7 @@ import { ThumbsUp, ThumbsDown, ChevronRight, CheckCircle2, Clock } from 'lucide-
 import { getLoansForVoting, getMyVotingHistory, type VoteHistoryItem } from '@/lib/data/loans';
 import type { Loan } from '@/types/entities';
 import { cop } from '@/lib/format';
-import { LOAN_STATUS_LABELS, LOAN_STATUS_TONE } from '@/lib/loans';
+import { LOAN_STATUS_LABELS, LOAN_STATUS_TONE } from '@/components/loans/status';
 
 type VotingLoan = Loan & { has_voted: boolean; borrower_name: string };
 

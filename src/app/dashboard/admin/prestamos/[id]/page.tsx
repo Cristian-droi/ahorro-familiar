@@ -31,12 +31,8 @@ import {
 import { getLoanWithDetails, getCashBalance, getLoanInterestItems, type LoanWithVoting } from '@/lib/data/loans';
 import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import { cop } from '@/lib/format';
-import {
-  LOAN_STATUS_LABELS,
-  LOAN_STATUS_TONE,
-  calcAccruedInterest,
-  type LoanInterestItem,
-} from '@/lib/loans';
+import { calcAccruedInterest, type LoanInterestItem } from '@/lib/loans';
+import { LOAN_STATUS_LABELS, LOAN_STATUS_TONE } from '@/components/loans/status';
 import { votosNecesarios } from '@/modules/prestamos/domain/votacion';
 
 function extensionFromMime(mime: string) {
