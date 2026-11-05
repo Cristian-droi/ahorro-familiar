@@ -192,7 +192,7 @@ describe('getLoanInterestItems (R3-005)', () => {
 });
 
 describe('getLoanInterestOwed (receipt approval, RN-4.24)', () => {
-  const loan = { id: 'loan-1', requested_amount: 1_000_000, interest_rate: 0.02, disbursed_at: '2026-01-10T15:00:00+00:00' };
+  const loan = { id: 'loan-1', requested_amount: 1_000_000, interest_rate: 0.02, disbursed_at: '2026-01-10T15:00:00+00:00', full_rate_day_limit: 15, cutoff_day: 25 };
 
   it('counts approved items only, so the pending receipt being approved is not counted', async () => {
     const { supabase } = fakeClient({
@@ -219,9 +219,9 @@ describe('getLoanInterestOwed (receipt approval, RN-4.24)', () => {
 
 describe('getMyActiveLoansDebt (replaces get_user_active_loans_debt)', () => {
   const loans = [
-    { id: 'loan-1', user_id: 'user-1', status: 'active', loan_number: 7, disbursement_number: 'D-7', requested_amount: 1_000_000, interest_rate: 0.02, disbursed_at: '2026-01-10T15:00:00+00:00' },
-    { id: 'loan-2', user_id: 'user-1', status: 'paid', loan_number: 8, disbursement_number: 'D-8', requested_amount: 500_000, interest_rate: 0.02, disbursed_at: '2026-01-10T15:00:00+00:00' },
-    { id: 'loan-3', user_id: 'user-2', status: 'active', loan_number: 9, disbursement_number: 'D-9', requested_amount: 500_000, interest_rate: 0.02, disbursed_at: '2026-01-10T15:00:00+00:00' },
+    { id: 'loan-1', user_id: 'user-1', status: 'active', loan_number: 7, disbursement_number: 'D-7', requested_amount: 1_000_000, interest_rate: 0.02, disbursed_at: '2026-01-10T15:00:00+00:00', full_rate_day_limit: 15, cutoff_day: 25 },
+    { id: 'loan-2', user_id: 'user-1', status: 'paid', loan_number: 8, disbursement_number: 'D-8', requested_amount: 500_000, interest_rate: 0.02, disbursed_at: '2026-01-10T15:00:00+00:00', full_rate_day_limit: 15, cutoff_day: 25 },
+    { id: 'loan-3', user_id: 'user-2', status: 'active', loan_number: 9, disbursement_number: 'D-9', requested_amount: 500_000, interest_rate: 0.02, disbursed_at: '2026-01-10T15:00:00+00:00', full_rate_day_limit: 15, cutoff_day: 25 },
     { id: 'loan-4', user_id: 'user-1', status: 'active', loan_number: 10, disbursement_number: null, requested_amount: 500_000, interest_rate: 0.02, disbursed_at: null },
   ];
 

@@ -3,7 +3,7 @@ import type { Database } from '@/types/database';
 import type { Loan, LoanVote, LoanWithDetails, Profile } from '@/types/entities';
 import { eligibleVoterCount } from './votes';
 import { calcAccruedInterest, summarizeActiveLoanDebt, type LoanInterestItem } from '@/lib/loans';
-import { getAjustesDePrestamo } from '@/lib/loan-settings';
+import { ajustesDelPrestamo, getAjustesDePrestamo } from '@/lib/loan-settings';
 import type { FechaISO } from '@/shared/domain/fechas';
 
 type SB = SupabaseClient<Database>;
@@ -170,7 +170,7 @@ export async function getMyActiveLoansDebt(supabase: SB, today?: FechaISO): Prom
 
   const { data: loans, error } = await supabase
     .from('loans')
-    .select('id, loan_number, disbursement_number, requested_amount, interest_rate, disbursed_at')
+    .select('id, loan_number, disbursement_number, requested_amount, interest_rate, disbursed_at, full_rate_day_limit, cutoff_day')
     .eq('user_id', userId)
     .eq('status', 'active')
     .not('disbursed_at', 'is', null);
@@ -181,13 +181,18 @@ export async function getMyActiveLoansDebt(supabase: SB, today?: FechaISO): Prom
   const itemsByLoan = await getLoanInterestItems(supabase, rows.map((l) => l.id));
   const ajustes = await getAjustesDePrestamo(supabase);
   return rows.map((loan) => {
+    // RN-4.21b: each disbursed loan is computed with its own stored days.
+    const ajustesPropios = ajustesDelPrestamo(loan, ajustes);
+    if (!ajustesPropios.ok) {
+      throw new Error(`No se pudo calcular la deuda del préstamo ${loan.id}: ${ajustesPropios.error.mensaje}`);
+    }
     const summary = summarizeActiveLoanDebt({
       requestedAmount: loan.requested_amount,
       rate: loan.interest_rate,
       disbursedAt: loan.disbursed_at,
       items: itemsByLoan.get(loan.id) ?? [],
       today,
-      ajustes,
+      ajustes: ajustesPropios.value,
     });
     if (!summary.ok) {
       throw new Error(`No se pudo calcular la deuda del préstamo ${loan.id}: ${summary.error.mensaje}`);
@@ -213,12 +218,17 @@ export async function getMyActiveLoansDebt(supabase: SB, today?: FechaISO): Prom
 export async function getLoanInterestOwed(supabase: SB, loanId: string, today?: FechaISO): Promise<number> {
   const { data: loan, error } = await supabase
     .from('loans')
-    .select('id, requested_amount, interest_rate, disbursed_at')
+    .select('id, requested_amount, interest_rate, disbursed_at, full_rate_day_limit, cutoff_day')
     .eq('id', loanId)
     .maybeSingle();
   if (error) throw error;
   if (!loan?.disbursed_at) return 0;
 
+  // RN-4.21b: the loan is computed with its own stored days.
+  const ajustes = ajustesDelPrestamo(loan, await getAjustesDePrestamo(supabase));
+  if (!ajustes.ok) {
+    throw new Error(`No se pudo calcular el interés del préstamo ${loan.id}: ${ajustes.error.mensaje}`);
+  }
   const itemsByLoan = await getLoanInterestItems(supabase, [loan.id]);
   const owed = calcAccruedInterest({
     requestedAmount: loan.requested_amount,
@@ -226,7 +236,7 @@ export async function getLoanInterestOwed(supabase: SB, loanId: string, today?: 
     disbursedAt: loan.disbursed_at,
     items: itemsByLoan.get(loan.id) ?? [],
     today,
-    ajustes: await getAjustesDePrestamo(supabase),
+    ajustes: ajustes.value,
   });
   if (!owed.ok) {
     throw new Error(`No se pudo calcular el interés del préstamo ${loan.id}: ${owed.error.mensaje}`);

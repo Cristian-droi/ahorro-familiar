@@ -3,7 +3,7 @@ import { requireUser } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { updatePaymentPlanSchema } from '@/lib/schemas/loan';
 import { agreedPlanFromRows, buildPaymentPlan } from '@/lib/loans';
-import { getAjustesDePrestamo } from '@/lib/loan-settings';
+import { ajustesDelPrestamo, getAjustesDePrestamo } from '@/lib/loan-settings';
 import { hoyBogota, type FechaISO } from '@/shared/domain/fechas';
 
 // PUT /api/prestamos/[id] — accionista actualiza el plan de pagos (solo en draft).
@@ -64,6 +64,13 @@ export async function PUT(
       lastMonth = agreed.value.lastMonth;
     }
 
+    // RN-4.20, RN-4.21 and RN-4.3 ⚙️: a draft is not disbursed, so the current
+    // settings apply (RN-4.21b).
+    const ajustes = ajustesDelPrestamo(loan, await getAjustesDePrestamo(admin));
+    if (!ajustes.ok) {
+      return NextResponse.json({ error: ajustes.error.mensaje }, { status: 422 });
+    }
+
     // RN-4.3 (chosen term, up to the maximum) and RN-4.26 (free capital). A
     // missing or invalid loan rate is reported (422), never replaced by 2%.
     // RN-4.3b: editing the request rejects past months (capital or term end).
@@ -75,8 +82,7 @@ export async function PUT(
       lastMonth,
       capitalOverrides: capital_overrides,
       requesting: true,
-      // RN-4.20, RN-4.21 and RN-4.3 ⚙️.
-      ajustes: await getAjustesDePrestamo(admin),
+      ajustes: ajustes.value,
     });
     if (!plan.ok) {
       return NextResponse.json({ error: plan.error.mensaje }, { status: 422 });

@@ -44,7 +44,7 @@ import {
   type MonthlyUtility,
 } from '@/lib/data/loans';
 import { computeLoanBook, computeUnifiedLoanBook } from '@/lib/loans';
-import { getAjustesDePrestamo } from '@/lib/loan-settings';
+import { ajustesDelPrestamo, getAjustesDePrestamo } from '@/lib/loan-settings';
 import { LOAN_STATUS_LABELS } from '@/components/loans/status';
 import { cop, monthLabel } from '@/lib/format';
 import {
@@ -312,13 +312,16 @@ export function ExtractoView({ targetUserId }: ExtractoViewProps = {}) {
         }
         const entry = entries[0];
         const books = entry.loans.map((l) => {
+          // RN-4.21b: each disbursed loan is computed with its own stored days.
+          const ajustesPropios = ajustesDelPrestamo(l.loan, ajustes);
+          if (!ajustesPropios.ok) throw new Error(ajustesPropios.error.mensaje);
           const book = computeLoanBook({
             requestedAmount: Number(l.loan.requested_amount),
             plan: l.plan,
             payments: l.payments,
             interestRate: Number(l.loan.interest_rate),
             disbursedAt: l.loan.disbursed_at,
-            ajustes,
+            ajustes: ajustesPropios.value,
           });
           // Caught below: the monthly table renders without the summary.
           if (!book.ok) throw new Error(book.error.mensaje);

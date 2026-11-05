@@ -1,4 +1,4 @@
-import { getAjustesDePrestamo } from '@/lib/loan-settings';
+import { ajustesDelPrestamo, getAjustesDePrestamo } from '@/lib/loan-settings';
 import { type SupabaseClient } from '@supabase/supabase-js';
 import { type Database } from '@/types/database';
 import { getOpenPeriodShareValue } from '@/lib/data/share-value';
@@ -107,7 +107,7 @@ export async function checkUserObligations(
   //    (interesesAdeudados, sección 11 n.º 13) con una sola consulta de pagos.
   const { data: activeLoans, error: loansError } = await supabase
     .from('loans')
-    .select('id, loan_number, disbursement_number, outstanding_balance, requested_amount, interest_rate, disbursed_at')
+    .select('id, loan_number, disbursement_number, outstanding_balance, requested_amount, interest_rate, disbursed_at, full_rate_day_limit, cutoff_day')
     .eq('user_id', userId)
     .eq('status', 'active')
     .not('disbursed_at', 'is', null);
@@ -129,13 +129,19 @@ export async function checkUserObligations(
   const ajustes = await getAjustesDePrestamo(supabase);
   const prestamos: PrestamoActivo[] = [];
   for (const loan of loans) {
+    // RN-4.21b: each disbursed loan is computed with its own stored days.
+    const ajustesPropios = ajustesDelPrestamo(loan, ajustes);
+    if (!ajustesPropios.ok) {
+      console.error(`Error al leer los días del préstamo ${loan.id}:`, ajustesPropios.error);
+      throw new Error(ajustesPropios.error.mensaje);
+    }
     const interes = calcAccruedInterest({
       requestedAmount: loan.requested_amount,
       rate: loan.interest_rate,
       disbursedAt: loan.disbursed_at as string,
       items: itemsByLoan.get(loan.id) ?? [],
       today: hoy,
-      ajustes,
+      ajustes: ajustesPropios.value,
     });
     if (!interes.ok) {
       console.error(`Error al calcular el interés adeudado del préstamo ${loan.id}:`, interes.error);

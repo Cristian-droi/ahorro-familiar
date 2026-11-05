@@ -95,6 +95,40 @@ export async function getAjustesDePrestamo(client: TypedSupabaseClient): Promise
   return ajustesDePrestamoDesdeFilas(data ?? []);
 }
 
+// The loan fields that decide which days apply to it (RN-4.21b).
+export interface DiasGuardadosDelPrestamo {
+  disbursed_at: string | null;
+  full_rate_day_limit?: number | null;
+  cutoff_day?: number | null;
+}
+
+// RN-4.21b: the single place that decides which loan settings apply to a loan.
+// A disbursed loan always uses the half-rate day limit (RN-4.20) and the
+// cut-off day (RN-4.21) stored on it when it was disbursed; a loan that is not
+// disbursed yet (requests, plan previews) uses the current settings. A
+// disbursed loan without its stored days is a data error, never replaced by
+// the current settings.
+export function ajustesDelPrestamo(
+  prestamo: DiasGuardadosDelPrestamo,
+  ajustesActuales: AjustesDePrestamo,
+): Result<AjustesDePrestamo, ErrorDeDominio> {
+  if (!prestamo.disbursed_at) return ok(ajustesActuales);
+  const limite = prestamo.full_rate_day_limit;
+  const corte = prestamo.cutoff_day;
+  if (limite === null || limite === undefined || corte === null || corte === undefined) {
+    return err({
+      codigo: 'dias_del_prestamo_faltantes',
+      mensaje:
+        'El préstamo desembolsado no tiene guardados el día límite de media tasa y el día de corte. Revisá los datos del préstamo.',
+    });
+  }
+  return validarAjustesDePrestamo({
+    diaLimiteTasaCompleta: limite,
+    diaDeCorte: corte,
+    plazoHastaPeriodoSiguiente: ajustesActuales.plazoHastaPeriodoSiguiente,
+  });
+}
+
 // The loan rate (`system_settings.default_loan_interest_rate`,
 // `loans.interest_rate`) is stored as a fraction (0.02). The domain takes
 // integer basis points (200), so the conversion happens here, once, for every

@@ -136,6 +136,10 @@ export interface Loan {
   loan_number: number;
   // RN-4.5b: when the request left draft; null while it is a draft.
   submitted_at?: string | null;
+  // RN-4.21b: the half-rate day limit and the cut-off day in force when the
+  // loan was disbursed; null until then. Read them with `ajustesDelPrestamo`.
+  full_rate_day_limit?: number | null;
+  cutoff_day?: number | null;
   created_at: string;
   updated_at: string;
   deduct_obligations?: boolean;

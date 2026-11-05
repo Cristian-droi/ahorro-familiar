@@ -153,14 +153,16 @@ export async function POST(
       return NextResponse.json({ error: agreed.error.mensaje }, { status: 422 });
     }
 
+    // RN-4.20, RN-4.21 and RN-4.3 ⚙️. RN-4.21b: the days in force today are
+    // the ones this loan keeps; they are stored below with disbursed_at.
+    const ajustes = await getAjustesDePrestamo(admin);
     const plan = buildPaymentPlan({
       requestedAmount: Number(loan.requested_amount),
       rate: loan.interest_rate,
       disbursedOn: hoyBogota(disbursedAt),
       lastMonth: agreed.value.lastMonth,
       capitalOverrides: agreed.value.capitalOverrides,
-      // RN-4.20, RN-4.21 and RN-4.3 ⚙️.
-      ajustes: await getAjustesDePrestamo(admin),
+      ajustes,
     });
     if (!plan.ok) {
       return NextResponse.json({ error: plan.error.mensaje }, { status: 422 });
@@ -175,6 +177,9 @@ export async function POST(
         disbursed_amount: disbursedAmount,
         four_per_thousand: fourPerThousand,
         disbursed_at: disbursedAt.toISOString(),
+        // RN-4.21b: the loan is always computed with these days.
+        full_rate_day_limit: ajustes.diaLimiteTasaCompleta,
+        cutoff_day: ajustes.diaDeCorte,
         outstanding_balance: loan.requested_amount,
         disbursement_proof_path: payment_method === 'cash' ? 'cash' : disbursement_proof_path,
         updated_at: disbursedAt.toISOString(),

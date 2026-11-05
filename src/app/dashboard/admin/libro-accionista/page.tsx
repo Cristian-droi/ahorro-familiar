@@ -29,7 +29,7 @@ import {
   type LibroAccionistaLoan,
 } from '@/lib/data/loans';
 import { computeLoanBook, computeUnifiedLoanBook, type LoanBook, type UnifiedLoanBook } from '@/lib/loans';
-import { getAjustesDePrestamo, type AjustesDePrestamo } from '@/lib/loan-settings';
+import { ajustesDelPrestamo, getAjustesDePrestamo, type AjustesDePrestamo } from '@/lib/loan-settings';
 import { LOAN_STATUS_LABELS } from '@/components/loans/status';
 import { cop, monthLabel } from '@/lib/format';
 
@@ -59,14 +59,18 @@ function computeBookedEntries(entries: LibroAccionistaEntry[], ajustes: AjustesD
   return entries.map((e) => {
     const loans: BookedLoan[] = [];
     for (const l of e.loans) {
-      const book = computeLoanBook({
-        requestedAmount: Number(l.loan.requested_amount),
-        plan: l.plan,
-        payments: l.payments,
-        interestRate: Number(l.loan.interest_rate),
-        disbursedAt: l.loan.disbursed_at ?? null,
-        ajustes,
-      });
+      // RN-4.21b: each disbursed loan is computed with its own stored days.
+      const ajustesPropios = ajustesDelPrestamo(l.loan, ajustes);
+      const book = ajustesPropios.ok
+        ? computeLoanBook({
+            requestedAmount: Number(l.loan.requested_amount),
+            plan: l.plan,
+            payments: l.payments,
+            interestRate: Number(l.loan.interest_rate),
+            disbursedAt: l.loan.disbursed_at ?? null,
+            ajustes: ajustesPropios.value,
+          })
+        : ajustesPropios;
       if (!book.ok) {
         const numero = l.loan.loan_number ? ` #${l.loan.loan_number}` : '';
         return {

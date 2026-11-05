@@ -32,7 +32,7 @@ import { getLoanWithDetails, getCashBalance, getLoanInterestItems, type LoanWith
 import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import { cop } from '@/lib/format';
 import { calcAccruedInterest, type LoanInterestItem } from '@/lib/loans';
-import { getAjustesDePrestamo, type AjustesDePrestamo } from '@/lib/loan-settings';
+import { ajustesDelPrestamo, getAjustesDePrestamo, type AjustesDePrestamo } from '@/lib/loan-settings';
 import { LOAN_STATUS_LABELS, LOAN_STATUS_TONE } from '@/components/loans/status';
 import { votosNecesarios } from '@/modules/prestamos/domain/votacion';
 
@@ -213,15 +213,19 @@ export default function AdminLoanDetailPage() {
   const exceedsBalance = cashBalance !== null && shortfall > 0;
 
   // Interest owed from the domain (section 11, n.º 13); null when it cannot be computed.
+  // RN-4.21b: the disbursed loan is computed with its own stored days.
+  const ajustesPropios = ajustes ? ajustesDelPrestamo(loan, ajustes) : null;
   const accruedInterestResult =
-    loan.status === 'active' && loan.disbursed_at && interestItems && ajustes
-      ? calcAccruedInterest({
-          requestedAmount: loan.requested_amount,
-          rate: loan.interest_rate,
-          disbursedAt: loan.disbursed_at,
-          items: interestItems,
-          ajustes,
-        })
+    loan.status === 'active' && loan.disbursed_at && interestItems && ajustesPropios
+      ? ajustesPropios.ok
+        ? calcAccruedInterest({
+            requestedAmount: loan.requested_amount,
+            rate: loan.interest_rate,
+            disbursedAt: loan.disbursed_at,
+            items: interestItems,
+            ajustes: ajustesPropios.value,
+          })
+        : ajustesPropios
       : null;
   const accruedInterest = accruedInterestResult?.ok ? accruedInterestResult.value : null;
 

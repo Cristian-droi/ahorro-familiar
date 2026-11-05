@@ -208,6 +208,7 @@ export type Database = {
           admin_notes: string | null
           borrower_seen_status_at: string | null
           created_at: string
+          cutoff_day: number | null
           deduct_obligations: boolean | null
           deducted_capital_amount: number | null
           deducted_fines_amount: number | null
@@ -219,6 +220,7 @@ export type Database = {
           disbursement_number: string | null
           disbursement_proof_path: string | null
           four_per_thousand: number
+          full_rate_day_limit: number | null
           id: string
           interest_rate: number
           last_interest_payment_date: string | null
@@ -241,6 +243,7 @@ export type Database = {
           admin_notes?: string | null
           borrower_seen_status_at?: string | null
           created_at?: string
+          cutoff_day?: number | null
           deduct_obligations?: boolean | null
           deducted_capital_amount?: number | null
           deducted_fines_amount?: number | null
@@ -252,6 +255,7 @@ export type Database = {
           disbursement_number?: string | null
           disbursement_proof_path?: string | null
           four_per_thousand?: number
+          full_rate_day_limit?: number | null
           id?: string
           interest_rate?: number
           last_interest_payment_date?: string | null
@@ -274,6 +278,7 @@ export type Database = {
           admin_notes?: string | null
           borrower_seen_status_at?: string | null
           created_at?: string
+          cutoff_day?: number | null
           deduct_obligations?: boolean | null
           deducted_capital_amount?: number | null
           deducted_fines_amount?: number | null
@@ -285,6 +290,7 @@ export type Database = {
           disbursement_number?: string | null
           disbursement_proof_path?: string | null
           four_per_thousand?: number
+          full_rate_day_limit?: number | null
           id?: string
           interest_rate?: number
           last_interest_payment_date?: string | null

@@ -12,7 +12,7 @@ import { ChevronLeft, ThumbsUp, ThumbsDown, Users, AlertTriangle, RotateCcw, Sen
 import { getLoanWithDetails, getMyActiveLoansDebt, type LoanWithVoting } from '@/lib/data/loans';
 import { cop } from '@/lib/format';
 import { computeLoanBook, type LoanBook } from '@/lib/loans';
-import { getAjustesDePrestamo } from '@/lib/loan-settings';
+import { ajustesDelPrestamo, getAjustesDePrestamo } from '@/lib/loan-settings';
 import { LOAN_STATUS_LABELS, LOAN_STATUS_TONE } from '@/components/loans/status';
 import { votosNecesarios } from '@/modules/prestamos/domain/votacion';
 
@@ -71,14 +71,18 @@ export default function LoanDetailPage() {
             amount: Number(r.amount),
           }));
 
-        const book = computeLoanBook({
-          requestedAmount: Number(data.requested_amount),
-          plan: data.payment_plan,
-          payments: approvedPayments,
-          interestRate: Number(data.interest_rate),
-          disbursedAt: data.disbursed_at,
-          ajustes: await getAjustesDePrestamo(supabase),
-        });
+        // RN-4.21b: a disbursed loan is computed with its own stored days.
+        const ajustes = ajustesDelPrestamo(data, await getAjustesDePrestamo(supabase));
+        const book = ajustes.ok
+          ? computeLoanBook({
+              requestedAmount: Number(data.requested_amount),
+              plan: data.payment_plan,
+              payments: approvedPayments,
+              interestRate: Number(data.interest_rate),
+              disbursedAt: data.disbursed_at,
+              ajustes: ajustes.value,
+            })
+          : ajustes;
         if (book.ok) {
           setLoanBook(book.value);
           setLoanBookError(null);

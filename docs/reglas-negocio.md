@@ -128,6 +128,8 @@
 - **RN-4.19** **Interés simple:** los intereses atrasados **no** generan intereses.
 - **RN-4.20** **Primer mes:** si el desembolso es **después del día 15** ⚙️, se cobra **media tasa (1%)**. Es una regla nueva en la app: el Sheet no la aplica.
 - **RN-4.21** **Desembolso después del día 25** ⚙️: el préstamo pasa al mes siguiente, ese mes no cobra intereses y el mes siguiente cobra **tasa completa (2%)**, como si se hubiera desembolsado el día 1. Entre el día 16 y el 25 se cobra media tasa ese mismo mes (RN-4.20). *Confirmado por Cris el 2026-10-29.*
+- **RN-4.21b** **Días de cada préstamo:** el día límite de media tasa (RN-4.20) y el día de corte (RN-4.21) quedan **guardados en el préstamo al desembolsarlo**, con los valores que regían ese día. Ese préstamo siempre se calcula con sus propios días; un cambio posterior en los ajustes solo aplica a los préstamos que se desembolsen después. *Definido por Cris el 2026-11-04.*
+  - **Ejemplo:** se desembolsó el día 20 con el límite en 15 y pagó el primer mes a media tasa (10.000 sobre 1.000.000). Si después el límite pasa a 25, ese préstamo sigue con 15: no aparecen 10.000 de intereses pendientes.
 - **RN-4.22** Los intereses se **acumulan mes a mes** como deuda de intereses **de cada préstamo**. No generan multa.
 - **RN-4.22b** Los préstamos se pagan **a mes vencido**: el interés de un mes se debe cuando ese mes **termina**. Si el accionista quiere, puede pagar el interés del **mes en curso** a partir del **día 16** de ese mes. *Definido por Cris el 2026-10-30.*
 
