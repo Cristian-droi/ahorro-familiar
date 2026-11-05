@@ -57,7 +57,7 @@ import {
   AJUSTE_DIA_LIMITE_TASA_COMPLETA,
   AJUSTE_PLAZO_HASTA_PERIODO_SIGUIENTE,
   AJUSTES_DE_PRESTAMO_POR_DEFECTO,
-  ajustesDePrestamoDesdeFilas,
+  leerAjustesDePrestamoDesdeFilas,
 } from '@/lib/loan-settings';
 import {
   validarAjustesDePrestamo,
@@ -90,6 +90,8 @@ export default function AjustesPage() {
   const [extendedTermEnabled, setExtendedTermEnabled] = useState<boolean>(
     AJUSTES_DE_PRESTAMO_POR_DEFECTO.plazoHastaPeriodoSiguiente,
   );
+  // R3-001: stored loan settings that are invalid and shown as the default.
+  const [invalidLoanSettingKeys, setInvalidLoanSettingKeys] = useState<string[]>([]);
   const [resumenSaving, setResumenSaving] = useState<boolean>(false);
 
   // User state (RN-2.2): a saved value changes only once the admin allowed
@@ -435,10 +437,11 @@ export default function AjustesPage() {
         const mlp = settingsList.find(s => s.key === 'max_active_loans_per_user')?.value;
         if (mlp !== undefined) setMaxLoansPerUser(Number(mlp));
 
-        const loanSettings = ajustesDePrestamoDesdeFilas(settingsList);
+        const { ajustes: loanSettings, clavesInvalidas } = leerAjustesDePrestamoDesdeFilas(settingsList);
         setFullRateDayLimit(loanSettings.diaLimiteTasaCompleta);
         setCutoffDay(loanSettings.diaDeCorte);
         setExtendedTermEnabled(loanSettings.plazoHastaPeriodoSiguiente);
+        setInvalidLoanSettingKeys(clavesInvalidas);
       }
 
 
@@ -646,6 +649,28 @@ export default function AjustesPage() {
     setAllowedShares((prev) => prev.filter((v) => v !== valToRemove));
   };
 
+  // `system_settings` is written only by the server (service role) after it
+  // checks the admin and validates every value. Returns the error message to
+  // show, or null when everything was saved.
+  const postSettings = async (
+    settings: { key: string; value: unknown }[],
+    fallbackError: string,
+  ): Promise<string | null> => {
+    try {
+      const res = await fetch('/api/admin/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings }),
+      });
+      if (res.ok) return null;
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      return body?.error ?? fallbackError;
+    } catch (err) {
+      console.error('Error guardando ajustes:', err);
+      return fallbackError;
+    }
+  };
+
   const saveAdminSettings = async () => {
     const shares = validarValoresDeAccion(allowedShares);
     if (!shares.ok) {
@@ -653,12 +678,13 @@ export default function AjustesPage() {
       return;
     }
     setSaving(true);
-    const { error } = await supabase
-      .from('system_settings')
-      .upsert({ key: 'allowed_share_values', value: shares.value });
+    const error = await postSettings(
+      [{ key: 'allowed_share_values', value: shares.value }],
+      'Error al guardar configuración',
+    );
 
     if (error) {
-      showToast('error', 'Error al guardar configuración');
+      showToast('error', error);
     } else {
       showToast('success', 'Configuración actualizada');
     }
@@ -698,19 +724,20 @@ export default function AjustesPage() {
       { key: 'four_per_thousand_rate', value: Number(fourPerThousandRate) / 100 },
       { key: 'default_loan_interest_rate', value: Number(defaultInterestRate) / 100 },
       { key: 'max_active_loans_enabled', value: Boolean(maxLoansEnabled) },
-      { key: 'max_active_loans_per_user', value: Number(maxLoansPerUser) },
+      // Only validated (and saved) while the limit is enabled.
+      ...(maxLoansEnabled ? [{ key: 'max_active_loans_per_user', value: Number(maxLoansPerUser) }] : []),
       { key: AJUSTE_DIA_LIMITE_TASA_COMPLETA, value: Number(fullRateDayLimit) },
       { key: AJUSTE_DIA_DE_CORTE, value: Number(cutoffDay) },
       { key: AJUSTE_PLAZO_HASTA_PERIODO_SIGUIENTE, value: Boolean(extendedTermEnabled) },
     ];
 
-    const { error } = await supabase
-      .from('system_settings')
-      .upsert(updates);
+    const error = await postSettings(updates, 'Error al guardar la configuración del resumen');
 
     if (error) {
-      showToast('error', 'Error al guardar la configuración del resumen');
+      showToast('error', error);
     } else {
+      // The loan settings on screen are now the stored ones.
+      setInvalidLoanSettingKeys([]);
       showToast('success', 'Configuración de resumen y capitalización actualizada');
     }
     setResumenSaving(false);
@@ -1151,6 +1178,23 @@ export default function AjustesPage() {
                       </span>
                     </div>
                   </div>
+
+                  {invalidLoanSettingKeys.length > 0 && (
+                    <p role="alert" className="text-[12px] text-[var(--color-warn)]">
+                      El valor guardado no es válido; se muestra el valor por defecto
+                      {' ('}
+                      {invalidLoanSettingKeys
+                        .map((key) =>
+                          key === AJUSTE_DIA_LIMITE_TASA_COMPLETA
+                            ? 'día límite para tasa completa'
+                            : key === AJUSTE_DIA_DE_CORTE
+                              ? 'día de corte'
+                              : 'plazo hasta diciembre del periodo siguiente',
+                        )
+                        .join(', ')}
+                      {'). Si guardas, se reemplaza por el valor que ves.'}
+                    </p>
+                  )}
 
                   {!loanSettingsCheck.ok && (
                     <p role="alert" className="text-[12px] text-[var(--color-danger)]">

@@ -14,6 +14,11 @@ import {
   validarPlazoHastaPeriodoSiguiente,
   type AjustesDePrestamo,
 } from '@/modules/parametros/domain/parametros';
+import {
+  AJUSTE_DIA_DE_CORTE,
+  AJUSTE_DIA_LIMITE_TASA_COMPLETA,
+  AJUSTE_PLAZO_HASTA_PERIODO_SIGUIENTE,
+} from '@/modules/parametros/domain/validar-ajustes';
 
 // Adapter between the legacy loan callers and the loan domain
 // (docs/reglas-negocio.md, RN-4.10, RN-4.14 and RN-4.16). It only maps the
@@ -41,9 +46,7 @@ export const TASA_INTERES_POR_DEFECTO_PUNTOS_BASICOS = 200;
 // RN-4.20 (day 15), RN-4.15/RN-4.21 (day 25) and RN-4.3 (terms until December
 // of the next period), all ⚙️ in section 10. They live in `system_settings`
 // under these keys; missing or invalid values use the section 10 defaults.
-export const AJUSTE_DIA_LIMITE_TASA_COMPLETA = 'loan_full_rate_day_limit';
-export const AJUSTE_DIA_DE_CORTE = 'loan_cutoff_day';
-export const AJUSTE_PLAZO_HASTA_PERIODO_SIGUIENTE = 'loan_extended_term_enabled';
+export { AJUSTE_DIA_LIMITE_TASA_COMPLETA, AJUSTE_DIA_DE_CORTE, AJUSTE_PLAZO_HASTA_PERIODO_SIGUIENTE };
 const CLAVES_DE_AJUSTES_DE_PRESTAMO = [
   AJUSTE_DIA_LIMITE_TASA_COMPLETA,
   AJUSTE_DIA_DE_CORTE,
@@ -52,35 +55,66 @@ const CLAVES_DE_AJUSTES_DE_PRESTAMO = [
 
 export { AJUSTES_DE_PRESTAMO_POR_DEFECTO, type AjustesDePrestamo };
 
-function campoValido<T>(clave: string, valor: unknown, r: Result<T, ErrorDeDominio>, porDefecto: T): T {
+function campoValido<T>(
+  clave: string,
+  valor: unknown,
+  r: Result<T, ErrorDeDominio>,
+  porDefecto: T,
+  clavesInvalidas: string[],
+): T {
   if (valor === undefined || valor === null) return porDefecto;
   if (r.ok) return r.value;
   console.error(`Ajuste ${clave} inválido (${JSON.stringify(valor)}): ${r.error.mensaje} Se usa ${String(porDefecto)}.`);
+  clavesInvalidas.push(clave);
   return porDefecto;
 }
 
+// The loan settings read from the stored rows, plus the keys whose stored
+// value could not be used and are shown as the default (R3-001).
+export interface LecturaDeAjustesDePrestamo {
+  ajustes: AjustesDePrestamo;
+  clavesInvalidas: string[];
+}
+
 // Maps the stored rows to the loan settings. Each missing value uses its
-// default; an invalid one is logged and uses its default; if the days end up
-// inconsistent, every default applies.
-export function ajustesDePrestamoDesdeFilas(filas: { key: string; value: unknown }[]): AjustesDePrestamo {
+// default; an invalid one is logged, reported and uses its default; if the
+// days end up inconsistent, every default applies and every stored key is
+// reported.
+export function leerAjustesDePrestamoDesdeFilas(filas: { key: string; value: unknown }[]): LecturaDeAjustesDePrestamo {
   const valor = (clave: string) => filas.find((f) => f.key === clave)?.value;
   const d = AJUSTES_DE_PRESTAMO_POR_DEFECTO;
   const limite = valor(AJUSTE_DIA_LIMITE_TASA_COMPLETA);
   const corte = valor(AJUSTE_DIA_DE_CORTE);
   const plazo = valor(AJUSTE_PLAZO_HASTA_PERIODO_SIGUIENTE);
+  const clavesInvalidas: string[] = [];
   const ajustes = validarAjustesDePrestamo({
-    diaLimiteTasaCompleta: campoValido(AJUSTE_DIA_LIMITE_TASA_COMPLETA, limite, validarDiaLimiteTasaCompleta(limite), d.diaLimiteTasaCompleta),
-    diaDeCorte: campoValido(AJUSTE_DIA_DE_CORTE, corte, validarDiaDeCorte(corte), d.diaDeCorte),
+    diaLimiteTasaCompleta: campoValido(
+      AJUSTE_DIA_LIMITE_TASA_COMPLETA,
+      limite,
+      validarDiaLimiteTasaCompleta(limite),
+      d.diaLimiteTasaCompleta,
+      clavesInvalidas,
+    ),
+    diaDeCorte: campoValido(AJUSTE_DIA_DE_CORTE, corte, validarDiaDeCorte(corte), d.diaDeCorte, clavesInvalidas),
     plazoHastaPeriodoSiguiente: campoValido(
       AJUSTE_PLAZO_HASTA_PERIODO_SIGUIENTE,
       plazo,
       validarPlazoHastaPeriodoSiguiente(plazo),
       d.plazoHastaPeriodoSiguiente,
+      clavesInvalidas,
     ),
   });
-  if (ajustes.ok) return ajustes.value;
+  if (ajustes.ok) return { ajustes: ajustes.value, clavesInvalidas };
   console.error(`Ajustes de préstamo inválidos: ${ajustes.error.mensaje} Se usan los valores por defecto.`);
-  return { ...d };
+  const guardadas = CLAVES_DE_AJUSTES_DE_PRESTAMO.filter((clave) => {
+    const v = valor(clave);
+    return v !== undefined && v !== null;
+  });
+  return { ajustes: { ...d }, clavesInvalidas: guardadas };
+}
+
+export function ajustesDePrestamoDesdeFilas(filas: { key: string; value: unknown }[]): AjustesDePrestamo {
+  return leerAjustesDePrestamoDesdeFilas(filas).ajustes;
 }
 
 // The single reader of the loan settings for every caller.

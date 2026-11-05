@@ -5,6 +5,7 @@ import {
   AJUSTE_DIA_LIMITE_TASA_COMPLETA,
   AJUSTE_PLAZO_HASTA_PERIODO_SIGUIENTE,
   ajustesDePrestamoDesdeFilas,
+  leerAjustesDePrestamoDesdeFilas,
   getAjustesDePrestamo,
   reglasDeInteresDelPrestamo,
   reglasDeInteresDesdeAjuste,
@@ -62,6 +63,41 @@ describe('ajustesDePrestamoDesdeFilas (RN-4.20, RN-4.21, RN-4.3)', () => {
       ]),
     ).toEqual(DEFECTO);
     expect(log).toHaveBeenCalledOnce();
+  });
+});
+
+describe('leerAjustesDePrestamoDesdeFilas (R3-001)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('reports no invalid key when the values are missing or valid', () => {
+    expect(leerAjustesDePrestamoDesdeFilas([])).toEqual({ ajustes: DEFECTO, clavesInvalidas: [] });
+    expect(
+      leerAjustesDePrestamoDesdeFilas([
+        { key: 'loan_full_rate_day_limit', value: 10 },
+        { key: 'loan_cutoff_day', value: 20 },
+      ]).clavesInvalidas,
+    ).toEqual([]);
+  });
+
+  it('reports the key of an invalid stored value shown as its default', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(leerAjustesDePrestamoDesdeFilas([{ key: 'loan_cutoff_day', value: 31 }])).toEqual({
+      ajustes: DEFECTO,
+      clavesInvalidas: ['loan_cutoff_day'],
+    });
+  });
+
+  it('reports every stored key when inconsistent days make all defaults apply', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(
+      leerAjustesDePrestamoDesdeFilas([
+        { key: 'loan_full_rate_day_limit', value: 26 },
+        { key: 'loan_extended_term_enabled', value: true },
+      ]),
+    ).toEqual({
+      ajustes: DEFECTO,
+      clavesInvalidas: ['loan_full_rate_day_limit', 'loan_extended_term_enabled'],
+    });
   });
 });
 
