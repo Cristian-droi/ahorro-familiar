@@ -72,6 +72,7 @@ describe('ajustesDelPrestamo (RN-4.21b)', () => {
   it('a disbursed loan with inconsistent stored days is rejected', () => {
     const r = ajustesDelPrestamo({ disbursed_at: '2026-03-20', full_rate_day_limit: 25, cutoff_day: 20 }, AJUSTES_DE_PRESTAMO_POR_DEFECTO);
     expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.codigo).toBe('dias_de_prestamo_inconsistentes');
   });
 });
 
