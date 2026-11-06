@@ -46,7 +46,7 @@ npm run gen:types  # regenerar tipos de Supabase
 
 ## Estado actual (2026-11-05)
 
-- El trabajo nuevo va en ramas `tipo/descripcion` con PR. La S1 (cimientos) se mergeó el 2026-10-25 (PR #3) y la S2 (dominio I) el 2026-10-26 (PR #5). La S3 (dominio II) está en su PR. Sigue la S4 (seguridad).
+- El trabajo nuevo va en ramas `tipo/descripcion` con PR. La S1 (cimientos) se mergeó el 2026-10-25 (PR #3), la S2 (dominio I) el 2026-10-26 (PR #5) y la S3 (dominio II) el 2026-11-05 (PR #7). Sigue la S4 (seguridad).
 - **Supabase local:** `supabase start` aplica todas las migraciones desde cero. Los tipos se generan desde local con `npm run gen:types`.
 - **Ya existen** `src/shared/domain` (`fechas.ts`, `result.ts`) y `src/modules/` con el dominio de acciones, préstamos, pagos y parámetros. Los cálculos de dinero de préstamos, multas y obligaciones ya salen del dominio; `src/lib/` queda como adaptador.
 - **GGA** revisa cada commit con las reglas de `REVIEW.md`. En Windows necesita la variable `CLAUDE_CODE_GIT_BASH_PATH`.
