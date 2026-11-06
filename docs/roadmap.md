@@ -131,4 +131,4 @@ Se sacaron del plan hasta la demo por falta de capacidad. Ninguna es necesaria p
 | S0 | 10 | 6 | ✅ | Terminada antes de lo previsto (14–15 oct), con 4 h menos de lo estimado |
 | S1 | 8 | 9 | ✅ | Terminada el 19 de oct (PR #3, mergeado el 25), con 1 h más de lo planeado. Además se arreglaron 34 errores de `tsc` y se agregó RN-4.29 |
 | S2 | 8 | 5 | ✅ | Terminada el 26 de oct (PR #5, mergeado el mismo día), con 3 h menos de lo planeado. Además se agregó RN-4.30 (cuota para cerrar el año, redondeo hacia arriba) |
-| S3 | 8 | ? | ✅ | Terminada el 5 de nov, antes de la fecha planeada. Además de lo previsto: reglas nuevas de Cris (RN-2.2, RN-3.4, RN-4.3b, RN-4.5b, RN-4.21b, RN-4.22b, RN-4.29b/c, RN-4.31), una sola fuente de intereses, ajustes configurables y guardado de Ajustes desde el servidor |
+| S3 | 8 | 10 | ✅ | Terminada el 5 de nov, antes de la fecha planeada, con 2 h más de lo planeado. Además de lo previsto: reglas nuevas de Cris (RN-2.2, RN-3.4, RN-4.3b, RN-4.5b, RN-4.21b, RN-4.22b, RN-4.29b/c, RN-4.31), una sola fuente de intereses, ajustes configurables y guardado de Ajustes desde el servidor |
