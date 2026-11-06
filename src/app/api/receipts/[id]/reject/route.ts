@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { rejectReceiptPayload } from '@/lib/schemas/receipt';
-import { auditedUpdate } from '@/lib/audit';
+import { auditedUpdate, isStaleStatus } from '@/lib/audit';
 
 // POST /api/receipts/[id]/reject — rechazo por parte del admin.
 //
@@ -74,9 +74,13 @@ export async function POST(
       },
       actorId: admin_user.id,
       action: 'receipt.reject',
+      expectedStatus: 'pending',
       reason: note ? `${reason}: ${note}` : reason,
     });
 
+    if (isStaleStatus(updateError)) {
+      return NextResponse.json({ error: 'Otra persona ya revisó este recibo.' }, { status: 409 });
+    }
     if (updateError) {
       console.error('Error rechazando recibo:', updateError);
       return NextResponse.json(

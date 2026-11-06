@@ -224,7 +224,7 @@ erDiagram
 
 ### 4.9 Control 🔵
 
-**`audit_log`** 🟢 (RN-9). Se escribe con `apply_audited_update`, `apply_audited_settings` y `allow_share_value_change`.
+**`audit_log`** 🟢 (RN-9). Se escribe con `apply_audited_update`, `apply_audited_settings`, `allow_share_value_change` y `resubmit_receipt`.
 - `id bigint generated always as identity PK`.
 - `actor_id` (FK a `profiles`), `action text not null` (por ejemplo `loan.disburse`), `entity text not null`, `entity_id uuid`.
 - `before jsonb`, `after jsonb`, `reason text`.
@@ -256,7 +256,7 @@ Hoy **calculan reglas de negocio en SQL**. Se reemplazan por consultas que **tra
 
 | Función actual | Regla | Destino |
 |---|---|---|
-| `get_user_active_loans_debt`, `get_loan_interest_owed` | Intereses (RN-4.18 a 4.22) | `prestamos/domain` |
+| `get_user_active_loans_debt` | Intereses (RN-4.18 a 4.22) | `prestamos/domain` |
 | `get_my_utilities_by_year`, `get_user_utilities_by_year`, `get_all_users_utilities_by_year` | Utilidades (RN-6) | `utilidades/domain` |
 | `get_cash_balance` | Saldo de caja | `caja/domain`, con `cash_outflows` |
 | `get_my_capitalization_state`, `get_capitalization_windows_admin` | Cupo de capitalización | `utilidades/domain` o `periodos/domain`. Además, **no debe mutar datos dentro de una consulta**. |
@@ -286,7 +286,7 @@ Reciben los valores **ya calculados por el dominio**, validan invariantes, escri
 | Los *default privileges* dan CRUD a `authenticated` sobre las tablas futuras | Revocar. Permisos explícitos por tabla. |
 | `loans_update_own_draft` permite editar cualquier columna (incluida la tasa) | El borrador se edita por caso de uso. RLS de UPDATE solo para el servidor. |
 | `loan_payment_plan_items`: el dueño puede escribir en borrador | Igual que el anterior: escritura solo desde el servidor |
-| `get_loan_interest_owed` no valida el dueño | Se elimina (sección 5.2) |
+| `get_loan_interest_owed` no validaba el dueño | Eliminada en la S4 (F19); el interés lo calcula `prestamos/domain` |
 | `admin` como único rol | `is_treasurer()` para escribir e `is_manager() OR is_treasurer()` para leer todo |
 
 **Regla general de RLS para las tablas de dinero** (`receipts`, `receipt_items`, `loans`, `cash_outflows`, `expenses`, `audit_log`, `approvals`):

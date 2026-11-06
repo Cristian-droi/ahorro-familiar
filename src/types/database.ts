@@ -713,6 +713,7 @@ export type Database = {
           p_action: string
           p_actor: string
           p_entity: string
+          p_expected_status: string
           p_id: string
           p_patch: Json
           p_reason?: string
@@ -754,7 +755,6 @@ export type Database = {
         }[]
       }
       get_cash_balance: { Args: never; Returns: number }
-      get_loan_interest_owed: { Args: { p_loan_id: string }; Returns: number }
       get_loan_vote_totals: {
         Args: { p_loan_ids: string[] }
         Returns: {
@@ -826,6 +826,15 @@ export type Database = {
           p_user_id: string
         }
         Returns: string
+      }
+      resubmit_receipt: {
+        Args: {
+          p_actor: string
+          p_items: Json
+          p_patch: Json
+          p_receipt_id: string
+        }
+        Returns: undefined
       }
     }
     Enums: {

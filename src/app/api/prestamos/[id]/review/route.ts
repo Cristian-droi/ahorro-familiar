@@ -3,7 +3,7 @@ import { requireAdmin } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { EXPIRED_REQUEST_MESSAGE, expireLoanRequestIfDue } from '@/lib/loan-expiry';
 import { reviewPlanSchema } from '@/lib/schemas/loan';
-import { auditedUpdate } from '@/lib/audit';
+import { auditedUpdate, isStaleStatus } from '@/lib/audit';
 
 // POST /api/prestamos/[id]/review — admin aprueba o rechaza el plan de pagos.
 // Al aprobar el plan, el admin luego decide cuándo mandarlo a votación.
@@ -79,9 +79,13 @@ export async function POST(
       patch: updates,
       actorId: authCheck.user.id,
       action: `loan.review.${action}`,
+      expectedStatus: 'pending_review',
       reason: rejection_reason ?? admin_notes ?? undefined,
     });
 
+    if (isStaleStatus(updateError)) {
+      return NextResponse.json({ error: 'Otra persona ya cambió este préstamo.' }, { status: 409 });
+    }
     if (updateError) {
       return NextResponse.json({ error: 'No se pudo actualizar el préstamo' }, { status: 500 });
     }

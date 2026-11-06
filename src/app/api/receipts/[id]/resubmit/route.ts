@@ -10,6 +10,7 @@ import {
   mapReceiptItemError,
 } from '@/lib/receipts-build';
 import { validateCapitalPayments } from '@/lib/receipt-capital';
+import { isStaleStatus, resubmitReceipt } from '@/lib/audit';
 
 // POST /api/receipts/[id]/resubmit — el accionista edita un recibo que fue
 // rechazado y lo vuelve a enviar.
@@ -20,12 +21,11 @@ import { validateCapitalPayments } from '@/lib/receipt-capital';
 //
 // Flujo:
 //   1. Auth; dueño y estado 'rejected' obligatorios.
-//   2. Borra los receipt_items existentes.
-//   3. Recalcula líneas (acciones + multas) excluyendo este mismo recibo
+//   2. Recalcula líneas (acciones + multas) excluyendo este mismo recibo
 //      del conteo de multas previas, porque al estar rechazado no cuenta.
-//   4. Inserta nuevas líneas.
-//   5. Update receipts: status='pending', limpia review fields, actualiza
-//      payment_proof_path.
+//   3. En una sola transacción (resubmit_receipt): reemplaza las líneas,
+//      vuelve a status='pending', limpia review fields, actualiza
+//      payment_proof_path y deja el registro de auditoría.
 
 export async function POST(
   request: Request,
@@ -123,39 +123,13 @@ export async function POST(
       excludeReceiptId: receiptId,
     });
 
-    // Reemplazar líneas: primero borrar, luego insertar.
-    const { error: deleteError } = await admin
-      .from('receipt_items')
-      .delete()
-      .eq('receipt_id', receiptId);
-
-    if (deleteError) {
-      console.error('Error borrando items previos:', deleteError);
-      return NextResponse.json(
-        { error: 'No se pudieron limpiar las líneas anteriores' },
-        { status: 500 },
-      );
-    }
-
-    const { error: insertItemsError } = await admin
-      .from('receipt_items')
-      .insert(builtItems.map((it) => ({ ...it, receipt_id: receiptId })));
-
-    if (insertItemsError) {
-      const friendly = mapReceiptItemError(insertItemsError);
-      if (friendly) return NextResponse.json(friendly, { status: 400 });
-      console.error('Error insertando items:', insertItemsError);
-      return NextResponse.json(
-        { error: 'No se pudieron registrar las compras' },
-        { status: 500 },
-      );
-    }
-
-    // Volver a pending y limpiar campos de revisión. submitted_at se
-    // actualiza para que la bandeja del admin lo trate como nuevo.
-    const { error: updateError } = await admin
-      .from('receipts')
-      .update({
+    // Reemplazar líneas y volver a pending en una sola transacción (F24).
+    // submitted_at se actualiza para que la bandeja del admin lo trate como nuevo.
+    const { error: resubmitError } = await resubmitReceipt(admin, {
+      id: receiptId,
+      actorId: user.id,
+      items: builtItems,
+      patch: {
         status: 'pending',
         submitted_at: new Date().toISOString(),
         reviewed_at: null,
@@ -165,13 +139,21 @@ export async function POST(
         payment_method,
         bank_account_id: payment_method === 'transfer' ? bank_account_id : null,
         payment_proof_path: payment_method === 'transfer' ? payment_proof_path : null,
-      })
-      .eq('id', receiptId);
+      },
+    });
 
-    if (updateError) {
-      console.error('Error actualizando recibo:', updateError);
+    if (isStaleStatus(resubmitError)) {
       return NextResponse.json(
-        { error: 'No se pudo reenviar el recibo' },
+        { error: 'Solo puedes reenviar recibos que fueron rechazados' },
+        { status: 409 },
+      );
+    }
+    if (resubmitError) {
+      const friendly = mapReceiptItemError(resubmitError);
+      if (friendly) return NextResponse.json(friendly, { status: 400 });
+      console.error('Error reenviando recibo:', resubmitError);
+      return NextResponse.json(
+        { error: 'No se pudieron registrar las compras' },
         { status: 500 },
       );
     }

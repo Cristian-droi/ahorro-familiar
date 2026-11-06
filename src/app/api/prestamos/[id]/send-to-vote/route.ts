@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { EXPIRED_REQUEST_MESSAGE, expireLoanRequestIfDue } from '@/lib/loan-expiry';
-import { auditedUpdate } from '@/lib/audit';
+import { auditedUpdate, isStaleStatus } from '@/lib/audit';
 
 // POST /api/prestamos/[id]/send-to-vote — admin envía el préstamo a votación de accionistas.
 // Solo es posible si el plan ya fue aprobado por el admin.
@@ -45,8 +45,12 @@ export async function POST(
       patch: { status: 'pending_shareholder_vote', updated_at: new Date().toISOString() },
       actorId: authCheck.user.id,
       action: 'loan.send_to_vote',
+      expectedStatus: 'pending_review',
     });
 
+    if (isStaleStatus(updateError)) {
+      return NextResponse.json({ error: 'Otra persona ya cambió este préstamo.' }, { status: 409 });
+    }
     if (updateError) {
       return NextResponse.json({ error: 'No se pudo enviar a votación' }, { status: 500 });
     }

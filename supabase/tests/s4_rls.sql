@@ -6,8 +6,9 @@
 begin;
 
 -- Runs p_sql as p_role with the JWT of p_uid. Returns the affected row count,
--- 'denied' when the privilege check or an RLS check rejects it, or
--- 'check:<constraint>' when a CHECK constraint rejects it.
+-- 'denied' when the privilege check or an RLS check rejects it,
+-- 'check:<constraint>' when a CHECK constraint rejects it, or
+-- 'raised:<message>' when a guard in a function raises.
 create function pg_temp.attempt(p_role text, p_uid uuid, p_sql text)
 returns text
 language plpgsql
@@ -29,6 +30,8 @@ begin
     when check_violation then
       get stacked diagnostics violated = constraint_name;
       outcome := 'check:' || violated;
+    when raise_exception then
+      outcome := 'raised:' || sqlerrm;
   end;
   perform set_config('role', 'postgres', true);
   return outcome;
@@ -286,7 +289,7 @@ select pg_temp.expect('a partial capital payment lowers the balance and keeps th
 select pg_temp.expect('audit: the server updates a loan and records it',
   pg_temp.attempt('service_role', null, $q$
     select public.apply_audited_update('loans', '00000000-0000-0000-0000-0000000000f2',
-      '{"admin_notes": "revisado"}'::jsonb, '00000000-0000-0000-0000-00000000000c', 'loan.plan_approve', 'porque si')
+      '{"admin_notes": "revisado"}'::jsonb, '00000000-0000-0000-0000-00000000000c', 'loan.plan_approve', 'draft', 'porque si')
   $q$), '1');
 select pg_temp.expect('audit: the change was applied',
   (select admin_notes from public.loans where id = '00000000-0000-0000-0000-0000000000f2'), 'revisado');
@@ -297,7 +300,7 @@ select pg_temp.expect('audit: who, what, reason, before and after (RN-9.2)',
 select pg_temp.expect('audit: an action on your own loan is marked (RN-9.4)',
   pg_temp.attempt('service_role', null, $q$
     select public.apply_audited_update('loans', '00000000-0000-0000-0000-0000000000f2',
-      '{"admin_notes": "propio"}'::jsonb, '00000000-0000-0000-0000-00000000000a', 'loan.self_check', null)
+      '{"admin_notes": "propio"}'::jsonb, '00000000-0000-0000-0000-00000000000a', 'loan.self_check', 'draft', null)
   $q$), '1');
 select pg_temp.expect('audit: the self action flag is stored',
   (select is_self_action::text from public.audit_log where action = 'loan.self_check'), 'true');
@@ -311,7 +314,7 @@ select pg_temp.expect('audit: a rejected change leaves no record and no change',
   pg_temp.attempt('service_role', null, $q$
     select public.apply_audited_update('receipts', '00000000-0000-0000-0000-0000000000b4',
       '{"status": "approved", "reviewed_at": "2026-11-06T10:00:00Z", "reviewed_by": "00000000-0000-0000-0000-00000000000c"}'::jsonb,
-      '00000000-0000-0000-0000-00000000000c', 'receipt.overpaid', null)
+      '00000000-0000-0000-0000-00000000000c', 'receipt.overpaid', 'pending', null)
   $q$), 'check:loans_outstanding_balance_not_negative');
 select pg_temp.expect('audit: no record of the rejected change',
   (select count(*)::text from public.audit_log where action = 'receipt.overpaid'), '0');
@@ -325,13 +328,153 @@ select pg_temp.expect('audit: an approval through the audited path is recorded',
   pg_temp.attempt('service_role', null, $q$
     select public.apply_audited_update('receipts', '00000000-0000-0000-0000-0000000000b5',
       '{"status": "approved", "reviewed_at": "2026-11-06T10:00:00Z", "reviewed_by": "00000000-0000-0000-0000-00000000000c"}'::jsonb,
-      '00000000-0000-0000-0000-00000000000c', 'receipt.approve', null)
+      '00000000-0000-0000-0000-00000000000c', 'receipt.approve', 'pending', null)
   $q$), '1');
 select pg_temp.expect('audit: that approval still lowers the balance through the trigger',
   (select outstanding_balance::text from public.loans where id = '00000000-0000-0000-0000-0000000000a3'), '50000');
 select pg_temp.expect('audit: approving someone else''s receipt is not marked as your own',
   (select is_self_action::text from public.audit_log
    where action = 'receipt.approve' and entity_id = '00000000-0000-0000-0000-0000000000b5'), 'false');
+
+-- F18: a review applies only to the status the route read, so two reviews of one
+-- receipt cannot both go through.
+insert into public.loans (id, user_id, requested_amount, status, outstanding_balance, disbursed_at, full_rate_day_limit, cutoff_day) values
+  ('00000000-0000-0000-0000-0000000000a4', '00000000-0000-0000-0000-00000000000a', 100000, 'active', 100000, now(), 15, 25);
+insert into public.receipts (id, user_id) values
+  ('00000000-0000-0000-0000-0000000000b6', '00000000-0000-0000-0000-00000000000a');
+insert into public.receipt_items (receipt_id, concept, target_month, amount, loan_id) values
+  ('00000000-0000-0000-0000-0000000000b6', 'pago_capital', date_trunc('month', now())::date, 10000, '00000000-0000-0000-0000-0000000000a4');
+select pg_temp.expect('F18: the first review of a pending receipt goes through',
+  pg_temp.attempt('service_role', null, $q$
+    select public.apply_audited_update('receipts', '00000000-0000-0000-0000-0000000000b6',
+      '{"status": "approved", "reviewed_at": "2026-11-06T10:00:00Z", "reviewed_by": "00000000-0000-0000-0000-00000000000c"}'::jsonb,
+      '00000000-0000-0000-0000-00000000000c', 'receipt.f18_first', 'pending', null)
+  $q$), '1');
+select pg_temp.expect('F18: approved then rejected is refused',
+  pg_temp.attempt('service_role', null, $q$
+    select public.apply_audited_update('receipts', '00000000-0000-0000-0000-0000000000b6',
+      '{"status": "rejected", "reviewed_at": "2026-11-06T10:00:00Z", "reviewed_by": "00000000-0000-0000-0000-00000000000c", "rejection_reason": "amount_mismatch"}'::jsonb,
+      '00000000-0000-0000-0000-00000000000c', 'receipt.f18_second', 'pending', null)
+  $q$), 'raised:audit_status_conflict');
+select pg_temp.expect('F18: the receipt stays approved',
+  (select status::text from public.receipts where id = '00000000-0000-0000-0000-0000000000b6'), 'approved');
+select pg_temp.expect('F18: the refused review leaves no record',
+  (select count(*)::text from public.audit_log where action = 'receipt.f18_second'), '0');
+select pg_temp.expect('F18: the payment lowered the balance once',
+  (select outstanding_balance::text from public.loans where id = '00000000-0000-0000-0000-0000000000a4'), '90000');
+
+insert into public.receipts (id, user_id) values
+  ('00000000-0000-0000-0000-0000000000b7', '00000000-0000-0000-0000-00000000000a');
+insert into public.receipt_items (receipt_id, concept, target_month, amount, loan_id) values
+  ('00000000-0000-0000-0000-0000000000b7', 'pago_capital', date_trunc('month', now())::date, 10000, '00000000-0000-0000-0000-0000000000a4');
+select pg_temp.expect('F18: a pending receipt can be rejected',
+  pg_temp.attempt('service_role', null, $q$
+    select public.apply_audited_update('receipts', '00000000-0000-0000-0000-0000000000b7',
+      '{"status": "rejected", "reviewed_at": "2026-11-06T10:00:00Z", "reviewed_by": "00000000-0000-0000-0000-00000000000c", "rejection_reason": "amount_mismatch"}'::jsonb,
+      '00000000-0000-0000-0000-00000000000c', 'receipt.f18_reject', 'pending', null)
+  $q$), '1');
+select pg_temp.expect('F18: rejected then approved is refused',
+  pg_temp.attempt('service_role', null, $q$
+    select public.apply_audited_update('receipts', '00000000-0000-0000-0000-0000000000b7',
+      '{"status": "approved", "reviewed_at": "2026-11-06T10:00:00Z", "reviewed_by": "00000000-0000-0000-0000-00000000000c", "rejection_reason": null}'::jsonb,
+      '00000000-0000-0000-0000-00000000000c', 'receipt.f18_late', 'pending', null)
+  $q$), 'raised:audit_status_conflict');
+select pg_temp.expect('F18: the receipt stays rejected',
+  (select status::text from public.receipts where id = '00000000-0000-0000-0000-0000000000b7'), 'rejected');
+select pg_temp.expect('F18: the late approval does not subtract again',
+  (select outstanding_balance::text from public.loans where id = '00000000-0000-0000-0000-0000000000a4'), '90000');
+select pg_temp.expect('F18: a loan is guarded the same way',
+  pg_temp.attempt('service_role', null, $q$
+    select public.apply_audited_update('loans', '00000000-0000-0000-0000-0000000000f2',
+      '{"admin_notes": "tarde"}'::jsonb, '00000000-0000-0000-0000-00000000000c', 'loan.f18_late', 'pending_review', null)
+  $q$), 'raised:audit_status_conflict');
+select pg_temp.expect('F18: the guarded loan keeps its value',
+  (select admin_notes from public.loans where id = '00000000-0000-0000-0000-0000000000f2'), 'propio');
+select pg_temp.expect('F18: a missing expected status is refused, not skipped',
+  pg_temp.attempt('service_role', null, $q$
+    select public.apply_audited_update('loans', '00000000-0000-0000-0000-0000000000f2',
+      '{"admin_notes": "sin estado"}'::jsonb, '00000000-0000-0000-0000-00000000000c', 'loan.f18_null', null, null)
+  $q$), 'raised:audit_status_conflict');
+select pg_temp.expect('F18: only the guarded version of the writer exists',
+  (select count(*)::text from pg_proc where proname = 'apply_audited_update'), '1');
+
+-- F24: resubmitting replaces the items and reopens the receipt in one transaction,
+-- and only from rejected. A stale resubmit cannot reopen an approved receipt.
+insert into public.loans (id, user_id, requested_amount, status, outstanding_balance, disbursed_at, full_rate_day_limit, cutoff_day) values
+  ('00000000-0000-0000-0000-0000000000a5', '00000000-0000-0000-0000-00000000000a', 100000, 'active', 100000, now(), 15, 25);
+insert into public.receipts (id, user_id) values
+  ('00000000-0000-0000-0000-0000000000b8', '00000000-0000-0000-0000-00000000000a');
+insert into public.receipt_items (receipt_id, concept, target_month, amount, loan_id) values
+  ('00000000-0000-0000-0000-0000000000b8', 'pago_capital', date_trunc('month', now())::date, 10000, '00000000-0000-0000-0000-0000000000a5');
+select public.apply_audited_update('receipts', '00000000-0000-0000-0000-0000000000b8',
+  '{"status": "rejected", "reviewed_at": "2026-11-06T10:00:00Z", "reviewed_by": "00000000-0000-0000-0000-00000000000c", "rejection_reason": "amount_mismatch"}'::jsonb,
+  '00000000-0000-0000-0000-00000000000c', 'receipt.reject', 'pending', null);
+
+select pg_temp.expect('F24: only the owner can resubmit',
+  pg_temp.attempt('service_role', null, $q$
+    select public.resubmit_receipt('00000000-0000-0000-0000-0000000000b8', '00000000-0000-0000-0000-00000000000b',
+      jsonb_build_array(jsonb_build_object('concept', 'pago_capital', 'target_month', date_trunc('month', now())::date, 'amount', 25000, 'loan_id', '00000000-0000-0000-0000-0000000000a5', 'auto_generated', false)),
+      '{"status": "pending", "submitted_at": "2026-11-06T11:00:00Z", "reviewed_at": null, "reviewed_by": null, "rejection_reason": null, "rejection_note": null, "payment_method": "cash", "bank_account_id": null, "payment_proof_path": null}'::jsonb)
+  $q$), 'raised:resubmit_not_owner');
+select pg_temp.expect('F24: a bad item is refused',
+  pg_temp.attempt('service_role', null, $q$
+    select public.resubmit_receipt('00000000-0000-0000-0000-0000000000b8', '00000000-0000-0000-0000-00000000000a',
+      jsonb_build_array(
+        jsonb_build_object('concept', 'pago_capital', 'target_month', date_trunc('month', now())::date, 'amount', 25000, 'loan_id', '00000000-0000-0000-0000-0000000000a5', 'auto_generated', false),
+        jsonb_build_object('concept', 'pago_capital', 'target_month', date_trunc('month', now())::date, 'amount', 25000, 'loan_id', '00000000-0000-0000-0000-0000000000f2', 'auto_generated', false)),
+      '{"status": "pending", "submitted_at": "2026-11-06T11:00:00Z", "reviewed_at": null, "reviewed_by": null, "rejection_reason": null, "rejection_note": null, "payment_method": "cash", "bank_account_id": null, "payment_proof_path": null}'::jsonb)
+  $q$), 'raised:loan_not_active');
+select pg_temp.expect('F24: the refused resubmit keeps the old items and status',
+  (select r.status::text || ' ' || count(i.id) || ' ' || sum(i.amount) || ' ' || r.total_amount
+   from public.receipts r join public.receipt_items i on i.receipt_id = r.id
+   where r.id = '00000000-0000-0000-0000-0000000000b8' group by r.id), 'rejected 1 10000 10000');
+select pg_temp.expect('F24: a rejected receipt can be resubmitted',
+  pg_temp.attempt('service_role', null, $q$
+    select public.resubmit_receipt('00000000-0000-0000-0000-0000000000b8', '00000000-0000-0000-0000-00000000000a',
+      jsonb_build_array(jsonb_build_object('concept', 'pago_capital', 'target_month', date_trunc('month', now())::date, 'amount', 25000, 'loan_id', '00000000-0000-0000-0000-0000000000a5', 'auto_generated', false)),
+      '{"status": "pending", "submitted_at": "2026-11-06T11:00:00Z", "reviewed_at": null, "reviewed_by": null, "rejection_reason": null, "rejection_note": null, "payment_method": "cash", "bank_account_id": null, "payment_proof_path": null}'::jsonb)
+  $q$), '1');
+select pg_temp.expect('F24: the items were replaced and the total follows them',
+  (select r.status::text || ' ' || count(i.id) || ' ' || sum(i.amount) || ' ' || r.total_amount
+   from public.receipts r join public.receipt_items i on i.receipt_id = r.id
+   where r.id = '00000000-0000-0000-0000-0000000000b8' group by r.id), 'pending 1 25000 25000');
+select pg_temp.expect('F24: the review fields were cleared',
+  (select (reviewed_at is null and reviewed_by is null and rejection_reason is null)::text
+   from public.receipts where id = '00000000-0000-0000-0000-0000000000b8'), 'true');
+select pg_temp.expect('F24: the resubmit is recorded once, by its owner',
+  (select count(*) || ' ' || min(actor_id::text) from public.audit_log
+   where action = 'receipt.resubmit' and entity_id = '00000000-0000-0000-0000-0000000000b8'),
+  '1 00000000-0000-0000-0000-00000000000a');
+select pg_temp.expect('F24: a second resubmit is refused',
+  pg_temp.attempt('service_role', null, $q$
+    select public.resubmit_receipt('00000000-0000-0000-0000-0000000000b8', '00000000-0000-0000-0000-00000000000a',
+      jsonb_build_array(jsonb_build_object('concept', 'pago_capital', 'target_month', date_trunc('month', now())::date, 'amount', 30000, 'loan_id', '00000000-0000-0000-0000-0000000000a5', 'auto_generated', false)),
+      '{"status": "pending", "submitted_at": "2026-11-06T11:00:00Z", "reviewed_at": null, "reviewed_by": null, "rejection_reason": null, "rejection_note": null, "payment_method": "cash", "bank_account_id": null, "payment_proof_path": null}'::jsonb)
+  $q$), 'raised:audit_status_conflict');
+select public.apply_audited_update('receipts', '00000000-0000-0000-0000-0000000000b8',
+  '{"status": "approved", "reviewed_at": "2026-11-06T12:00:00Z", "reviewed_by": "00000000-0000-0000-0000-00000000000c"}'::jsonb,
+  '00000000-0000-0000-0000-00000000000c', 'receipt.approve', 'pending', null);
+select pg_temp.expect('F24: a stale resubmit cannot reopen an approved receipt',
+  pg_temp.attempt('service_role', null, $q$
+    select public.resubmit_receipt('00000000-0000-0000-0000-0000000000b8', '00000000-0000-0000-0000-00000000000a',
+      jsonb_build_array(jsonb_build_object('concept', 'pago_capital', 'target_month', date_trunc('month', now())::date, 'amount', 30000, 'loan_id', '00000000-0000-0000-0000-0000000000a5', 'auto_generated', false)),
+      '{"status": "pending", "submitted_at": "2026-11-06T11:00:00Z", "reviewed_at": null, "reviewed_by": null, "rejection_reason": null, "rejection_note": null, "payment_method": "cash", "bank_account_id": null, "payment_proof_path": null}'::jsonb)
+  $q$), 'raised:audit_status_conflict');
+select pg_temp.expect('F24: the approved receipt keeps its status and items',
+  (select r.status::text || ' ' || sum(i.amount)
+   from public.receipts r join public.receipt_items i on i.receipt_id = r.id
+   where r.id = '00000000-0000-0000-0000-0000000000b8' group by r.id), 'approved 25000');
+select pg_temp.expect('F24: the payment lowered the balance once',
+  (select outstanding_balance::text from public.loans where id = '00000000-0000-0000-0000-0000000000a5'), '75000');
+select pg_temp.expect('F24: the writer is for the server only',
+  (has_function_privilege('authenticated', 'public.resubmit_receipt(uuid, uuid, jsonb, jsonb)', 'execute')
+    or has_function_privilege('anon', 'public.resubmit_receipt(uuid, uuid, jsonb, jsonb)', 'execute'))::text, 'false');
+select pg_temp.expect('F24: the server can call it',
+  has_function_privilege('service_role', 'public.resubmit_receipt(uuid, uuid, jsonb, jsonb)', 'execute')::text, 'true');
+
+-- F19: this function let any shareholder read the interest owed on any loan.
+select pg_temp.expect('F19: get_loan_interest_owed no longer exists',
+  (select count(*)::text from pg_proc where proname = 'get_loan_interest_owed'), '0');
 
 -- Settings: one record per value that really changed.
 insert into public.system_settings (key, value) values ('probe_audit', '1'::jsonb);
@@ -367,8 +510,8 @@ select pg_temp.expect('audit: only loans and receipts can be written this way',
   (select count(*)::text from pg_proc where proname = 'apply_audited_update'
      and prosrc like '%audit_entity_not_allowed%'), '1');
 select pg_temp.expect('audit: the writers are for the server only',
-  (has_function_privilege('authenticated', 'public.apply_audited_update(text, uuid, jsonb, uuid, text, text)', 'execute')
-    or has_function_privilege('anon', 'public.apply_audited_update(text, uuid, jsonb, uuid, text, text)', 'execute')
+  (has_function_privilege('authenticated', 'public.apply_audited_update(text, uuid, jsonb, uuid, text, text, text)', 'execute')
+    or has_function_privilege('anon', 'public.apply_audited_update(text, uuid, jsonb, uuid, text, text, text)', 'execute')
     or has_function_privilege('authenticated', 'public.apply_audited_settings(jsonb, uuid)', 'execute')
     or has_function_privilege('anon', 'public.apply_audited_settings(jsonb, uuid)', 'execute'))::text, 'false');
 
