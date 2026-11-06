@@ -9,6 +9,7 @@ import {
   loadPurchaseRules,
   mapReceiptItemError,
 } from '@/lib/receipts-build';
+import { validateCapitalPayments } from '@/lib/receipt-capital';
 
 // POST /api/receipts/[id]/resubmit — el accionista edita un recibo que fue
 // rechazado y lo vuelve a enviar.
@@ -102,6 +103,15 @@ export async function POST(
       return NextResponse.json({ error: puedeComprar.error.mensaje }, { status: 400 });
     }
     const unitValue = puedeComprar.value;
+
+    const capital = await validateCapitalPayments(admin, {
+      items,
+      countPending: true,
+      excludeReceiptId: receiptId,
+    });
+    if (!capital.ok) {
+      return NextResponse.json({ error: capital.error.mensaje }, { status: 400 });
+    }
 
     const rules = await loadPurchaseRules(admin);
     const { items: builtItems } = await buildReceiptItems(admin, {

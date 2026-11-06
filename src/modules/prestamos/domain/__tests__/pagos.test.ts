@@ -1,5 +1,52 @@
 import { describe, it, expect } from 'vitest';
-import { aplicarPago, estaPagado } from '@/modules/prestamos/domain/pagos';
+import { aplicarPago, estaPagado, sumarAbonosPorPrestamo, validarAbonoACapital } from '@/modules/prestamos/domain/pagos';
+
+describe('sumarAbonosPorPrestamo (RN-4.29, RN-4.27)', () => {
+  it('RN-4.29: adds the capital lines of each loan separately', () => {
+    const r = sumarAbonosPorPrestamo([
+      { prestamoId: 'a', monto: 600000 },
+      { prestamoId: 'b', monto: 50000 },
+      { prestamoId: 'a', monto: 400000 },
+    ]);
+    expect(r).toEqual(new Map([['a', 1000000], ['b', 50000]]));
+  });
+
+  it('returns an empty map without lines', () => {
+    expect(sumarAbonosPorPrestamo([])).toEqual(new Map());
+  });
+});
+
+describe('validarAbonoACapital (RN-4.29)', () => {
+  it('RN-4.29: rejects the Sheet case, 1.224.389 against a balance of 1.200.000, and shows the maximum', () => {
+    const r = validarAbonoACapital({ saldoCapital: 1200000, abonosPendientes: 0, abono: 1224389 });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.codigo).toBe('abono_mayor_al_saldo');
+    expect(r.error.mensaje).toContain('$1.200.000');
+  });
+
+  it('RN-4.29: accepts a payment equal to the balance', () => {
+    expect(validarAbonoACapital({ saldoCapital: 1200000, abonosPendientes: 0, abono: 1200000 })).toEqual({ ok: true, value: 0 });
+  });
+
+  it('RN-4.29: payments waiting for approval use up the balance', () => {
+    const r = validarAbonoACapital({ saldoCapital: 1000000, abonosPendientes: 700000, abono: 300001 });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.mensaje).toContain('$300.000');
+    expect(validarAbonoACapital({ saldoCapital: 1000000, abonosPendientes: 700000, abono: 300000 })).toEqual({ ok: true, value: 0 });
+  });
+
+  it('RN-4.29: rejects any capital payment on a loan with no balance', () => {
+    expect(validarAbonoACapital({ saldoCapital: 0, abonosPendientes: 0, abono: 1 }).ok).toBe(false);
+  });
+
+  it('rejects invalid values', () => {
+    expect(validarAbonoACapital({ saldoCapital: 1000, abonosPendientes: 0, abono: 0 }).ok).toBe(false);
+    expect(validarAbonoACapital({ saldoCapital: -1, abonosPendientes: 0, abono: 1 }).ok).toBe(false);
+    expect(validarAbonoACapital({ saldoCapital: 1000, abonosPendientes: -1, abono: 1 }).ok).toBe(false);
+  });
+});
 
 describe('aplicarPago (RN-4.24, RN-4.25, RN-4.28, RN-4.29)', () => {
   it('matches the RN-4.25 example: owes 60.000 in interest and pays 40.000', () => {

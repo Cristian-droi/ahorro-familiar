@@ -6,7 +6,8 @@
 begin;
 
 -- Runs p_sql as p_role with the JWT of p_uid. Returns the affected row count,
--- or 'denied' when the privilege check or an RLS check rejects it.
+-- 'denied' when the privilege check or an RLS check rejects it, or
+-- 'check:<constraint>' when a CHECK constraint rejects it.
 create function pg_temp.attempt(p_role text, p_uid uuid, p_sql text)
 returns text
 language plpgsql
@@ -14,6 +15,7 @@ as $$
 declare
   n bigint;
   outcome text;
+  violated text;
 begin
   perform set_config('request.jwt.claims', json_build_object('sub', p_uid, 'role', p_role)::text, true);
   perform set_config('role', p_role, true);
@@ -24,6 +26,9 @@ begin
   exception
     when insufficient_privilege then
       outcome := 'denied';
+    when check_violation then
+      get stacked diagnostics violated = constraint_name;
+      outcome := 'check:' || violated;
   end;
   perform set_config('role', 'postgres', true);
   return outcome;
@@ -236,6 +241,46 @@ select pg_temp.expect('storage: gerente may read payment proofs, without write p
    where schemaname = 'storage' and tablename = 'objects'
      and policyname = 'payment_proofs_admin_role_read' and cmd = 'SELECT'
      and qual like '%has_admin_role%'), '1');
+
+-- RN-4.29: no loan ends with a negative balance, on any path.
+insert into public.loans (id, user_id, requested_amount, status, outstanding_balance, disbursed_at, full_rate_day_limit, cutoff_day) values
+  ('00000000-0000-0000-0000-0000000000a1', '00000000-0000-0000-0000-00000000000a', 100000, 'active', 100000, now(), 15, 25),
+  ('00000000-0000-0000-0000-0000000000a2', '00000000-0000-0000-0000-00000000000a', 100000, 'active', 100000, now(), 15, 25),
+  ('00000000-0000-0000-0000-0000000000a3', '00000000-0000-0000-0000-00000000000a', 100000, 'active', 100000, now(), 15, 25);
+
+insert into public.receipts (id, user_id) values
+  ('00000000-0000-0000-0000-0000000000b1', '00000000-0000-0000-0000-00000000000a'),
+  ('00000000-0000-0000-0000-0000000000b2', '00000000-0000-0000-0000-00000000000a'),
+  ('00000000-0000-0000-0000-0000000000b3', '00000000-0000-0000-0000-00000000000a');
+
+insert into public.receipt_items (receipt_id, concept, target_month, amount, loan_id) values
+  ('00000000-0000-0000-0000-0000000000b1', 'pago_capital', date_trunc('month', now())::date, 100001, '00000000-0000-0000-0000-0000000000a1'),
+  ('00000000-0000-0000-0000-0000000000b2', 'pago_capital', date_trunc('month', now())::date, 100000, '00000000-0000-0000-0000-0000000000a2'),
+  ('00000000-0000-0000-0000-0000000000b3', 'pago_capital', date_trunc('month', now())::date, 40000, '00000000-0000-0000-0000-0000000000a3');
+
+select pg_temp.expect('a negative balance is rejected even for the server',
+  pg_temp.attempt('service_role', null,
+    $q$update public.loans set outstanding_balance = -1 where id = '00000000-0000-0000-0000-0000000000a1'$q$), 'check:loans_outstanding_balance_not_negative');
+select pg_temp.expect('negative deducted interest is rejected',
+  pg_temp.attempt('service_role', null,
+    $q$update public.loans set deducted_interest_amount = -1 where id = '00000000-0000-0000-0000-0000000000a1'$q$), 'check:loans_deducted_interest_not_negative');
+select pg_temp.expect('approving a capital payment above the balance is rejected, not clamped',
+  pg_temp.attempt('service_role', null,
+    $q$update public.receipts set status = 'approved', reviewed_at = now(), reviewed_by = '00000000-0000-0000-0000-00000000000c' where id = '00000000-0000-0000-0000-0000000000b1'$q$), 'check:loans_outstanding_balance_not_negative');
+select pg_temp.expect('the rejected approval leaves the balance untouched',
+  (select outstanding_balance::text from public.loans where id = '00000000-0000-0000-0000-0000000000a1'), '100000');
+select pg_temp.expect('the rejected approval leaves the receipt pending',
+  (select status::text from public.receipts where id = '00000000-0000-0000-0000-0000000000b1'), 'pending');
+select pg_temp.expect('paying the exact balance is approved',
+  pg_temp.attempt('service_role', null,
+    $q$update public.receipts set status = 'approved', reviewed_at = now(), reviewed_by = '00000000-0000-0000-0000-00000000000c' where id = '00000000-0000-0000-0000-0000000000b2'$q$), '1');
+select pg_temp.expect('paying the exact balance leaves the loan paid at zero (RN-4.28)',
+  (select outstanding_balance || ' ' || status from public.loans where id = '00000000-0000-0000-0000-0000000000a2'), '0 paid');
+select pg_temp.expect('a partial capital payment is approved',
+  pg_temp.attempt('service_role', null,
+    $q$update public.receipts set status = 'approved', reviewed_at = now(), reviewed_by = '00000000-0000-0000-0000-00000000000c' where id = '00000000-0000-0000-0000-0000000000b3'$q$), '1');
+select pg_temp.expect('a partial capital payment lowers the balance and keeps the loan active',
+  (select outstanding_balance || ' ' || status from public.loans where id = '00000000-0000-0000-0000-0000000000a3'), '60000 active');
 
 -- The server keeps its access.
 select pg_temp.expect('service role writes loans',

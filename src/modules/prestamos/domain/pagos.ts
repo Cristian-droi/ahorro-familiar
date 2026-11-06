@@ -26,6 +26,38 @@ export function estaPagado(params: { saldoCapital: number; interesesPendientes: 
   return params.saldoCapital === 0 && params.interesesPendientes === 0;
 }
 
+// RN-4.27 and RN-4.29: each loan is independent, so its lines add up on their own.
+export function sumarAbonosPorPrestamo(
+  lineas: { prestamoId: string; monto: number }[],
+): Map<string, number> {
+  const totales = new Map<string, number>();
+  for (const { prestamoId, monto } of lineas) {
+    totales.set(prestamoId, (totales.get(prestamoId) ?? 0) + monto);
+  }
+  return totales;
+}
+
+// RN-4.29: a capital payment never exceeds what is left of the balance once the
+// payments waiting for approval are counted. Returns what would be left.
+export function validarAbonoACapital(params: {
+  saldoCapital: number;
+  abonosPendientes: number;
+  abono: number;
+}): Result<number, ErrorDeDominio> {
+  const { saldoCapital, abonosPendientes, abono } = params;
+  if (!esPagoValido(abono)) return err(PAGO_INVALIDO);
+  if (!esSaldoValido(saldoCapital) || !esSaldoValido(abonosPendientes)) return err(VALOR_INVALIDO);
+
+  const disponible = Math.max(saldoCapital - abonosPendientes, 0);
+  if (abono > disponible) {
+    return err({
+      codigo: 'abono_mayor_al_saldo',
+      mensaje: `El abono a capital no puede superar el saldo pendiente del préstamo. Puedes abonar hasta $${formatearPesos(disponible)}.`,
+    });
+  }
+  return ok(disponible - abono);
+}
+
 export interface PagoAplicado {
   aIntereses: number;
   aCapital: number;

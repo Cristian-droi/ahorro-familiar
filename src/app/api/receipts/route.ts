@@ -9,6 +9,7 @@ import {
   loadPurchaseRules,
   mapReceiptItemError,
 } from '@/lib/receipts-build';
+import { validateCapitalPayments } from '@/lib/receipt-capital';
 
 // POST /api/receipts — crea un recibo pending para el accionista autenticado.
 //
@@ -66,6 +67,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: puedeComprar.error.mensaje }, { status: 400 });
     }
     const unitValue = puedeComprar.value;
+
+    const capital = await validateCapitalPayments(admin, { items, countPending: true });
+    if (!capital.ok) {
+      return NextResponse.json({ error: capital.error.mensaje }, { status: 400 });
+    }
 
     const rules = await loadPurchaseRules(admin);
     let builtItems: Awaited<ReturnType<typeof buildReceiptItems>>['items'];

@@ -346,7 +346,7 @@ En diciembre las utilidades llegan a 10.000.000, pero el gasto **sigue siendo 20
 | 14 | Zona horaria | Mezcla UTC y Bogotá | Todo en America/Bogota |
 | 15 | RN-9 auditoría | No existe | Implementar |
 | 16 | Seguridad | `loans_update_own_draft` permite editar la tasa; `system_settings` sin migración ni RLS | Corregir |
-| 17 | RN-4.29 abono mayor al saldo | Verificar | Validar en el dominio y proteger en la base (saldo ≥ 0) |
+| 17 | RN-4.29 abono mayor al saldo | Resuelto en la S4 para capital; el trigger ya no recorta el saldo a 0 | Falta el sobrepago de intereses, que depende de RN-4.22b |
 
 ---
 

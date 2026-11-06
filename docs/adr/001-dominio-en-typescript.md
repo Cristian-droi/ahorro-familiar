@@ -51,4 +51,5 @@ Resumen: **"el dominio calcula y la base protege"**.
 - **Riesgo:** que algún código escriba en la base saltándose el dominio.
   - **Mitigación** (defensa en profundidad, ver `arquitectura.md`, sección 6): RLS que niega escrituras desde el cliente, ESLint que restringe los imports del cliente admin de Supabase, invariantes en la base, conciliación programada y auditoría.
 - Hay que migrar las funciones SQL de cálculo existentes al dominio y dejar en SQL solo la persistencia transaccional y las validaciones.
+- **Excepción temporal (2026-11-06):** el trigger `apply_loan_payment_on_receipt_approval` resta el abono del saldo en SQL desde abril de 2026. Se mantiene hasta que aprobar un recibo pase a un caso de uso con RPC transaccional. La regla RN-4.29 ya vive en el dominio (`validarAbonoACapital`) y la base solo la protege con un `CHECK`.
 - Las lecturas agregadas (utilidades de todo el grupo) pueden requerir cargar más datos al servidor. Se resuelve con consultas de lectura optimizadas que **traen datos crudos**, mientras el cálculo sigue en el dominio.

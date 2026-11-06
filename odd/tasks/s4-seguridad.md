@@ -30,7 +30,7 @@ Open questions go to Cris when their task starts (RN text not quoted yet: RN-4.2
 |---|---|---|---|---|
 | T1 | S1, S2, S3 | inline | done | `c499161`. RED: `anon` ran `TRUNCATE loans`; vote summaries 3 failing → GREEN: `supabase/tests/s4_rls.sql` 29/29, suite 590/590, `tsc` clean, lint 0 errors. Browser check came with T2. Native review approved and acknowledged |
 | T2 | S4, S5, S12 | inline | done | RED: `acceso-admin` test had no module; probes failed on missing `admin_role` → GREEN: probes 47/47, suite 605/605, `tsc` clean, lint 0 errors. Browser on local Supabase with the three roles (L11) |
-| T3 | S6, S7 | inline | pending | |
+| T3 | S6, S7 | inline | done | RED: probe "negative balance" got 1 row, domain and adapter tests had no code → GREEN: probes 56/56, suite 618/618, `tsc` clean, lint 0 errors. Routes checked on local Supabase (L16) |
 | T4 | S8, S9 | inline | pending | |
 | T5 | S10, S11 | inline | pending | |
 
@@ -47,6 +47,10 @@ Follow-ups Cris asked to keep for later (L13). None is done:
 | F7 | Not checked in the browser: Accionistas action buttons and the disbursement card as gerente | Both checked with local data |
 | F8 | T1 review advisories: `getLoanWithDetails` failure path has no test; no positive probes for the writes `authenticated` keeps on `bank_accounts`, `capitalization_windows` and `profiles` | Test and probes added |
 | F9 | `.env.local` points to the cloud, and the local dev script lives in a temporary folder | A documented local run in the repo |
+| F10 | An interest payment above what is owed is not rejected: `adeudado` stops at 0 and the excess disappears. The limit needs RN-4.22b (current month's interest from day 16), which has no domain function yet | A rule and a limit, decided with Cris |
+| F11 | T2 review advisories: a tesorero with `role = 'admin'` can get a "voto pendiente" notification they cannot clear (see F4); no probes for gerente reads on receipts, items, requests, memberships, plan items and windows, nor for the three report functions; no automated test for `requireAdmin` or the proxy | Probes and tests added, notification decided with F4 |
+| F12 | ADR-001 debt: `get_all_users_utilities_by_year` and `get_user_utilities_by_year` still round money in SQL. T2 copied them unchanged except the guard | They move to the domain |
+| F13 | ADR-001 exception: the approval trigger subtracts the capital payment in SQL | Approving a receipt is a use case with a transactional RPC |
 
 Route evidence: no Writer trigger; the tasks share migrations and depend on each other. Risk: item 2 (security), so an independent verifier runs at the feature's end.
 
@@ -66,3 +70,7 @@ Route evidence: no Writer trigger; the tasks share migrations and depend on each
 - **L12 (2026-11-06):** `supabase migration up` fails with the current CLI: "[inbucket] in supabase/config.toml is no longer supported. Use [local_smtp] instead." Migrations were applied with `psql` and recorded in `schema_migrations`. `db reset` from zero is still pending and needs this config fixed first. `.env.local` points to the cloud project, so `scripts/seed-admin.mjs` must not be used for local test users.
 - **L13 (2026-11-06, Cris):** "Listo deja anotado todos esos pendientes para arreglarlos, despues, que se puede hacer para aareglar la base de datos supabase en la nube?"
 - **L14 (2026-11-06, Cris):** "Listo dejemoslo para despues entonces. Entonces realiza el commit de la t2 y sigamos con la t3"
+- **L15 (2026-11-06):** T2 committed as `fe1e4ee`; native review (risk, reliability) approved and acknowledged, three advisories in F11. T3 decisions: when creating or resubmitting, capital lines count other pending receipts, so several receipts cannot add up to more than the balance; approval compares only against the current balance. The trigger no longer clamps at 0, so a race fails the approval and the receipt stays pending. Interest owed is not stored, so the constraint covers `outstanding_balance` and `deducted_interest_amount`; interest overpayment is F10. The first version of the approval probe passed for the wrong reason (`receipts_reviewed_consistency`), so probes now name the violated constraint.
+- **L16 (2026-11-06):** Routes on local Supabase, balance 1.000.000 with pending receipts of 1.000.001 and 400.000. `POST /api/receipts` for 1 peso answers 400, "Puedes abonar hasta $0". Approving 1.000.001 answers 422 and shows the maximum of $1.000.000; the receipt stays pending. Approving 400.000 answers 200 and leaves the balance at 600.000. Not exercised: resubmit route (adapter test only), the 409 race path (constraint proven by probe, route mapping not), and the shareholder's error toast in the cart.
+- **L17 (2026-11-06, Cris):** "Listo haz el commit de la T3 y sigamos con la T4"
+- **L18 (2026-11-06):** The commit hook (GGA) rejected T3 because the trigger subtracts money in SQL (ADR-001). That subtraction exists since April and T3 only removed the clamp, so it was recorded as a temporary exception in ADR-001 with follow-up F13 instead of moving approval to an RPC now. The route's 409 now matches the constraint name, as GGA also suggested.

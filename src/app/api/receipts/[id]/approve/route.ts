@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { getLoanInterestOwed } from '@/lib/data/loans';
+import { validateCapitalPayments } from '@/lib/receipt-capital';
 
 // POST /api/receipts/[id]/approve — aprobación por parte del admin.
 //
@@ -105,6 +106,12 @@ export async function POST(
       }
     }
 
+    // RN-4.29: the capital payment cannot exceed the current balance.
+    const capital = await validateCapitalPayments(admin, { items: items ?? [], countPending: false });
+    if (!capital.ok) {
+      return NextResponse.json({ error: capital.error.mensaje }, { status: 422 });
+    }
+
     // Aprobar el recibo
     const { error: updateError } = await admin
       .from('receipts')
@@ -117,6 +124,14 @@ export async function POST(
       })
       .eq('id', receiptId);
 
+    // Another approval lowered the balance after the check above (RN-4.29). The
+    // database rolled this one back, so the receipt is still pending.
+    if (updateError?.message?.includes('loans_outstanding_balance_not_negative')) {
+      return NextResponse.json(
+        { error: 'El abono a capital supera el saldo actual del préstamo. El recibo sigue pendiente.' },
+        { status: 409 },
+      );
+    }
     if (updateError) {
       console.error('Error aprobando recibo:', updateError);
       return NextResponse.json(
