@@ -59,10 +59,10 @@
 - [x] Migración: dinero a `bigint`.
 
 ### S3 · Dominio II (2–8 nov)
-- [ ] Votación: mayoría sin el solicitante y rechazo automático (RN-4.6 a 4.8). Progreso con voto secreto (RN-4.9b).
-- [ ] Aplicación de pagos: intereses primero y abonos parciales (RN-4.24 y 4.25). El abono a capital no supera el saldo y el excedente va a otro préstamo (RN-4.29; RN-4.29b 🟡).
-- [ ] Mover `src/lib/loans.ts`, `fines.ts` y `obligations.ts` al dominio y actualizar los callers.
-- [ ] Periodos y valor de acción por periodo (RN-2.2).
+- [x] Votación: mayoría sin el solicitante y rechazo automático (RN-4.6 a 4.8). Progreso con voto secreto (RN-4.9b).
+- [x] Aplicación de pagos: intereses primero y abonos parciales (RN-4.24 y 4.25). El abono a capital no supera el saldo y el excedente va a otro préstamo (RN-4.29). Cambió: carrito y monto fijo (RN-4.29b y 4.29c).
+- [x] Mover `src/lib/loans.ts`, `fines.ts` y `obligations.ts` al dominio y actualizar los callers.
+- [x] Periodos y valor de acción por periodo (RN-2.2).
 
 ### S4 · Seguridad (9–15 nov)
 - [ ] `profiles.admin_role` (`gerente` o `tesorero`) y ajuste de `src/proxy.ts` y del menú en dos secciones.
@@ -131,3 +131,4 @@ Se sacaron del plan hasta la demo por falta de capacidad. Ninguna es necesaria p
 | S0 | 10 | 6 | ✅ | Terminada antes de lo previsto (14–15 oct), con 4 h menos de lo estimado |
 | S1 | 8 | 9 | ✅ | Terminada el 19 de oct (PR #3, mergeado el 25), con 1 h más de lo planeado. Además se arreglaron 34 errores de `tsc` y se agregó RN-4.29 |
 | S2 | 8 | 5 | ✅ | Terminada el 26 de oct (PR #5, mergeado el mismo día), con 3 h menos de lo planeado. Además se agregó RN-4.30 (cuota para cerrar el año, redondeo hacia arriba) |
+| S3 | 8 | ? | ✅ | Terminada el 5 de nov, antes de la fecha planeada. Además de lo previsto: reglas nuevas de Cris (RN-2.2, RN-3.4, RN-4.3b, RN-4.5b, RN-4.21b, RN-4.22b, RN-4.29b/c, RN-4.31), una sola fuente de intereses, ajustes configurables y guardado de Ajustes desde el servidor |
