@@ -387,7 +387,7 @@ export async function getLoanWithDetails(
   supabase: SB,
   id: string,
 ): Promise<LoanWithVoting | null> {
-  const [loanRes, planRes, votesRes, totalRes] = await Promise.all([
+  const [loanRes, planRes, votesRes, voteTotalsRes, totalRes] = await Promise.all([
     supabase
       .from('loans')
       .select(`*, borrower:profiles!loans_user_id_fkey(id,first_name,last_name,identity_document,role)`)
@@ -398,19 +398,23 @@ export async function getLoanWithDetails(
       .select('*')
       .eq('loan_id', id)
       .order('month_number'),
+    // RN-4.9b: RLS returns only the caller's own vote; progress comes from totals.
     supabase
       .from('loan_votes')
-      .select(`*, voter:profiles!loan_votes_voter_id_fkey(id,first_name,last_name)`)
+      .select('*')
       .eq('loan_id', id),
+    supabase.rpc('get_loan_vote_totals', { p_loan_ids: [id] }),
     supabase.rpc('count_active_shareholders'),
   ]);
 
   if (loanRes.error) throw loanRes.error;
   if (!loanRes.data) return null;
+  if (voteTotalsRes.error) throw voteTotalsRes.error;
 
-  const votes = (votesRes.data ?? []) as Array<Record<string, unknown>>;
-  const approvedVotes = votes.filter((v) => v.vote === 'approved').length;
-  const rejectedVotes = votes.filter((v) => v.vote === 'rejected').length;
+  const votes = votesRes.data ?? [];
+  const voteTotals = voteTotalsRes.data?.[0];
+  const approvedVotes = Number(voteTotals?.approved ?? 0);
+  const rejectedVotes = Number(voteTotals?.rejected ?? 0);
 
   // Verificar si hay un recibo aprobado de acciones_prestamo para este préstamo
   const { data: upfrontItems } = await supabase

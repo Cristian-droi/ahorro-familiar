@@ -131,18 +131,17 @@ export class LoanRepository {
 
     for (const id of loanIds) map.set(id, { approved: 0, rejected: 0 });
 
-    const { data: votes, error } = await this.supabase
-      .from('loan_votes')
-      .select('loan_id, vote')
-      .in('loan_id', loanIds);
-    
+    // RN-4.9b: only totals. RLS hides other people's rows in loan_votes.
+    const { data: totals, error } = await this.supabase.rpc('get_loan_vote_totals', {
+      p_loan_ids: loanIds,
+    });
+
     if (error) throw error;
 
-    for (const v of votes ?? []) {
-      const s = map.get(v.loan_id);
-      if (!s) continue;
-      if (v.vote === 'approved') s.approved += 1;
-      else if (v.vote === 'rejected') s.rejected += 1;
+    for (const t of totals ?? []) {
+      if (map.has(t.loan_id)) {
+        map.set(t.loan_id, { approved: Number(t.approved), rejected: Number(t.rejected) });
+      }
     }
     return map;
   }

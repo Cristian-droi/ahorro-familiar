@@ -16,8 +16,6 @@ import {
   Banknote,
   AlertTriangle,
   Users,
-  ThumbsUp,
-  ThumbsDown,
   ToggleLeft,
   ToggleRight,
   RotateCcw,
@@ -553,33 +551,13 @@ export default function AdminLoanDetailPage() {
           )}
 
           {/* Votos */}
-          {loan.votes.length > 0 && (
+          {(loan.approved_votes > 0 || loan.rejected_votes > 0) && (
             <Card padding="lg">
-              <div className="flex items-center gap-2 mb-4">
+              <div className="flex items-center gap-2">
                 <Users size={16} strokeWidth={1.75} className="text-[var(--color-text-muted)]" />
                 <div className="text-[14px] font-semibold tracking-tight">
                   Votación ({loan.approved_votes} a favor · {loan.rejected_votes} en contra · necesarios: {needed})
                 </div>
-              </div>
-              <div className="flex flex-col gap-2">
-                {loan.votes.map((v) => {
-                  const voter = v as typeof v & { voter?: { first_name: string; last_name: string } };
-                  return (
-                    <div key={v.id} className="flex items-center gap-3 text-[13px]">
-                      {v.vote === 'approved' ? (
-                        <ThumbsUp size={14} strokeWidth={1.75} className="text-[var(--color-success)]" />
-                      ) : (
-                        <ThumbsDown size={14} strokeWidth={1.75} className="text-[var(--color-danger)]" />
-                      )}
-                      <span className="font-medium">
-                        {voter.voter ? `${voter.voter.first_name} ${voter.voter.last_name}` : v.voter_id}
-                      </span>
-                      {v.comment && (
-                        <span className="text-[var(--color-text-muted)]">— {v.comment}</span>
-                      )}
-                    </div>
-                  );
-                })}
               </div>
             </Card>
           )}

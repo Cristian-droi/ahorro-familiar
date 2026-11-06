@@ -690,6 +690,14 @@ export type Database = {
       }
       get_cash_balance: { Args: never; Returns: number }
       get_loan_interest_owed: { Args: { p_loan_id: string }; Returns: number }
+      get_loan_vote_totals: {
+        Args: { p_loan_ids: string[] }
+        Returns: {
+          approved: number
+          loan_id: string
+          rejected: number
+        }[]
+      }
       get_my_capitalization_state: { Args: never; Returns: Json }
       get_my_pending_loan_share_purchases: {
         Args: never
