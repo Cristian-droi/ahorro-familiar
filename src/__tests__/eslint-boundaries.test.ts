@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ESLint } from 'eslint';
 import path from 'path';
+import { readFileSync } from 'fs';
+import { LEGACY_ADMIN_CLIENT_FILES } from '../../eslint.config.mjs';
 
 // The first lint loads the whole ESLint config and takes about 6 s on a cold
 // run, over the default 5 s. Only this file gets the longer timeout.
@@ -91,7 +93,32 @@ describe('Supabase admin client', () => {
     expect(await reglasQueFallan(importacion, INFRA)).toEqual([]);
   });
 
-  it('only warns in legacy route handlers until S4', async () => {
-    expect(await reglasQueFallan(importacion, RUTA_LEGADA)).toEqual(['warn:no-restricted-imports']);
+  it.each([
+    'src/app/api/nueva/route.ts',
+    'src/app/dashboard/nueva/page.tsx',
+    'src/lib/nuevo.ts',
+    'src/app/api/prestamos/[id]/nueva/route.ts',
+  ])('is an error anywhere else: %s', async (archivo) => {
+    expect(await reglasQueFallan(importacion, archivo)).toEqual(['error:no-restricted-imports']);
+  });
+
+  it.each([RUTA_LEGADA, 'src/app/api/prestamos/[id]/disburse/route.ts', 'src/app/verify-email-change/page.tsx'])(
+    'only warns in the temporary exception: %s',
+    async (archivo) => {
+      expect(await reglasQueFallan(importacion, archivo)).toEqual(['warn:no-restricted-imports']);
+    },
+  );
+
+  // The exception only shrinks: a file leaves the list when it is migrated.
+  describe('temporary exception list', () => {
+    const rutas = LEGACY_ADMIN_CLIENT_FILES.map((glob) => glob.replace(/\\/g, ''));
+
+    it('never grows past the 18 legacy files', () => {
+      expect(rutas.length).toBeLessThanOrEqual(18);
+    });
+
+    it.each(rutas)('%s still imports the admin client', (ruta) => {
+      expect(readFileSync(path.resolve(__dirname, '../..', ruta), 'utf8')).toContain('supabase/admin');
+    });
   });
 });
