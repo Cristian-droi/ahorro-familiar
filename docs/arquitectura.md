@@ -126,7 +126,7 @@ src/
 
 ### 5.7 Auditoría
 - La tabla `audit_log` es **solo de agregar**: sin `UPDATE` ni `DELETE` para ningún rol, garantizado con un trigger que lo impide.
-- Columnas: `actor_id`, `accion`, `entidad`, `entidad_id`, `antes`, `despues` (jsonb), `motivo`, `es_propio` (bandera de conflicto de interés), `created_at`.
+- Columnas: `actor_id`, `action`, `entity`, `entity_id`, `before`, `after` (jsonb), `reason`, `is_self_action` (bandera de conflicto de interés), `created_at`.
 - La escribe el caso de uso **dentro de la misma transacción** que el cambio.
 
 ## 6. Defensa en profundidad

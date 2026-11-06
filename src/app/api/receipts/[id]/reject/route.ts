@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { rejectReceiptPayload } from '@/lib/schemas/receipt';
+import { auditedUpdate } from '@/lib/audit';
 
 // POST /api/receipts/[id]/reject — rechazo por parte del admin.
 //
@@ -61,16 +62,20 @@ export async function POST(
       );
     }
 
-    const { error: updateError } = await admin
-      .from('receipts')
-      .update({
+    const { error: updateError } = await auditedUpdate(admin, {
+      entity: 'receipts',
+      id: receiptId,
+      patch: {
         status: 'rejected',
         reviewed_at: new Date().toISOString(),
         reviewed_by: admin_user.id,
         rejection_reason: reason,
         rejection_note: note ?? null,
-      })
-      .eq('id', receiptId);
+      },
+      actorId: admin_user.id,
+      action: 'receipt.reject',
+      reason: note ? `${reason}: ${note}` : reason,
+    });
 
     if (updateError) {
       console.error('Error rechazando recibo:', updateError);

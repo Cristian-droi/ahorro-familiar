@@ -224,7 +224,7 @@ erDiagram
 
 ### 4.9 Control 🔵
 
-**`audit_log`** (RN-9)
+**`audit_log`** 🟢 (RN-9). Se escribe con `apply_audited_update`, `apply_audited_settings` y `allow_share_value_change`.
 - `id bigint generated always as identity PK`.
 - `actor_id` (FK a `profiles`), `action text not null` (por ejemplo `loan.disburse`), `entity text not null`, `entity_id uuid`.
 - `before jsonb`, `after jsonb`, `reason text`.

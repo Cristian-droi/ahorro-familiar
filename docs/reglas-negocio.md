@@ -344,7 +344,7 @@ En diciembre las utilidades llegan a 10.000.000, pero el gasto **sigue siendo 20
 | 12 | RN-8.x liquidación y cierre | Solo reporte en el cliente, sin cierre ni reinicio | Implementar en el servidor con el invariante RN-8.1 |
 | 13 | RN-4.18 cálculo de intereses | Dos cálculos distintos (resumen y función SQL) | Unificar en una sola fuente |
 | 14 | Zona horaria | Mezcla UTC y Bogotá | Todo en America/Bogota |
-| 15 | RN-9 auditoría | No existe | Implementar |
+| 15 | RN-9 auditoría | `audit_log` existe desde la S4 para préstamos, recibos y ajustes | Falta el desembolso (S5), solicitudes y capitalizaciones; el aviso al gerente y la vista llegan después |
 | 16 | Seguridad | `loans_update_own_draft` permite editar la tasa; `system_settings` sin migración ni RLS | Corregir |
 | 17 | RN-4.29 abono mayor al saldo | Resuelto en la S4 para capital; el trigger ya no recorta el saldo a 0 | Falta el sobrepago de intereses, que depende de RN-4.22b |
 

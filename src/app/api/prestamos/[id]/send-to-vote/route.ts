@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { EXPIRED_REQUEST_MESSAGE, expireLoanRequestIfDue } from '@/lib/loan-expiry';
+import { auditedUpdate } from '@/lib/audit';
 
 // POST /api/prestamos/[id]/send-to-vote — admin envía el préstamo a votación de accionistas.
 // Solo es posible si el plan ya fue aprobado por el admin.
@@ -38,10 +39,13 @@ export async function POST(
       return NextResponse.json({ error: 'El plan debe ser aprobado antes de enviarlo a votación' }, { status: 422 });
     }
 
-    const { error: updateError } = await admin
-      .from('loans')
-      .update({ status: 'pending_shareholder_vote', updated_at: new Date().toISOString() })
-      .eq('id', id);
+    const { error: updateError } = await auditedUpdate(admin, {
+      entity: 'loans',
+      id,
+      patch: { status: 'pending_shareholder_vote', updated_at: new Date().toISOString() },
+      actorId: authCheck.user.id,
+      action: 'loan.send_to_vote',
+    });
 
     if (updateError) {
       return NextResponse.json({ error: 'No se pudo enviar a votación' }, { status: 500 });

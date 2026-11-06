@@ -15,7 +15,7 @@ import {
 // `system_settings` only lets `authenticated` read; only service_role writes.
 // This route checks the caller is admin, validates every value with the
 // parametros domain (only the keys the ajustes page edits) and writes all of
-// them in one upsert, or nothing.
+// them with their audit records in one transaction, or nothing (RN-9).
 
 const payload = z.object({
   settings: z
@@ -55,9 +55,8 @@ export async function POST(request: Request) {
     }
 
     // Validated values are JSON (numbers, booleans and number lists).
-    // `updated_at` only has an insert default, so it is set on every save.
     const filas = validados.value.map((f) => ({ key: f.key, value: f.value as Json }));
-    const guardado = await guardarAjustes(filas, new Date().toISOString());
+    const guardado = await guardarAjustes(filas, authCheck.user.id);
     if (!guardado.ok) {
       console.error('system_settings upsert error:', guardado.mensaje);
       return NextResponse.json({ error: 'No se pudo guardar la configuración' }, { status: 500 });

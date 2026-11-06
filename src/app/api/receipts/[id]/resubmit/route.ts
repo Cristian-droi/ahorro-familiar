@@ -108,6 +108,7 @@ export async function POST(
       items,
       countPending: true,
       excludeReceiptId: receiptId,
+      ownerId: user.id,
     });
     if (!capital.ok) {
       return NextResponse.json({ error: capital.error.mensaje }, { status: 400 });

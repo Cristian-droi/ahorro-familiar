@@ -282,6 +282,125 @@ select pg_temp.expect('a partial capital payment is approved',
 select pg_temp.expect('a partial capital payment lowers the balance and keeps the loan active',
   (select outstanding_balance || ' ' || status from public.loans where id = '00000000-0000-0000-0000-0000000000a3'), '60000 active');
 
+-- audit_log (S8, S9, RN-9). The change and its record live or die together.
+select pg_temp.expect('audit: the server updates a loan and records it',
+  pg_temp.attempt('service_role', null, $q$
+    select public.apply_audited_update('loans', '00000000-0000-0000-0000-0000000000f2',
+      '{"admin_notes": "revisado"}'::jsonb, '00000000-0000-0000-0000-00000000000c', 'loan.plan_approve', 'porque si')
+  $q$), '1');
+select pg_temp.expect('audit: the change was applied',
+  (select admin_notes from public.loans where id = '00000000-0000-0000-0000-0000000000f2'), 'revisado');
+select pg_temp.expect('audit: who, what, reason, before and after (RN-9.2)',
+  (select actor_id::text || '|' || action || '|' || entity || '|' || entity_id::text || '|' || reason || '|' || (before ? 'admin_notes') || '|' || (after ->> 'admin_notes') || '|' || is_self_action
+   from public.audit_log where action = 'loan.plan_approve'),
+  '00000000-0000-0000-0000-00000000000c|loan.plan_approve|loans|00000000-0000-0000-0000-0000000000f2|porque si|true|revisado|false');
+select pg_temp.expect('audit: an action on your own loan is marked (RN-9.4)',
+  pg_temp.attempt('service_role', null, $q$
+    select public.apply_audited_update('loans', '00000000-0000-0000-0000-0000000000f2',
+      '{"admin_notes": "propio"}'::jsonb, '00000000-0000-0000-0000-00000000000a', 'loan.self_check', null)
+  $q$), '1');
+select pg_temp.expect('audit: the self action flag is stored',
+  (select is_self_action::text from public.audit_log where action = 'loan.self_check'), 'true');
+
+-- Same overpayment as RN-4.29 above, now through the audited path.
+insert into public.receipts (id, user_id) values
+  ('00000000-0000-0000-0000-0000000000b4', '00000000-0000-0000-0000-00000000000a');
+insert into public.receipt_items (receipt_id, concept, target_month, amount, loan_id) values
+  ('00000000-0000-0000-0000-0000000000b4', 'pago_capital', date_trunc('month', now())::date, 999999, '00000000-0000-0000-0000-0000000000a3');
+select pg_temp.expect('audit: a rejected change leaves no record and no change',
+  pg_temp.attempt('service_role', null, $q$
+    select public.apply_audited_update('receipts', '00000000-0000-0000-0000-0000000000b4',
+      '{"status": "approved", "reviewed_at": "2026-11-06T10:00:00Z", "reviewed_by": "00000000-0000-0000-0000-00000000000c"}'::jsonb,
+      '00000000-0000-0000-0000-00000000000c', 'receipt.overpaid', null)
+  $q$), 'check:loans_outstanding_balance_not_negative');
+select pg_temp.expect('audit: no record of the rejected change',
+  (select count(*)::text from public.audit_log where action = 'receipt.overpaid'), '0');
+select pg_temp.expect('audit: the receipt stayed pending',
+  (select status::text from public.receipts where id = '00000000-0000-0000-0000-0000000000b4'), 'pending');
+insert into public.receipts (id, user_id) values
+  ('00000000-0000-0000-0000-0000000000b5', '00000000-0000-0000-0000-00000000000a');
+insert into public.receipt_items (receipt_id, concept, target_month, amount, loan_id) values
+  ('00000000-0000-0000-0000-0000000000b5', 'pago_capital', date_trunc('month', now())::date, 10000, '00000000-0000-0000-0000-0000000000a3');
+select pg_temp.expect('audit: an approval through the audited path is recorded',
+  pg_temp.attempt('service_role', null, $q$
+    select public.apply_audited_update('receipts', '00000000-0000-0000-0000-0000000000b5',
+      '{"status": "approved", "reviewed_at": "2026-11-06T10:00:00Z", "reviewed_by": "00000000-0000-0000-0000-00000000000c"}'::jsonb,
+      '00000000-0000-0000-0000-00000000000c', 'receipt.approve', null)
+  $q$), '1');
+select pg_temp.expect('audit: that approval still lowers the balance through the trigger',
+  (select outstanding_balance::text from public.loans where id = '00000000-0000-0000-0000-0000000000a3'), '50000');
+select pg_temp.expect('audit: approving someone else''s receipt is not marked as your own',
+  (select is_self_action::text from public.audit_log
+   where action = 'receipt.approve' and entity_id = '00000000-0000-0000-0000-0000000000b5'), 'false');
+
+-- Settings: one record per value that really changed.
+insert into public.system_settings (key, value) values ('probe_audit', '1'::jsonb);
+select pg_temp.expect('audit: settings are saved through the audited path',
+  pg_temp.attempt('service_role', null, $q$
+    select public.apply_audited_settings('[{"key": "probe_audit", "value": 2}, {"key": "probe_audit_new", "value": 5}]'::jsonb, '00000000-0000-0000-0000-00000000000c')
+  $q$), '1');
+select pg_temp.expect('audit: the setting changed',
+  (select value::text from public.system_settings where key = 'probe_audit'), '2');
+select pg_temp.expect('audit: the setting keeps its old and new value',
+  (select (before ->> 'value') || '>' || (after ->> 'value') from public.audit_log where action = 'settings.update' and after ->> 'key' = 'probe_audit'), '1>2');
+select pg_temp.expect('audit: saving the same value records nothing',
+  pg_temp.attempt('service_role', null, $q$
+    select public.apply_audited_settings('[{"key": "probe_audit", "value": 2}]'::jsonb, '00000000-0000-0000-0000-00000000000c')
+  $q$), '1');
+select pg_temp.expect('audit: still one record for that setting',
+  (select count(*)::text from public.audit_log where action = 'settings.update' and after ->> 'key' = 'probe_audit'), '1');
+
+-- Share value permission: a decision of the tesorero, from their own session.
+insert into public.period_memberships (period_id, profile_id, share_value, share_value_locked_at)
+  select id, '00000000-0000-0000-0000-00000000000a', 50000, now() from public.periods where status = 'open';
+select pg_temp.expect('audit: the share value permission is recorded with the session actor',
+  pg_temp.attempt('authenticated', '00000000-0000-0000-0000-00000000000c', $q$
+    select public.allow_share_value_change('00000000-0000-0000-0000-00000000000a', true)
+  $q$), '1');
+select pg_temp.expect('audit: the share value record names the session actor',
+  (select actor_id::text || '|' || (after ->> 'share_value_change_allowed') from public.audit_log
+   where action = 'share_value.allow' and entity_id = '00000000-0000-0000-0000-00000000000a'),
+  '00000000-0000-0000-0000-00000000000c|true');
+
+-- Only allowed tables and only real columns.
+select pg_temp.expect('audit: only loans and receipts can be written this way',
+  (select count(*)::text from pg_proc where proname = 'apply_audited_update'
+     and prosrc like '%audit_entity_not_allowed%'), '1');
+select pg_temp.expect('audit: the writers are for the server only',
+  (has_function_privilege('authenticated', 'public.apply_audited_update(text, uuid, jsonb, uuid, text, text)', 'execute')
+    or has_function_privilege('anon', 'public.apply_audited_update(text, uuid, jsonb, uuid, text, text)', 'execute')
+    or has_function_privilege('authenticated', 'public.apply_audited_settings(jsonb, uuid)', 'execute')
+    or has_function_privilege('anon', 'public.apply_audited_settings(jsonb, uuid)', 'execute'))::text, 'false');
+
+-- Reading: the gerente and the tesorero only (docs/modelo-datos.md).
+select pg_temp.expect('audit: anon cannot read it',
+  pg_temp.attempt('anon', null, 'select * from public.audit_log'), 'denied');
+select pg_temp.expect('audit: a shareholder sees nothing',
+  pg_temp.attempt('authenticated', '00000000-0000-0000-0000-00000000000b',
+    $q$select * from public.audit_log where action = 'loan.plan_approve'$q$), '0');
+select pg_temp.expect('audit: the gerente reads it',
+  pg_temp.attempt('authenticated', '00000000-0000-0000-0000-00000000000d',
+    $q$select * from public.audit_log where action = 'loan.plan_approve'$q$), '1');
+select pg_temp.expect('audit: the tesorero reads it',
+  pg_temp.attempt('authenticated', '00000000-0000-0000-0000-00000000000c',
+    $q$select * from public.audit_log where action = 'loan.plan_approve'$q$), '1');
+
+-- Append only, for every role (RN-9.3).
+select pg_temp.expect('audit: nobody in the app inserts directly',
+  pg_temp.attempt('authenticated', '00000000-0000-0000-0000-00000000000c', $q$
+    insert into public.audit_log (actor_id, action, entity) values ('00000000-0000-0000-0000-00000000000c', 'x', 'x')
+  $q$), 'denied');
+select pg_temp.expect('audit: the server does not insert directly either',
+  pg_temp.attempt('service_role', null, $q$
+    insert into public.audit_log (actor_id, action, entity) values ('00000000-0000-0000-0000-00000000000c', 'x', 'x')
+  $q$), 'denied');
+select pg_temp.expect('audit: postgres cannot update it',
+  pg_temp.attempt('postgres', null, $q$update public.audit_log set reason = 'x'$q$), 'denied');
+select pg_temp.expect('audit: postgres cannot delete from it',
+  pg_temp.attempt('postgres', null, 'delete from public.audit_log'), 'denied');
+select pg_temp.expect('audit: postgres cannot truncate it',
+  pg_temp.attempt('postgres', null, 'truncate public.audit_log'), 'denied');
+
 -- The server keeps its access.
 select pg_temp.expect('service role writes loans',
   pg_temp.attempt('service_role', null,

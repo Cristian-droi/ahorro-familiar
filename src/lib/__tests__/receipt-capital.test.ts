@@ -3,24 +3,36 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from '@/types/database';
 import { validateCapitalPayments } from '@/lib/receipt-capital';
 
-type PendingRow = { loan_id: string; amount: number; receipt_id: string };
+type LoanRow = { id: string; user_id?: string; loan_number: number; outstanding_balance: number };
+type PendingRow = { loan_id: string; amount: number; receipt_id: string; concept?: string; status?: string };
 
+// Applies the .eq() filters, so removing one from the code fails a test.
 function fakeClient(options: {
-  loans: { id: string; loan_number: number; outstanding_balance: number }[];
+  loans: LoanRow[];
   pending?: PendingRow[];
   loansError?: { message: string };
 }) {
   const from = (table: string) => {
+    const filters: [string, unknown][] = [];
     const builder = {
       select: () => builder,
       in: () => builder,
-      eq: () => builder,
-      then: (resolve: (value: unknown) => void) =>
-        resolve(
+      eq: (column: string, value: unknown) => {
+        filters.push([column.replace('receipts.', ''), value]);
+        return builder;
+      },
+      then: (resolve: (value: unknown) => void) => {
+        const rows: Record<string, unknown>[] =
           table === 'loans'
-            ? { data: options.loansError ? null : options.loans, error: options.loansError ?? null }
-            : { data: options.pending ?? [], error: null },
-        ),
+            ? options.loans
+            : (options.pending ?? []).map((p) => ({ concept: 'pago_capital', status: 'pending', ...p }));
+        const data = rows.filter((row) => filters.every(([column, value]) => row[column] === value));
+        return resolve(
+          table === 'loans' && options.loansError
+            ? { data: null, error: options.loansError }
+            : { data, error: null },
+        );
+      },
     };
     return builder;
   };
@@ -85,6 +97,40 @@ describe('validateCapitalPayments (RN-4.29)', () => {
       countPending: false,
     });
     expect(r.ok).toBe(true);
+  });
+
+  it('RN-4.29: receipts that are not pending and other concepts do not use up the balance', async () => {
+    const pending = [
+      { loan_id: 'loan-1', amount: 700000, receipt_id: 'a', status: 'approved' },
+      { loan_id: 'loan-1', amount: 700000, receipt_id: 'b', status: 'rejected' },
+      { loan_id: 'loan-1', amount: 700000, receipt_id: 'c', concept: 'pago_intereses' },
+    ];
+    const r = await validateCapitalPayments(fakeClient({ loans: [loan], pending }), {
+      items: [capital(1000000)],
+      countPending: true,
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it('never reveals the balance of a loan of another shareholder', async () => {
+    const foreign = { ...loan, user_id: 'someone-else' };
+    const r = await validateCapitalPayments(fakeClient({ loans: [foreign] }), {
+      items: [capital(999999999)],
+      countPending: true,
+      ownerId: 'me',
+    });
+    // Left to the database trigger, which answers loan_payment_user_mismatch.
+    expect(r.ok).toBe(true);
+  });
+
+  it('still validates the loans of the receipt owner', async () => {
+    const mine = { ...loan, user_id: 'me' };
+    const r = await validateCapitalPayments(fakeClient({ loans: [mine] }), {
+      items: [capital(1000001)],
+      countPending: true,
+      ownerId: 'me',
+    });
+    expect(r.ok).toBe(false);
   });
 
   it('keeps each loan independent (RN-4.27)', async () => {

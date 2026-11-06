@@ -18,14 +18,15 @@ export async function leerAjustes(claves: string[]): Promise<ResultadoDeRepo<Fil
   return { ok: true, value: data ?? [] };
 }
 
-// One upsert for every row: all of them are saved, or none.
+// One transaction for every row: all of them are saved and audited, or none (RN-9).
 export async function guardarAjustes(
   filas: { key: string; value: Json }[],
-  ahora: string,
+  actorId: string,
 ): Promise<ResultadoDeRepo<null>> {
-  const { error } = await createSupabaseAdminClient()
-    .from('system_settings')
-    .upsert(filas.map((f) => ({ key: f.key, value: f.value, updated_at: ahora })));
+  const { error } = await createSupabaseAdminClient().rpc('apply_audited_settings', {
+    p_rows: filas,
+    p_actor: actorId,
+  });
   if (error) return { ok: false, mensaje: error.message };
   return { ok: true, value: null };
 }

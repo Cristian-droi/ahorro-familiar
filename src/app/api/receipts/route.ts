@@ -68,7 +68,7 @@ export async function POST(request: Request) {
     }
     const unitValue = puedeComprar.value;
 
-    const capital = await validateCapitalPayments(admin, { items, countPending: true });
+    const capital = await validateCapitalPayments(admin, { items, countPending: true, ownerId: user.id });
     if (!capital.ok) {
       return NextResponse.json({ error: capital.error.mensaje }, { status: 400 });
     }

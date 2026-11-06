@@ -12,9 +12,13 @@ type ReceiptLine = { concept: string; loan_id?: string | null; amount?: number |
 // `countPending`: true when creating or resubmitting, so that several receipts
 // waiting for approval cannot add up to more than the balance. False when
 // approving, because only approved payments have touched the balance.
+//
+// `ownerId`: the shareholder sending the receipt. Without it this message would
+// reveal the balance of someone else's loan. Their line then reaches the trigger,
+// which answers `loan_payment_user_mismatch`.
 export async function validateCapitalPayments(
   client: SupabaseClient<Database>,
-  args: { items: ReceiptLine[]; countPending: boolean; excludeReceiptId?: string },
+  args: { items: ReceiptLine[]; countPending: boolean; excludeReceiptId?: string; ownerId?: string },
 ): Promise<Result<void, ErrorDeDominio>> {
   const capitalByLoan = sumarAbonosPorPrestamo(
     args.items.flatMap((item) =>
@@ -26,10 +30,12 @@ export async function validateCapitalPayments(
   if (capitalByLoan.size === 0) return ok(undefined);
 
   const loanIds = [...capitalByLoan.keys()];
-  const { data: loans, error: loansError } = await client
+  let loansQuery = client
     .from('loans')
     .select('id, loan_number, outstanding_balance')
     .in('id', loanIds);
+  if (args.ownerId) loansQuery = loansQuery.eq('user_id', args.ownerId);
+  const { data: loans, error: loansError } = await loansQuery;
   if (loansError) throw loansError;
 
   let pendingByLoan = new Map<string, number>();

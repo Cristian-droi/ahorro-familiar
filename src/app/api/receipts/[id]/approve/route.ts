@@ -3,6 +3,7 @@ import { requireAdmin } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { getLoanInterestOwed } from '@/lib/data/loans';
 import { validateCapitalPayments } from '@/lib/receipt-capital';
+import { auditedUpdate } from '@/lib/audit';
 
 // POST /api/receipts/[id]/approve — aprobación por parte del admin.
 //
@@ -112,17 +113,20 @@ export async function POST(
       return NextResponse.json({ error: capital.error.mensaje }, { status: 422 });
     }
 
-    // Aprobar el recibo
-    const { error: updateError } = await admin
-      .from('receipts')
-      .update({
+    // Aprobar el recibo (RN-9: the change and its record, in one transaction)
+    const { error: updateError } = await auditedUpdate(admin, {
+      entity: 'receipts',
+      id: receiptId,
+      patch: {
         status: 'approved',
         reviewed_at: new Date().toISOString(),
         reviewed_by: admin_user.id,
         rejection_reason: null,
         rejection_note: null,
-      })
-      .eq('id', receiptId);
+      },
+      actorId: admin_user.id,
+      action: 'receipt.approve',
+    });
 
     // Another approval lowered the balance after the check above (RN-4.29). The
     // database rolled this one back, so the receipt is still pending.

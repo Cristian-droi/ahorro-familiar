@@ -9,6 +9,53 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
+      audit_log: {
+        Row: {
+          action: string
+          actor_id: string
+          after: Json | null
+          before: Json | null
+          created_at: string
+          entity: string
+          entity_id: string | null
+          id: number
+          is_self_action: boolean
+          reason: string | null
+        }
+        Insert: {
+          action: string
+          actor_id: string
+          after?: Json | null
+          before?: Json | null
+          created_at?: string
+          entity: string
+          entity_id?: string | null
+          id?: never
+          is_self_action?: boolean
+          reason?: string | null
+        }
+        Update: {
+          action?: string
+          actor_id?: string
+          after?: Json | null
+          before?: Json | null
+          created_at?: string
+          entity?: string
+          entity_id?: string | null
+          id?: never
+          is_self_action?: boolean
+          reason?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_log_actor_id_fkey"
+            columns: ["actor_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       bank_accounts: {
         Row: {
           account_number: string
@@ -656,6 +703,21 @@ export type Database = {
       allow_share_value_change: {
         Args: { p_allow: boolean; p_profile_id: string }
         Returns: boolean
+      }
+      apply_audited_settings: {
+        Args: { p_actor: string; p_rows: Json }
+        Returns: undefined
+      }
+      apply_audited_update: {
+        Args: {
+          p_action: string
+          p_actor: string
+          p_entity: string
+          p_id: string
+          p_patch: Json
+          p_reason?: string
+        }
+        Returns: undefined
       }
       choose_share_value: { Args: { p_share_value: number }; Returns: number }
       close_capitalization_window: { Args: never; Returns: Json }
