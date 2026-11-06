@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
+import { useAccesoAdmin } from '@/app/dashboard/AccesoAdminContext';
 import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { Card } from '@/components/ui/Card';
@@ -42,6 +43,7 @@ function extensionFromMime(mime: string) {
 }
 
 export default function AdminLoanDetailPage() {
+  const { soloLectura } = useAccesoAdmin();
   const { id } = useParams<{ id: string }>();
   const [loan, setLoan] = useState<LoanWithVoting | null>(null);
   const [loading, setLoading] = useState(true);
@@ -261,13 +263,13 @@ export default function AdminLoanDetailPage() {
               Saldo disponible: <b>{cop(cashBalance!)}</b> · Monto solicitado: <b>{cop(loanAmount)}</b> · Diferencia: <b className="text-[var(--color-danger)]">{cop(shortfall)}</b>
             </div>
           </div>
-          <button
+          {!soloLectura && <button
             onClick={() => enableCapitalization(shortfall)}
             className="shrink-0 flex items-center gap-1.5 text-[12px] font-semibold text-[var(--color-brand)] hover:underline"
           >
             <TrendingUp size={13} strokeWidth={2} />
             Habilitar capitalización
-          </button>
+          </button>}
         </div>
       )}
 
@@ -566,7 +568,7 @@ export default function AdminLoanDetailPage() {
         {/* Acciones del admin */}
         <div className="flex flex-col gap-4">
           {/* Revisión del plan */}
-          {loan.status === 'pending_review' && (
+          {!soloLectura && loan.status === 'pending_review' && (
             <Card padding="lg">
               <div className="text-[14px] font-semibold tracking-tight mb-4">Revisar solicitud</div>
 
@@ -632,7 +634,7 @@ export default function AdminLoanDetailPage() {
           )}
 
           {/* Enviar a votación (una vez aprobado el plan) */}
-          {loan.status === 'pending_review' && loan.plan_status === 'approved' && (
+          {!soloLectura && loan.status === 'pending_review' && loan.plan_status === 'approved' && (
             <Card padding="lg" className="border-[var(--color-brand)]/25">
               <div className="text-[14px] font-semibold tracking-tight mb-2">Plan aprobado</div>
               <p className="text-[12px] text-[var(--color-text-muted)] mb-4">
@@ -718,6 +720,7 @@ export default function AdminLoanDetailPage() {
                 </div>
               </div>
 
+              {!soloLectura && <>
               {/* Toggle acciones por adelantado */}
               <div className="mb-4 p-3 rounded-[10px] bg-[var(--color-surface-alt)]">
                 <div className="flex items-center justify-between gap-2">
@@ -891,6 +894,7 @@ export default function AdminLoanDetailPage() {
                   No podés desembolsar hasta que la caja cubra el monto requerido.
                 </p>
               )}
+              </>}
             </Card>
             );
           })()}

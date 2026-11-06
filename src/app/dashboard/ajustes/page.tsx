@@ -2,6 +2,8 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { useAccesoAdmin } from '@/app/dashboard/AccesoAdminContext';
+import { puedeLeerAdmin } from '@/shared/domain/acceso-admin';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -32,6 +34,7 @@ import {
 } from 'lucide-react';
 import {
   getProfile,
+  getProfileAdminRole,
   getProfileRole,
   updateProfile,
 } from '@/lib/data/profiles';
@@ -70,6 +73,7 @@ const cop = (n: number) => '$ ' + new Intl.NumberFormat('es-CO').format(n);
 
 export default function AjustesPage() {
   const [role, setRole] = useState<'admin' | 'accionista' | null>(null);
+  const { rolAdmin, soloLectura } = useAccesoAdmin();
   const [userId, setUserId] = useState<string | null>(null);
 
   // Admin state (lista global de valores permitidos)
@@ -297,8 +301,9 @@ export default function AjustesPage() {
         setUserId(user.id);
 
         try {
-          const [userRole, profile] = await Promise.all([
+          const [userRole, userAdminRole, profile] = await Promise.all([
             getProfileRole(supabase, user.id),
+            getProfileAdminRole(supabase, user.id),
             getProfile(supabase, user.id),
           ]);
           if (cancelled) return;
@@ -354,7 +359,7 @@ export default function AjustesPage() {
 
           // Si es admin, cargamos las cuentas bancarias y la lista de
           // ventanas activas de capitalización.
-          if (userRole === 'admin') {
+          if (puedeLeerAdmin(userAdminRole)) {
             loadBankAccounts();
             try {
               const list = await listAdminCapitalizationWindows(supabase);
@@ -826,7 +831,7 @@ export default function AjustesPage() {
     );
   }
 
-  const isAdmin = role === 'admin';
+  const isAdmin = puedeLeerAdmin(rolAdmin);
 
   return (
     <div className="flex flex-col gap-7 animate-in fade-in duration-300">
@@ -858,7 +863,7 @@ export default function AjustesPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-[18px]">
         {/* User panel — oculto para el admin (no compra acciones). */}
-        {!isAdmin && (
+        {role !== 'admin' && (
           <Card padding="none" className="flex flex-col overflow-hidden">
             <div className="p-6 flex-1 flex flex-col gap-4">
               <div className="flex items-center justify-between gap-3 mb-1">
@@ -981,7 +986,7 @@ export default function AjustesPage() {
 
         {/* Admin panel */}
         {isAdmin && (
-          <>
+          <fieldset disabled={soloLectura} className="contents">
             <Card padding="none" className="flex flex-col overflow-hidden">
               <div className="p-6 flex-1 flex flex-col gap-4">
                 <div className="flex items-center gap-3 mb-1">
@@ -1304,7 +1309,7 @@ export default function AjustesPage() {
                 onDelete={handleDeleteBankAccount}
               />
             </div>
-          </>
+          </fieldset>
         )}
       </div>
     </div>

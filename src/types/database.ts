@@ -451,6 +451,7 @@ export type Database = {
       profiles: {
         Row: {
           address: string | null
+          admin_role: Database["public"]["Enums"]["admin_role"] | null
           bank_account_number: string | null
           bank_account_type:
             | Database["public"]["Enums"]["bank_account_type"]
@@ -469,6 +470,7 @@ export type Database = {
         }
         Insert: {
           address?: string | null
+          admin_role?: Database["public"]["Enums"]["admin_role"] | null
           bank_account_number?: string | null
           bank_account_type?:
             | Database["public"]["Enums"]["bank_account_type"]
@@ -487,6 +489,7 @@ export type Database = {
         }
         Update: {
           address?: string | null
+          admin_role?: Database["public"]["Enums"]["admin_role"] | null
           bank_account_number?: string | null
           bank_account_type?:
             | Database["public"]["Enums"]["bank_account_type"]
@@ -742,6 +745,7 @@ export type Database = {
           utilities_pool: number
         }[]
       }
+      has_admin_role: { Args: never; Returns: boolean }
       has_share_receipts_in_period: {
         Args: { p_period_id: string; p_profile_id: string }
         Returns: boolean
@@ -763,6 +767,7 @@ export type Database = {
       }
     }
     Enums: {
+      admin_role: "gerente" | "tesorero"
       bank_account_type: "ahorros" | "corriente"
       loan_status:
         | "draft"
@@ -915,6 +920,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
+      admin_role: ["gerente", "tesorero"],
       bank_account_type: ["ahorros", "corriente"],
       loan_status: [
         "draft",

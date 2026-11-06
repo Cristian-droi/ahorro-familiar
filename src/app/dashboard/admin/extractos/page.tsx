@@ -11,7 +11,8 @@ import { supabase } from '@/lib/supabase';
 import { Card } from '@/components/ui/Card';
 import { Avatar } from '@/components/ui/Avatar';
 import { ClipboardList, Search, ChevronDown, Check, Users } from 'lucide-react';
-import { getProfileRole, listProfilesWithNames } from '@/lib/data/profiles';
+import { getProfileAdminRole, listProfilesWithNames } from '@/lib/data/profiles';
+import { puedeLeerAdmin, type RolAdmin } from '@/shared/domain/acceso-admin';
 import { ExtractoView } from '@/app/dashboard/extracto/page';
 
 type ProfileLite = {
@@ -23,7 +24,7 @@ type ProfileLite = {
 
 export default function AdminExtractosPage() {
   const router = useRouter();
-  const [role, setRole] = useState<'admin' | 'accionista' | null>(null);
+  const [role, setRole] = useState<RolAdmin | null>(null);
   const [loading, setLoading] = useState(true);
   const [profiles, setProfiles] = useState<ProfileLite[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -43,9 +44,9 @@ export default function AdminExtractosPage() {
         router.replace('/login');
         return;
       }
-      const r = await getProfileRole(supabase, user.id);
+      const r = await getProfileAdminRole(supabase, user.id);
       if (cancelled) return;
-      if (r !== 'admin') {
+      if (!puedeLeerAdmin(r)) {
         router.replace('/dashboard/accionista');
         return;
       }
@@ -103,7 +104,7 @@ export default function AdminExtractosPage() {
     setOpen(false);
   };
 
-  if (loading || role !== 'admin') {
+  if (loading || !puedeLeerAdmin(role)) {
     return (
       <div className="animate-pulse text-[var(--color-text-subtle)] text-sm">
         Cargando…

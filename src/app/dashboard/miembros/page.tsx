@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { useAccesoAdmin } from '@/app/dashboard/AccesoAdminContext';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Avatar } from '@/components/ui/Avatar';
@@ -63,6 +64,7 @@ type MemberData = {
 const cop = (n: number) => '$ ' + new Intl.NumberFormat('es-CO').format(n);
 
 export default function MiembrosPage() {
+  const { soloLectura } = useAccesoAdmin();
   const [members, setMembers] = useState<MemberData[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -581,16 +583,16 @@ export default function MiembrosPage() {
                                   <Unlock size={11} strokeWidth={1.75} />
                                   Cambio de valor habilitado
                                 </span>
-                                <button
+                                {!soloLectura && <button
                                   type="button"
                                   disabled={shareChangeSaving === member.profile_id}
                                   onClick={() => setShareValueChange(member, false)}
                                   className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[var(--color-text-muted)] hover:underline transition-colors w-fit disabled:opacity-60 cursor-pointer"
                                 >
                                   {shareChangeSaving === member.profile_id ? 'Guardando…' : 'Revocar permiso'}
-                                </button>
+                                </button>}
                               </div>
-                            ) : (
+                            ) : soloLectura ? null : (
                               <button
                                 type="button"
                                 disabled={shareChangeSaving === member.profile_id}
@@ -609,14 +611,15 @@ export default function MiembrosPage() {
                             return w ? (
                               <button
                                 type="button"
+                                disabled={soloLectura}
                                 onClick={() => openCapModal(member)}
-                                className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[var(--color-success)] hover:underline transition-colors"
+                                className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[var(--color-success)] enabled:hover:underline transition-colors"
                                 title={`Capitalización activa hasta ${w.deadline}`}
                               >
                                 <TrendingUp size={11} strokeWidth={1.75} />
                                 Cap. activa · {cop(w.used_amount)} / {cop(w.max_amount ?? 0)}
                               </button>
-                            ) : (
+                            ) : soloLectura ? null : (
                               <button
                                 type="button"
                                 onClick={() => openCapModal(member)}

@@ -8,7 +8,8 @@ import { Logo } from '@/components/ui/Logo';
 import { IdCard, Lock, ShieldCheck, ArrowRight } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { getProfileRole } from '@/lib/data/profiles';
+import { getProfileAdminRole } from '@/lib/data/profiles';
+import { rutaDeInicio, type RolAdmin } from '@/shared/domain/acceso-admin';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -42,23 +43,23 @@ export default function LoginPage() {
 
       if (error) throw error;
 
-      // La fuente de verdad del rol es `profiles.role`. `user_metadata` no es
+      // La fuente de verdad del rol es `profiles.admin_role`. `user_metadata` no es
       // confiable: puede quedar desactualizado y cualquier fallback que caiga
       // en 'admin' concede visualmente permisos que el usuario no tiene.
       // Si el profile no existe (inconsistencia), tratamos al usuario como
       // accionista. El acceso admin real se protege en el servidor con
       // requireAdmin().
-      let role: 'admin' | 'accionista' | null = null;
+      let adminRole: RolAdmin | null = null;
       if (data.user?.id) {
         try {
-          role = await getProfileRole(supabase, data.user.id);
+          adminRole = await getProfileAdminRole(supabase, data.user.id);
         } catch (err) {
           console.error('Error leyendo role del profile tras login:', err);
         }
       }
 
       router.refresh();
-      router.push(role === 'admin' ? '/dashboard/admin' : '/dashboard/accionista');
+      router.push(rutaDeInicio(adminRole));
     } catch {
       setErrors({ password: 'Tus credenciales son incorrectas o hubo un error' });
     } finally {

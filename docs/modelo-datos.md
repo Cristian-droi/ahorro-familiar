@@ -106,8 +106,8 @@ erDiagram
 
 | Enum | Valores | Estado |
 |---|---|---|
-| `user_role` | admin, accionista | 🔴 Lo reemplaza `admin_role` |
-| `admin_role` | gerente, tesorero | 🔵 |
+| `user_role` | admin, accionista | 🔴 Lo reemplaza `admin_role`; hoy solo decide votantes y utilidades |
+| `admin_role` | gerente, tesorero | 🟢 |
 | `period_status` | open, closing, closed | 🔵 |
 | `request_status` | pending, approved, rejected | 🟢 |
 | `receipt_status` | pending, approved, rejected, **voided** | 🟡 se agrega `voided` |
@@ -129,7 +129,7 @@ erDiagram
 
 **`profiles`** 🟡
 - Se mantiene: `id` (FK a `auth.users`), `first_name`, `last_name`, `identity_document` (UK), `phone`, `address`, `monthly_income`, datos bancarios, `created_at` y `updated_at`.
-- 🔵 `admin_role admin_role null`: null significa solo accionista.
+- 🟢 `admin_role admin_role null`: null significa solo accionista. Es la única fuente de autorización administrativa.
 - 🔵 `is_active bool not null default true`: lo usan la votación y las utilidades.
 - 🔴 `role`: migra a `admin_role` (admin pasa a tesorero).
 - 🔴 `selected_share_value`, `share_value_change_allowed` y `next_year_capitalization`: pasan a `period_memberships`.
@@ -245,7 +245,7 @@ erDiagram
 ## 5. Funciones SQL
 
 ### 5.1 Se mantienen (persistencia y validación) 🟢
-- `is_admin()` 🟡 → pasa a `has_admin_role(role)`, `is_treasurer()` e `is_manager()`.
+- `is_admin()` 🟢: significa tesorero, para escribir. `has_admin_role()` 🟢: gerente o tesorero, para leer. `is_manager()` llega con la doble firma (fase 1b).
 - `set_updated_at`, `assign_receipt_number`, `assign_loan_number`, `assign_disbursement_number` (pasa a `cash_outflows`).
 - `validate_receipt_item_target_month`, `enforce_max_shares_per_month`, `recompute_receipt_total`, `validate_receipt_item_capitalization`, `validate_receipt_item_loan_payment`.
 - `open_capitalization_window_v2` y `close_capitalization_window_v2`.

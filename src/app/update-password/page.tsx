@@ -17,7 +17,8 @@ import {
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { getProfileRole } from '@/lib/data/profiles';
+import { getProfileAdminRole } from '@/lib/data/profiles';
+import { rutaDeInicio, type RolAdmin } from '@/shared/domain/acceso-admin';
 
 // Estado de validación del enlace de recovery.
 //   - 'verifying'    : todavía estamos leyendo el hash / sesión.
@@ -129,12 +130,12 @@ function UpdatePasswordForm() {
 
       if (error) throw error;
 
-      // Fuente de verdad del rol: `profiles.role`. No confiamos en
+      // Fuente de verdad del rol: `profiles.admin_role`. No confiamos en
       // `user_metadata.role` (puede estar desactualizado o vacío).
-      let role: 'admin' | 'accionista' | null = null;
+      let adminRole: RolAdmin | null = null;
       if (data.user?.id) {
         try {
-          role = await getProfileRole(supabase, data.user.id);
+          adminRole = await getProfileAdminRole(supabase, data.user.id);
         } catch (err) {
           console.error('Error leyendo role del profile tras update:', err);
         }
@@ -143,7 +144,7 @@ function UpdatePasswordForm() {
       setSuccess(true);
       setTimeout(() => {
         router.refresh();
-        router.push(role === 'admin' ? '/dashboard/admin' : '/dashboard/accionista');
+        router.push(rutaDeInicio(adminRole));
       }, 2000);
     } catch (err: unknown) {
       const name = err instanceof Error ? err.name : '';

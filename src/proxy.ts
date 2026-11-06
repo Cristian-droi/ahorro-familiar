@@ -1,7 +1,8 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 import type { Database } from '@/types/database';
-import { getProfileRole } from '@/lib/data/profiles';
+import { getProfileAdminRole } from '@/lib/data/profiles';
+import { esRutaAdmin, puedeLeerAdmin, rutaDeInicio } from '@/shared/domain/acceso-admin';
 
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({
@@ -45,32 +46,20 @@ export async function proxy(request: NextRequest) {
   }
 
   if (user) {
-    // Rol autoritativo desde `profiles` (protegido por RLS).
-    // user_metadata.role NO es autoritativo: el usuario puede editarlo.
-    const role = (await getProfileRole(supabase, user.id)) ?? 'accionista';
-    const isAdmin = role === 'admin';
+    // Authoritative role from `profiles`, protected by RLS. user_metadata is not
+    // authoritative because the user can edit it. Every user is a shareholder, so
+    // nobody is redirected out of "Mi cuenta".
+    const adminRole = await getProfileAdminRole(supabase, user.id);
 
-    const isAccionistaArea = pathname.startsWith('/dashboard/accionista');
-    const isAdminArea =
-      pathname.startsWith('/dashboard/admin') ||
-      pathname.startsWith('/dashboard/solicitudes') ||
-      pathname.startsWith('/dashboard/miembros');
-
-    if (!isAdmin && isAdminArea) {
+    if (!puedeLeerAdmin(adminRole) && esRutaAdmin(pathname)) {
       const url = request.nextUrl.clone();
       url.pathname = '/dashboard/accionista';
       return NextResponse.redirect(url);
     }
 
-    if (isAdmin && isAccionistaArea) {
-      const url = request.nextUrl.clone();
-      url.pathname = '/dashboard/admin';
-      return NextResponse.redirect(url);
-    }
-
     if (isPublicEntry) {
       const url = request.nextUrl.clone();
-      url.pathname = isAdmin ? '/dashboard/admin' : '/dashboard/accionista';
+      url.pathname = rutaDeInicio(adminRole);
       return NextResponse.redirect(url);
     }
   }
