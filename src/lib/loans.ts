@@ -1,6 +1,19 @@
 // Lógica de negocio del módulo de préstamos.
 
-export const LOAN_SHARES_STEP = 500_000; // 1 acción por préstamo cada 500k
+import { crearFecha, hoyBogota, mesesEntre, primerDiaDelMes, sumarMeses, type FechaISO } from '@/shared/domain/fechas';
+import { ok, err, type Result, type ErrorDeDominio } from '@/shared/domain/result';
+import { planAcordadoDesdeCuotas, planDePagos, validarPlanSolicitado } from '@/modules/prestamos/domain/plan-de-pagos';
+import { mesAplicado } from '@/modules/prestamos/domain/calendario';
+import { interesesAdeudados, saldoDeCapital } from '@/modules/prestamos/domain/intereses-adeudados';
+import type { ReglasDeInteres } from '@/modules/prestamos/domain/intereses';
+import {
+  libroDelPrestamo,
+  libroUnificado,
+  type CuotaPactada,
+  type LibroDelPrestamo,
+  type PagoAlPrestamo,
+} from '@/modules/prestamos/domain/libro-del-prestamo';
+import { AJUSTES_DE_PRESTAMO_POR_DEFECTO, reglasDeInteresDelPrestamo, type AjustesDePrestamo } from '@/lib/loan-settings';
 
 export interface PlanRow {
   month_number: number;
@@ -10,197 +23,222 @@ export interface PlanRow {
   estimated_balance_after: number;
 }
 
-export function calcLoanShares(requestedAmount: number, shareValue: number) {
-  const count = Math.floor(requestedAmount / LOAN_SHARES_STEP);
-  return { count, amount: count * shareValue };
-}
+const NUMERO_DE_CUOTA = /^-?\d+$/;
 
-export function calcFourPerThousand(amount: number, rate: number = 0.004): number {
-  return Math.round(amount * rate);
-}
-
-export function calcDisbursedAmount(
-  requestedAmount: number,
-  sharesAmount: number,
-  paidUpfront: boolean,
-  fourPerThousand: number,
-): number {
-  const sharesDiscount = paidUpfront ? 0 : sharesAmount;
-  return requestedAmount - sharesDiscount - fourPerThousand;
-}
-
-export function calcLoanDeductionsAndNet(params: {
-  requestedAmount: number;
-  sharesAmount: number;
-  paidUpfront: boolean;
-  deductedShares: number;
-  deductedFines: number;
-  deductedInterest: number;
-  deductedCapital: number;
-  fourPerThousandRate?: number;
-}) {
-  const rate = params.fourPerThousandRate ?? 0.004;
-  const sharesDiscount = params.paidUpfront ? 0 : params.sharesAmount;
-  const netBeforeTax =
-    params.requestedAmount -
-    sharesDiscount -
-    params.deductedShares -
-    params.deductedFines -
-    params.deductedInterest -
-    params.deductedCapital;
-  const fourPerThousand = netBeforeTax <= 0 ? 0 : Math.round(netBeforeTax * rate);
-  const netDisbursed = Math.max(0, netBeforeTax - fourPerThousand);
-  return { netDisbursed, fourPerThousand };
-}
-
+// Adapter over the domain plan (src/modules/prestamos/domain/plan-de-pagos.ts):
+// it keeps the `PlanRow` shape stored in `loan_payment_plan_items` and used by
+// the UI. The loan's own stored fractional rate is required (no 2% fallback).
+//
+// Term (RN-4.3): `months` counts from the applied month (create, draft edits);
+// `lastMonth` is the agreed last calendar month (disbursement). Without either,
+// the maximum term applies.
+//
+// Capital (RN-4.26, RN-4.3b): `capitalOverrides` keys are either installment
+// numbers ('5', relative to the applied month of `disbursedOn`, as the UI sends
+// them) or calendar months ('2026-06-01').
+//
+// `requesting` (create and draft edits, RN-4.3b): the plan must run from the
+// current month to the limit, so a past month is rejected instead of moved.
+// At the disbursement it is false and past-month capital goes to the first month.
+//
+// `ajustes` (RN-4.20, RN-4.21, RN-4.3 ⚙️): the loan settings from
+// `getAjustesDePrestamo`; without them the section 10 defaults apply.
 export function buildPaymentPlan(params: {
   requestedAmount: number;
-  months: number;
-  rate: number;
-  disbursedAt: Date;
-  capitalOverrides?: Record<number, number>;
-}): PlanRow[] {
-  const { requestedAmount, months, rate, disbursedAt, capitalOverrides = {} } = params;
-  const baseCapital = Math.floor(requestedAmount / months);
-  const disbursedDay = disbursedAt.getDate();
-  const hasOverrides = Object.keys(capitalOverrides).length > 0;
+  // Stored fraction, e.g. 0.02 for 2% monthly.
+  rate: unknown;
+  // Disbursement date (or today in Bogota for a draft).
+  disbursedOn: FechaISO;
+  months?: number;
+  lastMonth?: FechaISO;
+  capitalOverrides?: Record<string, number>;
+  requesting?: boolean;
+  ajustes?: AjustesDePrestamo;
+}): Result<PlanRow[], ErrorDeDominio> {
+  const ajustes = params.ajustes ?? AJUSTES_DE_PRESTAMO_POR_DEFECTO;
+  const reglas = reglasDeInteresDelPrestamo(params.rate, ajustes);
+  if (!reglas.ok) return reglas;
+  const inicio = mesAplicado(params.disbursedOn, reglas.value.diaDeCorte);
 
-  // ===== 1) Calcular el capital de cada cuota antes de iterar =====
-  //
-  // Reglas (acordadas con el user):
-  //   - Sin overrides: distribución uniforme (último mes absorbe redondeo).
-  //   - Con overrides:
-  //       a) Cuotas con override → su valor exacto.
-  //       b) Cuotas anteriores al ÚLTIMO override sin override propio →
-  //          mantienen `baseCapital` siempre que la suma total no exceda
-  //          el requested. Si excede, se ponen en 0.
-  //       c) Cuotas posteriores al último override sin override propio →
-  //          comparten el saldo restante en partes iguales (último de
-  //          ellas absorbe redondeo).
-  //
-  // Ejemplo: 1.000.000 a 10 meses, edita cuota 5 = 200k →
-  //   cuotas 1-4 = 100k (mantienen base), cuota 5 = 200k (override),
-  //   cuotas 6-10 = 80k (400k restantes / 5).
-  //
-  // Ejemplo: 1.000.000 a 10 meses, edita cuota 10 = 1M →
-  //   anteriores con baseCapital sumarían 900k, + 1M override = 1.9M >
-  //   1M → se borran las anteriores, todo queda en cuota 10.
-  const capitals: number[] = new Array(months).fill(0);
-
-  if (!hasOverrides) {
-    for (let i = 0; i < months; i++) {
-      capitals[i] =
-        i === months - 1 ? requestedAmount - baseCapital * (months - 1) : baseCapital;
+  let mesFinal = params.lastMonth;
+  if (params.months !== undefined) {
+    if (!Number.isInteger(params.months) || params.months < 1) {
+      return err({ codigo: 'plazo_invalido', mensaje: 'El plazo debe ser un número entero de meses, de al menos 1.' });
     }
-  } else {
-    const overrideKeys = Object.keys(capitalOverrides).map(Number).sort((a, b) => a - b);
-    const lastOverrideIdx = overrideKeys[overrideKeys.length - 1];
-
-    // Pasada inicial: overrides + baseCapital para anteriores no editadas.
-    for (let m = 1; m <= months; m++) {
-      if (capitalOverrides[m] !== undefined) {
-        capitals[m - 1] = Math.max(0, capitalOverrides[m]);
-      } else if (m < lastOverrideIdx) {
-        capitals[m - 1] = baseCapital;
-      } else {
-        capitals[m - 1] = 0; // posteriores se redistribuyen abajo
-      }
-    }
-
-    let consumed = capitals.reduce((s, v) => s + v, 0);
-    let remaining = requestedAmount - consumed;
-
-    if (remaining < 0) {
-      // Las anteriores baseCapital + overrides exceden el total. Bajamos
-      // las anteriores no editadas a 0 y recalculamos.
-      for (let m = 1; m < lastOverrideIdx; m++) {
-        if (capitalOverrides[m] === undefined) capitals[m - 1] = 0;
-      }
-      consumed = capitals.reduce((s, v) => s + v, 0);
-      remaining = Math.max(0, requestedAmount - consumed);
-    }
-
-    // Distribuir remaining entre los posteriores al último override sin
-    // override propio.
-    const posteriorsNoOverride: number[] = [];
-    for (let m = lastOverrideIdx + 1; m <= months; m++) {
-      if (capitalOverrides[m] === undefined) posteriorsNoOverride.push(m);
-    }
-
-    if (posteriorsNoOverride.length > 0) {
-      const chunk = Math.floor(remaining / posteriorsNoOverride.length);
-      for (let i = 0; i < posteriorsNoOverride.length - 1; i++) {
-        capitals[posteriorsNoOverride[i] - 1] = chunk;
-      }
-      const last = posteriorsNoOverride[posteriorsNoOverride.length - 1];
-      capitals[last - 1] = remaining - chunk * (posteriorsNoOverride.length - 1);
-    } else if (remaining !== 0) {
-      // No hay posteriores no editados: el último mes absorbe el ajuste
-      // (puede tener override propio que se incrementa).
-      capitals[months - 1] += remaining;
-    }
+    mesFinal = sumarMeses(inicio, params.months - 1);
   }
 
-  // ===== 2) Construir las rows con los capitales calculados =====
-  const rows: PlanRow[] = [];
-  let balance = requestedAmount;
+  const capitalPorMes: Record<string, number> = {};
+  for (const [clave, valor] of Object.entries(params.capitalOverrides ?? {})) {
+    let mes: string = clave;
+    if (NUMERO_DE_CUOTA.test(clave)) {
+      const numero = Number(clave);
+      if (numero < 1) {
+        return err({ codigo: 'cuota_invalida', mensaje: `La cuota ${clave} no existe: las cuotas empiezan en 1.` });
+      }
+      mes = sumarMeses(inicio, numero - 1);
+    }
+    capitalPorMes[mes] = valor;
+  }
 
-  for (let i = 1; i <= months; i++) {
-    const isFirst = i === 1;
-    const effectiveRate = isFirst && disbursedDay > 15 ? rate / 2 : rate;
-    const interest = Math.round(balance * effectiveRate);
-
-    const capital = Math.max(0, Math.min(capitals[i - 1], balance));
-    const balanceAfter = Math.max(0, balance - capital);
-
-    const due = new Date(disbursedAt);
-    due.setMonth(due.getMonth() + (i - 1));
-    due.setDate(1);
-
-    rows.push({
-      month_number: i,
-      due_date: due.toISOString().split('T')[0],
-      capital_amount: capital,
-      estimated_interest: interest,
-      estimated_balance_after: balanceAfter,
+  if (params.requesting) {
+    const solicitado = validarPlanSolicitado({
+      fechaSolicitud: params.disbursedOn,
+      diaDeCorte: reglas.value.diaDeCorte,
+      mesFinal,
+      capitalPorMes,
     });
-
-    balance = balanceAfter;
+    if (!solicitado.ok) return solicitado;
   }
 
-  return rows;
+  const plan = planDePagos({
+    monto: params.requestedAmount,
+    fechaDesembolso: params.disbursedOn,
+    reglas: reglas.value,
+    hastaPeriodoSiguiente: ajustes.plazoHastaPeriodoSiguiente,
+    mesFinal,
+    capitalPorMes,
+  });
+  if (!plan.ok) return plan;
+  return ok(
+    plan.value.map((cuota) => ({
+      month_number: cuota.numero,
+      due_date: cuota.mes,
+      capital_amount: cuota.capital,
+      estimated_interest: cuota.interes,
+      estimated_balance_after: cuota.saldoDespues,
+    })),
+  );
 }
 
+// RN-4.3 and RN-4.3b: the agreed plan stored in `loan_payment_plan_items` as
+// the chosen last calendar month and the capital by calendar month, so the
+// disbursement rebuilds it by month and not by installment number.
+export function agreedPlanFromRows(
+  rows: { due_date: string; capital_amount: number | string }[],
+): Result<{ lastMonth: FechaISO | undefined; capitalOverrides: Record<string, number> }, ErrorDeDominio> {
+  const cuotas: { mes: FechaISO; capital: number }[] = [];
+  for (const row of rows) {
+    const fecha = crearFecha(row.due_date);
+    if (!fecha.ok) return fecha;
+    cuotas.push({ mes: primerDiaDelMes(fecha.value), capital: Number(row.capital_amount) });
+  }
+  const plan = planAcordadoDesdeCuotas(cuotas);
+  if (!plan.ok) return plan;
+  return ok({ lastMonth: plan.value.mesFinal, capitalOverrides: plan.value.capitalPorMes });
+}
+
+// A receipt item of one loan, as stored in `receipt_items` (approved receipts).
+export interface LoanInterestItem {
+  concept: string;
+  target_month: string;
+  amount: number | string;
+}
+
+// `loans.disbursed_at` is a timestamptz; the rules read its day in Bogota.
+function fechaDeDesembolso(valor: string): Result<FechaISO, ErrorDeDominio> {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(valor)) return crearFecha(valor);
+  const instante = new Date(valor);
+  if (Number.isNaN(instante.getTime())) {
+    return err({ codigo: 'fecha_invalida', mensaje: `La fecha "${valor}" no es válida.` });
+  }
+  return ok(hoyBogota(instante));
+}
+
+// Adapter over the domain interest owed (src/modules/prestamos/domain/
+// intereses-adeudados.ts, section 11 n.º 13): it maps the loan fields and its
+// approved `pago_capital` / `pago_intereses` items. `today` defaults to the
+// Bogota date of the clock, which is only read here.
 export function calcAccruedInterest(params: {
-  outstandingBalance: number;
-  rate: number;
-  disbursedAt: Date;
-  lastInterestPaymentDate: Date | null;
-}): number {
-  const { outstandingBalance, rate, disbursedAt, lastInterestPaymentDate } = params;
-  const from = lastInterestPaymentDate ?? disbursedAt;
-  const now = new Date();
+  requestedAmount: number | string;
+  // Stored fraction, e.g. 0.02 for 2% monthly.
+  rate: unknown;
+  disbursedAt: string;
+  items: LoanInterestItem[];
+  today?: FechaISO;
+  // RN-4.20, RN-4.21 ⚙️: defaults to section 10.
+  ajustes?: AjustesDePrestamo;
+}): Result<number, ErrorDeDominio> {
+  const reglas = reglasDeInteresDelPrestamo(params.rate, params.ajustes);
+  if (!reglas.ok) return reglas;
+  const fechaDesembolso = fechaDeDesembolso(params.disbursedAt);
+  if (!fechaDesembolso.ok) return fechaDesembolso;
 
-  const months =
-    (now.getFullYear() - from.getFullYear()) * 12 +
-    (now.getMonth() - from.getMonth());
-
-  if (months <= 0) return 0;
-
-  const isFirstEver = lastInterestPaymentDate === null;
-  const disbursedDay = disbursedAt.getDate();
-  let total = 0;
-
-  for (let m = 1; m <= months; m++) {
-    const effectiveRate = isFirstEver && m === 1 && disbursedDay > 15 ? rate / 2 : rate;
-    total += Math.round(outstandingBalance * effectiveRate);
+  const abonosACapital: { mes: FechaISO; monto: number }[] = [];
+  const pagosDeIntereses: { monto: number }[] = [];
+  for (const item of params.items) {
+    if (item.concept === 'pago_capital') {
+      const mes = crearFecha(item.target_month);
+      if (!mes.ok) return mes;
+      abonosACapital.push({ mes: mes.value, monto: Number(item.amount) });
+    } else if (item.concept === 'pago_intereses') {
+      pagosDeIntereses.push({ monto: Number(item.amount) });
+    }
   }
 
-  return total;
+  const r = interesesAdeudados({
+    fechaDesembolso: fechaDesembolso.value,
+    hoy: params.today ?? hoyBogota(new Date()),
+    monto: Number(params.requestedAmount),
+    abonosACapital,
+    pagosDeIntereses,
+    reglas: reglas.value,
+  });
+  return r.ok ? ok(r.value.adeudado) : r;
 }
 
-export function requiredVotes(totalActive: number): number {
-  return Math.floor(totalActive / 2) + 1;
+export interface ActiveLoanDebtSummary {
+  // Disbursed amount minus every approved capital payment (RN-4.29: never negative).
+  outstandingCapital: number;
+  // From `calcAccruedInterest`, the single source of interest (section 11, n.º 13).
+  interestOwed: number;
+  // Finished calendar months since the disbursement month (RN-4.22b).
+  monthsOverdue: number;
+  // Month for the payment items: the last finished month, never before the
+  // disbursement month.
+  nextDueMonth: FechaISO;
+}
+
+// Replaces the SQL `get_user_active_loans_debt` per loan: same fields, with
+// the interest owed taken from the domain instead of SQL.
+export function summarizeActiveLoanDebt(params: {
+  requestedAmount: number | string;
+  rate: unknown;
+  disbursedAt: string;
+  items: LoanInterestItem[];
+  today?: FechaISO;
+  // RN-4.20, RN-4.21 ⚙️: defaults to section 10.
+  ajustes?: AjustesDePrestamo;
+}): Result<ActiveLoanDebtSummary, ErrorDeDominio> {
+  const today = params.today ?? hoyBogota(new Date());
+  const interestOwed = calcAccruedInterest({ ...params, today });
+  if (!interestOwed.ok) return interestOwed;
+  const fechaDesembolso = fechaDeDesembolso(params.disbursedAt);
+  if (!fechaDesembolso.ok) return fechaDesembolso;
+
+  const abonosACapital: { mes: FechaISO; monto: number }[] = [];
+  for (const item of params.items) {
+    if (item.concept !== 'pago_capital') continue;
+    const mes = crearFecha(item.target_month);
+    if (!mes.ok) return mes;
+    abonosACapital.push({ mes: mes.value, monto: Number(item.amount) });
+  }
+  const saldo = saldoDeCapital({ monto: Number(params.requestedAmount), abonosACapital });
+  if (!saldo.ok) return saldo;
+  // RN-4.21: after the cut-off day the loan counts from the next month.
+  const disbursementMonth = mesAplicado(
+    fechaDesembolso.value,
+    (params.ajustes ?? AJUSTES_DE_PRESTAMO_POR_DEFECTO).diaDeCorte,
+  );
+  const currentMonth = primerDiaDelMes(today);
+  const monthsOverdue = Math.max(mesesEntre(disbursementMonth, currentMonth), 0);
+
+  return ok({
+    outstandingCapital: saldo.value,
+    interestOwed: interestOwed.value,
+    monthsOverdue,
+    nextDueMonth: monthsOverdue > 0 ? sumarMeses(currentMonth, -1) : disbursementMonth,
+  });
 }
 
 // ============================================================
@@ -220,13 +258,17 @@ export interface LoanBookMonthRow {
   plan_interest: number;
   paid_capital: number;
   paid_interest: number;
-  // Intereses en mora: cuánto quedó debiendo del interés planeado este mes.
+  // Intereses en mora del mes: interés sobre el saldo real (RN-4.18) que no
+  // cubren los intereses pagados para ese mes. Solo meses terminados (RN-4.22b).
   interest_debt: number;
+  // RN-4.31: intereses pendientes acumulados hasta este mes.
+  pending_interest: number;
   // Saldo de capital al cierre del mes (tras restar lo efectivamente pagado hasta aquí).
   capital_balance_after: number;
   // Cuota "ideal" del mes según plan (capital + interés plan).
   installment_value: number;
-  // true en el primer mes cuyo capital aún no se paga completo.
+  // true en el primer mes cuyo capital aún no se paga completo; nunca en un
+  // préstamo pagado (RN-4.28).
   is_next_installment: boolean;
 }
 
@@ -239,6 +281,10 @@ export interface LoanBookSummary {
   current_capital_balance: number;
   next_installment_amount: number | null;
   next_installment_month: string | null;
+  // Totales del plan pactado (RN-4.3b, informativo).
+  total_plan_capital: number;
+  total_plan_interest: number;
+  total_installment_value: number;
 }
 
 export interface LoanBook {
@@ -246,127 +292,92 @@ export interface LoanBook {
   months: LoanBookMonthRow[];
 }
 
-function monthKey(isoDate: string): string {
-  // Acepta tanto "YYYY-MM-DD" como "YYYY-MM" y devuelve "YYYY-MM".
-  return isoDate.slice(0, 7);
+function pagosDelLibro(payments: LoanBookPayment[]): Result<PagoAlPrestamo[], ErrorDeDominio> {
+  const pagos: PagoAlPrestamo[] = [];
+  for (const p of payments) {
+    if (p.concept !== 'pago_capital' && p.concept !== 'pago_intereses') continue;
+    const mes = crearFecha(p.target_month.slice(0, 10));
+    if (!mes.ok) return mes;
+    pagos.push({ mes: mes.value, concepto: p.concept === 'pago_capital' ? 'capital' : 'intereses', monto: Number(p.amount) });
+  }
+  return ok(pagos);
 }
 
-function getBogotaCurrentMonthKey(): string {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/Bogota',
-    year: 'numeric',
-    month: '2-digit',
-  }).formatToParts(new Date());
-  const year = parts.find((p) => p.type === 'year')?.value;
-  const month = parts.find((p) => p.type === 'month')?.value;
-  return `${year}-${month}`;
-}
-
-// Calcula el libro mensual de un préstamo:
-//   - Plan teórico (loan_payment_plan_items)
-//   - Pagos reales (receipt_items con loan_id y recibo aprobado)
-// Los pagos se matchean por mes calendario (YYYY-MM).
+// Adapter over the domain loan book (src/modules/prestamos/domain/
+// libro-del-prestamo.ts): it maps the stored plan rows and the approved
+// payments, and keeps the legacy snake_case shape for the pages. `today`
+// defaults to the Bogota date of the clock, which is only read here.
 export function computeLoanBook(params: {
   requestedAmount: number;
   plan: PlanRow[];
   payments: LoanBookPayment[];
-  interestRate?: number;
+  // Stored fraction, e.g. 0.02 for 2% monthly. Required once disbursed.
+  interestRate?: unknown;
   disbursedAt?: string | null;
-}): LoanBook {
-  const { requestedAmount, plan, payments } = params;
+  today?: FechaISO;
+  // RN-4.20, RN-4.21 ⚙️: defaults to section 10.
+  ajustes?: AjustesDePrestamo;
+}): Result<LoanBook, ErrorDeDominio> {
+  const plan: CuotaPactada[] = [];
+  for (const row of params.plan) {
+    const mes = crearFecha(row.due_date.slice(0, 10));
+    if (!mes.ok) return mes;
+    plan.push({
+      numero: row.month_number,
+      mes: mes.value,
+      capital: Number(row.capital_amount),
+      interes: Number(row.estimated_interest),
+    });
+  }
+  const pagos = pagosDelLibro(params.payments);
+  if (!pagos.ok) return pagos;
 
-  const currentMonthKey = getBogotaCurrentMonthKey();
-
-  const paidCapitalByMonth = new Map<string, number>();
-  const paidInterestByMonth = new Map<string, number>();
-  // Acotar el matching al rango del plan: si llega un pago con
-  // target_month antes del primer mes del plan (caso típico:
-  // next_due_month calculado mes_actual−1 cuando el préstamo se
-  // desembolsó este mismo mes), lo asignamos al primer mes del plan.
-  // Si llega después del último, lo asignamos al último. Así nunca se
-  // "pierde" un pago.
-  const planMonthKeys = plan.map((r) => monthKey(r.due_date));
-  const firstPlanKey = planMonthKeys[0] ?? null;
-  const lastPlanKey = planMonthKeys[planMonthKeys.length - 1] ?? null;
-  const clamp = (key: string) => {
-    if (firstPlanKey && key < firstPlanKey) return firstPlanKey;
-    if (lastPlanKey && key > lastPlanKey) return lastPlanKey;
-    return key;
-  };
-  for (const p of payments) {
-    const key = clamp(monthKey(p.target_month));
-    if (p.concept === 'pago_capital') {
-      paidCapitalByMonth.set(key, (paidCapitalByMonth.get(key) ?? 0) + Number(p.amount));
-    } else if (p.concept === 'pago_intereses') {
-      paidInterestByMonth.set(key, (paidInterestByMonth.get(key) ?? 0) + Number(p.amount));
-    }
+  let desembolso: { fecha: FechaISO; reglas: ReglasDeInteres } | null = null;
+  if (params.disbursedAt) {
+    const reglas = reglasDeInteresDelPrestamo(params.interestRate, params.ajustes);
+    if (!reglas.ok) return reglas;
+    const fecha = fechaDeDesembolso(params.disbursedAt);
+    if (!fecha.ok) return fecha;
+    desembolso = { fecha: fecha.value, reglas: reglas.value };
   }
 
-  let runningBalance = requestedAmount;
-  let totalPaidCapital = 0;
-  let totalPaidInterest = 0;
-  let totalInterestDebt = 0;
-  let overdueInterestDebt = 0;
-  let nextFound = false;
-  let nextInstallmentAmount: number | null = null;
-  let nextInstallmentMonth: string | null = null;
-
-  const months: LoanBookMonthRow[] = plan.map((row) => {
-    const key = monthKey(row.due_date);
-    const paidCapital = paidCapitalByMonth.get(key) ?? 0;
-    const paidInterest = paidInterestByMonth.get(key) ?? 0;
-
-    // Deuda de intereses generada este mes (solo acumulamos mora de meses anteriores al actual)
-    const interestDebt =
-      key < currentMonthKey
-        ? Math.max(0, row.estimated_interest - paidInterest)
-        : 0;
-
-    runningBalance = Math.max(0, runningBalance - paidCapital);
-    totalPaidCapital += paidCapital;
-    totalPaidInterest += paidInterest;
-    totalInterestDebt += interestDebt;
-
-    if (key < currentMonthKey) {
-      overdueInterestDebt += interestDebt;
-    }
-
-    // Próxima cuota = primer mes cuyo capital aún no cubre lo planeado.
-    const isNext =
-      !nextFound && paidCapital < row.capital_amount && row.capital_amount > 0;
-    if (isNext) {
-      nextFound = true;
-      nextInstallmentAmount = row.capital_amount + row.estimated_interest;
-      nextInstallmentMonth = row.due_date;
-    }
-
-    return {
-      month_number: row.month_number,
-      due_date: row.due_date,
-      plan_capital: row.capital_amount,
-      plan_interest: row.estimated_interest,
-      paid_capital: paidCapital,
-      paid_interest: paidInterest,
-      interest_debt: interestDebt,
-      capital_balance_after: runningBalance,
-      installment_value: row.capital_amount + row.estimated_interest,
-      is_next_installment: isNext,
-    };
+  const libro = libroDelPrestamo({
+    monto: Number(params.requestedAmount),
+    plan,
+    pagos: pagos.value,
+    desembolso,
+    mesActual: params.today ?? hoyBogota(new Date()),
   });
-
-  return {
+  if (!libro.ok) return libro;
+  const { meses, resumen } = libro.value;
+  return ok({
     summary: {
-      requested_amount: requestedAmount,
-      total_paid_capital: totalPaidCapital,
-      total_paid_interest: totalPaidInterest,
-      total_interest_debt: totalInterestDebt,
-      overdue_interest_debt: overdueInterestDebt,
-      current_capital_balance: Math.max(0, requestedAmount - totalPaidCapital),
-      next_installment_amount: nextInstallmentAmount,
-      next_installment_month: nextInstallmentMonth,
+      requested_amount: resumen.monto,
+      total_paid_capital: resumen.capitalPagado,
+      total_paid_interest: resumen.interesesPagados,
+      total_interest_debt: resumen.interesesEnMora,
+      overdue_interest_debt: resumen.interesesEnMora,
+      current_capital_balance: resumen.saldoCapital,
+      next_installment_amount: resumen.proximaCuota?.monto ?? null,
+      next_installment_month: resumen.proximaCuota?.mes ?? null,
+      total_plan_capital: resumen.capitalPactado,
+      total_plan_interest: resumen.interesPactado,
+      total_installment_value: resumen.cuotasPactadas,
     },
-    months,
-  };
+    months: meses.map((m) => ({
+      month_number: m.numero,
+      due_date: m.mes,
+      plan_capital: m.capitalPactado,
+      plan_interest: m.interesPactado,
+      paid_capital: m.capitalPagado,
+      paid_interest: m.interesPagado,
+      interest_debt: m.interesEnMora,
+      pending_interest: m.interesesPendientesAcumulados,
+      capital_balance_after: m.saldoCapitalDespues,
+      installment_value: m.cuotaPactada,
+      is_next_installment: m.esLaProximaCuota,
+    })),
+  });
 }
 
 // ============================================================
@@ -378,20 +389,23 @@ export function computeLoanBook(params: {
 export interface UnifiedLoanBookRow {
   month_key: string; // 'YYYY-MM'
   due_date: string; // primer día del mes
-  // Cuántos préstamos NUEVOS se desembolsaron este mes (suma del monto).
+  // Monto de los préstamos desembolsados este mes (día en Bogotá).
   // Se usa solo informativo en la columna "Préstamo".
   disbursed_this_month: number;
   // Sumas mensuales de los planes de pago de los préstamos vigentes este mes.
   plan_capital: number;
   plan_interest: number;
+  installment_value: number;
   // Sumas de pagos reales con target_month = ese mes.
   paid_capital: number;
   paid_interest: number;
-  // Intereses NO pagados de ese mes (la mora se mide por mes plan).
+  // Intereses en mora de ese mes (RN-4.18, saldo real).
   interest_debt: number;
+  // RN-4.31: suma de los intereses pendientes acumulados de cada préstamo.
+  pending_interest: number;
   // Saldo de capital acumulado al cierre del mes (suma de saldos de cada
-  // préstamo). Para préstamos que aún no arrancaron en este mes, su saldo
-  // efectivo es 0; para los que ya terminaron, también 0.
+  // préstamo). Un préstamo no aporta antes de su primer mes y aporta su
+  // último saldo después de su último mes.
   capital_balance_after: number;
 }
 
@@ -402,6 +416,11 @@ export interface UnifiedLoanBookSummary {
   total_interest_debt: number;
   overdue_interest_debt: number;
   current_capital_balance: number;
+  total_plan_capital: number;
+  total_plan_interest: number;
+  total_installment_value: number;
+  // Monto desembolsado en los meses que tienen fila.
+  total_disbursed_in_rows: number;
 }
 
 export interface UnifiedLoanBook {
@@ -409,126 +428,86 @@ export interface UnifiedLoanBook {
   summary: UnifiedLoanBookSummary;
 }
 
-// Combina N libros (uno por préstamo) en una tabla mes-a-mes con los
-// totales del accionista. Toma como base la unión de las due_date de
-// todos los planes — por cada mes calendario en ese set, suma los valores
-// del libro respectivo. Si un préstamo no tiene fila para ese mes (porque
-// arrancó después o ya terminó), aporta 0.
-export function computeUnifiedLoanBook(
-  books: { requested: number; book: LoanBook; disbursedAt: string | null }[],
-): UnifiedLoanBook {
-  // 1. Unión de meses calendario.
-  const monthSet = new Set<string>();
-  for (const b of books) {
-    for (const r of b.book.months) monthSet.add(r.due_date.slice(0, 7));
+function libroDesdeLoanBook(book: LoanBook): Result<LibroDelPrestamo, ErrorDeDominio> {
+  const meses: LibroDelPrestamo['meses'] = [];
+  for (const m of book.months) {
+    const mes = crearFecha(m.due_date.slice(0, 10));
+    if (!mes.ok) return mes;
+    meses.push({
+      numero: m.month_number,
+      mes: mes.value,
+      capitalPactado: m.plan_capital,
+      interesPactado: m.plan_interest,
+      cuotaPactada: m.installment_value,
+      capitalPagado: m.paid_capital,
+      interesPagado: m.paid_interest,
+      interesReal: 0,
+      interesEnMora: m.interest_debt,
+      interesesPendientesAcumulados: m.pending_interest,
+      saldoCapitalDespues: m.capital_balance_after,
+      esLaProximaCuota: m.is_next_installment,
+    });
   }
-  const sortedMonths = Array.from(monthSet).sort();
-
-  // 2. Mapa de cuotas reales por mes y por préstamo (para sumar).
-  const rows: UnifiedLoanBookRow[] = sortedMonths.map((monthKey) => {
-    const dueDate = `${monthKey}-01`;
-    let plan_capital = 0;
-    let plan_interest = 0;
-    let paid_capital = 0;
-    let paid_interest = 0;
-    let interest_debt = 0;
-    let capital_balance_after = 0;
-    let disbursed_this_month = 0;
-
-    for (const b of books) {
-      // Préstamo desembolsado en este mes calendario.
-      if (b.disbursedAt && b.disbursedAt.slice(0, 7) === monthKey) {
-        disbursed_this_month += b.requested;
-      }
-
-      // Buscar la fila del plan en este mes.
-      const row = b.book.months.find((m) => m.due_date.slice(0, 7) === monthKey);
-      if (row) {
-        plan_capital += row.plan_capital;
-        plan_interest += row.plan_interest;
-        paid_capital += row.paid_capital;
-        paid_interest += row.paid_interest;
-        interest_debt += row.interest_debt;
-        capital_balance_after += row.capital_balance_after;
-      } else {
-        // Préstamo que aún no empezó (mes anterior a su plan) o que ya
-        // terminó (mes posterior a su último plan): no aporta cuota, pero
-        // sí aporta su saldo restante al "capital_balance_after" si
-        // todavía está activo. Para no confundir, usamos: si el mes es
-        // posterior al plan, saldo final = 0 (préstamo cerrado); si es
-        // anterior, saldo = requested (todavía no se desembolsó).
-        const planMin = b.book.months[0]?.due_date.slice(0, 7) ?? null;
-        if (planMin !== null && monthKey < planMin) {
-          // antes de arrancar: aún no hay deuda contable de este préstamo
-          continue;
-        }
-        // después del último mes: el saldo ya cerró en el último plan,
-        // así que tomamos el último saldo.
-        const lastRow = b.book.months[b.book.months.length - 1];
-        if (lastRow) {
-          capital_balance_after += lastRow.capital_balance_after;
-        }
-      }
-    }
-
-    return {
-      month_key: monthKey,
-      due_date: dueDate,
-      disbursed_this_month,
-      plan_capital,
-      plan_interest,
-      paid_capital,
-      paid_interest,
-      interest_debt,
-      capital_balance_after,
-    };
-  });
-
-  const summary: UnifiedLoanBookSummary = books.reduce(
-    (acc, b) => ({
-      total_requested: acc.total_requested + b.book.summary.requested_amount,
-      total_paid_capital:
-        acc.total_paid_capital + b.book.summary.total_paid_capital,
-      total_paid_interest:
-        acc.total_paid_interest + b.book.summary.total_paid_interest,
-      total_interest_debt:
-        acc.total_interest_debt + b.book.summary.total_interest_debt,
-      overdue_interest_debt:
-        acc.overdue_interest_debt + b.book.summary.overdue_interest_debt,
-      current_capital_balance:
-        acc.current_capital_balance + b.book.summary.current_capital_balance,
-    }),
-    {
-      total_requested: 0,
-      total_paid_capital: 0,
-      total_paid_interest: 0,
-      total_interest_debt: 0,
-      overdue_interest_debt: 0,
-      current_capital_balance: 0,
+  const s = book.summary;
+  return ok({
+    meses,
+    resumen: {
+      monto: s.requested_amount,
+      capitalPagado: s.total_paid_capital,
+      interesesPagados: s.total_paid_interest,
+      interesesEnMora: s.overdue_interest_debt,
+      saldoCapital: s.current_capital_balance,
+      capitalPactado: s.total_plan_capital,
+      interesPactado: s.total_plan_interest,
+      cuotasPactadas: s.total_installment_value,
+      proximaCuota: null,
     },
-  );
-
-  return { rows, summary };
+  });
 }
 
-export const LOAN_STATUS_LABELS: Record<string, string> = {
-  draft: 'Borrador',
-  pending_review: 'En revisión',
-  pending_shareholder_vote: 'En votación',
-  pending_disbursement: 'Listo para desembolso',
-  active: 'Activo',
-  paid: 'Pagado',
-  rejected_by_admin: 'Rechazado (admin)',
-  rejected_by_shareholders: 'Rechazado (votación)',
-};
-
-export const LOAN_STATUS_TONE: Record<string, string> = {
-  draft: 'neutral',
-  pending_review: 'warn',
-  pending_shareholder_vote: 'info',
-  pending_disbursement: 'brand',
-  active: 'success',
-  paid: 'success',
-  rejected_by_admin: 'danger',
-  rejected_by_shareholders: 'danger',
-};
+// Adapter over the domain `libroUnificado`: it maps the N books (one per
+// loan) and their Bogota disbursement dates; the domain adds them up.
+export function computeUnifiedLoanBook(
+  books: { requested: number; book: LoanBook; disbursedAt: string | null }[],
+): Result<UnifiedLoanBook, ErrorDeDominio> {
+  const prestamos: Parameters<typeof libroUnificado>[0] = [];
+  for (const b of books) {
+    const libro = libroDesdeLoanBook(b.book);
+    if (!libro.ok) return libro;
+    let fecha: FechaISO | null = null;
+    if (b.disbursedAt) {
+      const f = fechaDeDesembolso(b.disbursedAt);
+      if (!f.ok) return f;
+      fecha = f.value;
+    }
+    prestamos.push({ monto: Number(b.requested), fechaDesembolso: fecha, libro: libro.value });
+  }
+  const { filas, resumen } = libroUnificado(prestamos);
+  return ok({
+    rows: filas.map((f) => ({
+      month_key: f.mes.slice(0, 7),
+      due_date: f.mes,
+      disbursed_this_month: f.desembolsado,
+      plan_capital: f.capitalPactado,
+      plan_interest: f.interesPactado,
+      installment_value: f.cuotaPactada,
+      paid_capital: f.capitalPagado,
+      paid_interest: f.interesPagado,
+      interest_debt: f.interesEnMora,
+      pending_interest: f.interesesPendientesAcumulados,
+      capital_balance_after: f.saldoCapitalDespues,
+    })),
+    summary: {
+      total_requested: resumen.monto,
+      total_paid_capital: resumen.capitalPagado,
+      total_paid_interest: resumen.interesesPagados,
+      total_interest_debt: resumen.interesesEnMora,
+      overdue_interest_debt: resumen.interesesEnMora,
+      current_capital_balance: resumen.saldoCapital,
+      total_plan_capital: resumen.capitalPactado,
+      total_plan_interest: resumen.interesPactado,
+      total_installment_value: resumen.cuotasPactadas,
+      total_disbursed_in_rows: resumen.desembolsadoEnLasFilas,
+    },
+  });
+}

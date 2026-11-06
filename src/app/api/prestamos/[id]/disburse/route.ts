@@ -1,10 +1,15 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
-import { calcDisbursedAmount, buildPaymentPlan, calcLoanDeductionsAndNet } from '@/lib/loans';
+import { agreedPlanFromRows, buildPaymentPlan } from '@/lib/loans';
+import { EXPIRED_REQUEST_MESSAGE, expireLoanRequestIfDue } from '@/lib/loan-expiry';
+import { desembolsoDePrestamo, getAjustesDePrestamo, getTasaCuatroPorMil } from '@/lib/loan-settings';
 import { disburseSchema, deductionsDetailSchema } from '@/lib/schemas/loan';
 import { getCashBalance } from '@/lib/data/loans';
+import { getOpenPeriodShareValue } from '@/lib/data/share-value';
+import { validarPuedeComprar } from '@/modules/acciones/domain/valor-de-accion';
 import type { Database } from '@/types/database';
+import { hoyBogota } from '@/shared/domain/fechas';
 
 // POST /api/prestamos/[id]/disburse — admin realiza el desembolso del préstamo.
 // Requisitos:
@@ -52,6 +57,10 @@ export async function POST(
     if (fetchError || !loan) {
       return NextResponse.json({ error: 'Préstamo no encontrado' }, { status: 404 });
     }
+    // RN-4.5b: an expired request is annulled instead of disbursed.
+    if (await expireLoanRequestIfDue(admin, loan)) {
+      return NextResponse.json({ error: EXPIRED_REQUEST_MESSAGE }, { status: 409 });
+    }
     if (loan.status !== 'pending_disbursement') {
       return NextResponse.json({ error: `El préstamo no está listo para desembolso (estado: ${loan.status})` }, { status: 409 });
     }
@@ -67,36 +76,27 @@ export async function POST(
     }
     const deductionsDetail = parsedDeductions.data;
 
-    // Cargar configuración del gravamen 4x1000 desde system_settings
-    const { data: fptSetting } = await admin
-      .from('system_settings')
-      .select('value')
-      .eq('key', 'four_per_thousand_rate')
-      .maybeSingle();
-    const fourPerThousandRate = fptSetting?.value != null ? Number(fptSetting.value) : 0.004;
-
     // Validación de saldo en caja: bloqueamos el desembolso si la caja no
-    // alcanza a cubrir el monto neto que vamos a entregar (requested_amount
-    // menos acciones pagadas upfront y 4x1000 si corresponde). Usamos el
-    // mismo get_cash_balance() que pinta el Libro de caja — así admin y
-    // sistema hablan del mismo número.
-    const netAmount = loan.deduct_obligations
-      ? calcLoanDeductionsAndNet({
-          requestedAmount: Number(loan.requested_amount),
-          sharesAmount: Number(loan.loan_shares_amount || 0),
-          paidUpfront: Boolean(loan.loan_shares_paid_upfront),
-          deductedShares: Number(loan.deducted_shares_amount || 0),
-          deductedFines: Number(loan.deducted_fines_amount || 0),
-          deductedInterest: Number(loan.deducted_interest_amount || 0),
-          deductedCapital: Number(loan.deducted_capital_amount || 0),
-          fourPerThousandRate,
-        }).netDisbursed
-      : calcDisbursedAmount(
-          Number(loan.requested_amount),
-          Number(loan.loan_shares_amount),
-          Boolean(loan.loan_shares_paid_upfront),
-          Number(loan.four_per_thousand),
-        );
+    // alcanza a cubrir el monto neto que vamos a entregar. Usamos el mismo
+    // get_cash_balance() que pinta el Libro de caja — así admin y sistema
+    // hablan del mismo número.
+    // RN-4.16: el 4x1000 se calcula sobre el neto que sale de la caja, después
+    // de las deducciones (acciones por préstamo, multas, intereses y capital).
+    const desembolso = desembolsoDePrestamo({
+      monto: Number(loan.requested_amount),
+      accionesPorPrestamo: Number(loan.loan_shares_amount || 0),
+      pagadasPorAdelantado: Boolean(loan.loan_shares_paid_upfront),
+      accionesVencidas: loan.deduct_obligations ? Number(loan.deducted_shares_amount || 0) : 0,
+      multas: loan.deduct_obligations ? Number(loan.deducted_fines_amount || 0) : 0,
+      intereses: loan.deduct_obligations ? Number(loan.deducted_interest_amount || 0) : 0,
+      capital: loan.deduct_obligations ? Number(loan.deducted_capital_amount || 0) : 0,
+      tasaPorMil: await getTasaCuatroPorMil(admin),
+    });
+    if (!desembolso.ok) {
+      return NextResponse.json({ error: desembolso.error.mensaje }, { status: 422 });
+    }
+    const netAmount = desembolso.value.seTransfiere;
+    const fourPerThousand = desembolso.value.cuatroPorMil;
 
     const cashBalance = await getCashBalance(admin).catch((err) => {
       console.error('disburse: fallo al leer cash balance', err);
@@ -138,25 +138,36 @@ export async function POST(
     const disbursedAt = new Date();
     const disbursedAmount = netAmount;
 
-    // Recalcular plan de pagos con la fecha real de desembolso
+    // Recalcular plan de pagos con la fecha real de desembolso (RN-4.3b): el
+    // plan pactado se rehace por mes calendario, con el mismo último mes del
+    // plazo; el capital de un mes que quedó antes del mes aplicado pasa al
+    // primer mes, y si todo el plazo quedó atrás, todo el capital va en el mes
+    // aplicado. Una tasa inválida del préstamo se reporta, no se cambia por 2%.
     const { data: planItems } = await admin
       .from('loan_payment_plan_items')
-      .select('month_number, capital_amount')
-      .eq('loan_id', id)
-      .order('month_number');
+      .select('due_date, capital_amount')
+      .eq('loan_id', id);
 
-    const capitalOverrides: Record<number, number> = {};
-    for (const item of planItems ?? []) {
-      capitalOverrides[item.month_number] = Number(item.capital_amount);
+    const agreed = agreedPlanFromRows(planItems ?? []);
+    if (!agreed.ok) {
+      return NextResponse.json({ error: agreed.error.mensaje }, { status: 422 });
     }
 
-    const planRows = buildPaymentPlan({
+    // RN-4.20, RN-4.21 and RN-4.3 ⚙️. RN-4.21b: the days in force today are
+    // the ones this loan keeps; they are stored below with disbursed_at.
+    const ajustes = await getAjustesDePrestamo(admin);
+    const plan = buildPaymentPlan({
       requestedAmount: Number(loan.requested_amount),
-      months: loan.payment_plan_months ?? 12,
-      rate: Number(loan.interest_rate),
-      disbursedAt,
-      capitalOverrides,
+      rate: loan.interest_rate,
+      disbursedOn: hoyBogota(disbursedAt),
+      lastMonth: agreed.value.lastMonth,
+      capitalOverrides: agreed.value.capitalOverrides,
+      ajustes,
     });
+    if (!plan.ok) {
+      return NextResponse.json({ error: plan.error.mensaje }, { status: 422 });
+    }
+    const planRows = plan.value;
 
     // Actualizar préstamo (el trigger assign_disbursement_number asigna CE- automáticamente)
     const { error: updateError } = await admin
@@ -164,7 +175,11 @@ export async function POST(
       .update({
         status: 'active',
         disbursed_amount: disbursedAmount,
+        four_per_thousand: fourPerThousand,
         disbursed_at: disbursedAt.toISOString(),
+        // RN-4.21b: the loan is always computed with these days.
+        full_rate_day_limit: ajustes.diaLimiteTasaCompleta,
+        cutoff_day: ajustes.diaDeCorte,
         outstanding_balance: loan.requested_amount,
         disbursement_proof_path: payment_method === 'cash' ? 'cash' : disbursement_proof_path,
         updated_at: disbursedAt.toISOString(),
@@ -226,12 +241,16 @@ export async function POST(
 
         // A. Acciones por préstamo descontadas (acciones_prestamo)
         if (hasLoanSharesDeduction) {
-          const { data: borrowerProfile } = await admin
-            .from('profiles')
-            .select('selected_share_value')
-            .eq('id', loan.user_id)
-            .maybeSingle();
-          const unitValue = borrowerProfile?.selected_share_value != null ? Number(borrowerProfile.selected_share_value) : null;
+          // The receipt already exists here, so a missing value or a failed
+          // read keeps the previous behavior (unit_value null) instead of aborting.
+          let valorDeAccion: number | null = null;
+          try {
+            valorDeAccion = await getOpenPeriodShareValue(admin, loan.user_id);
+          } catch (shareValueErr) {
+            console.error('disburse: no se pudo leer el valor de acción del periodo', shareValueErr);
+          }
+          const puedeComprar = validarPuedeComprar({ valorDeAccion });
+          const unitValue = puedeComprar.ok ? puedeComprar.value : null;
           
           const yyyy = disbursedAt.getFullYear();
           const mm = String(disbursedAt.getMonth() + 1).padStart(2, '0');

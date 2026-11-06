@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -15,8 +15,6 @@ import {
   ChevronDown,
   CheckCircle2,
   Lock,
-  Unlock,
-  Users,
   TrendingUp,
   CalendarClock,
   PlayCircle,
@@ -38,6 +36,14 @@ import {
   updateProfile,
 } from '@/lib/data/profiles';
 import {
+  getOpenPeriodMembership,
+  hasShareReceiptsInOpenPeriod,
+} from '@/lib/data/share-value';
+import {
+  MENSAJE_VALOR_BLOQUEADO_POR_COMPRA,
+  MENSAJE_VALOR_YA_ELEGIDO,
+} from '@/modules/acciones/domain/valor-de-accion';
+import {
   closeCapitalizationWindowV2,
   listAdminCapitalizationWindows,
   openGlobalCapitalizationWindow,
@@ -46,6 +52,19 @@ import {
 import { showToast } from '@/components/ui/Toast';
 import { BankAccount } from '@/types/entities';
 import { parseBankAccounts } from '@/lib/schemas/bank-account';
+import {
+  AJUSTE_DIA_DE_CORTE,
+  AJUSTE_DIA_LIMITE_TASA_COMPLETA,
+  AJUSTE_PLAZO_HASTA_PERIODO_SIGUIENTE,
+  AJUSTES_DE_PRESTAMO_POR_DEFECTO,
+  leerAjustesDePrestamoDesdeFilas,
+} from '@/lib/loan-settings';
+import {
+  validarAjustesDePrestamo,
+  validarFraccion,
+  validarMaximoDePrestamosActivos,
+  validarValoresDeAccion,
+} from '@/modules/parametros/domain/parametros';
 
 const cop = (n: number) => '$ ' + new Intl.NumberFormat('es-CO').format(n);
 
@@ -65,25 +84,30 @@ export default function AjustesPage() {
   const [defaultInterestRate, setDefaultInterestRate] = useState<number>(2);
   const [maxLoansEnabled, setMaxLoansEnabled] = useState<boolean>(true);
   const [maxLoansPerUser, setMaxLoansPerUser] = useState<number>(2);
+  // RN-4.20, RN-4.15/RN-4.21 and RN-4.3 (⚙️ in section 10).
+  const [fullRateDayLimit, setFullRateDayLimit] = useState<number>(AJUSTES_DE_PRESTAMO_POR_DEFECTO.diaLimiteTasaCompleta);
+  const [cutoffDay, setCutoffDay] = useState<number>(AJUSTES_DE_PRESTAMO_POR_DEFECTO.diaDeCorte);
+  const [extendedTermEnabled, setExtendedTermEnabled] = useState<boolean>(
+    AJUSTES_DE_PRESTAMO_POR_DEFECTO.plazoHastaPeriodoSiguiente,
+  );
+  // R3-001: stored loan settings that are invalid and shown as the default.
+  const [invalidLoanSettingKeys, setInvalidLoanSettingKeys] = useState<string[]>([]);
   const [resumenSaving, setResumenSaving] = useState<boolean>(false);
 
-  // User state (su propia selección + si puede cambiarla)
+  // User state (RN-2.2): a saved value changes only once the admin allowed
+  // one change and before the first share receipt of the period.
   const [selectedShare, setSelectedShare] = useState<number | null>(null);
   const [savedShare, setSavedShare] = useState<number | null>(null);
-  const [canChange, setCanChange] = useState<boolean>(true);
+  const [shareChangeAllowed, setShareChangeAllowed] = useState(false);
+  const [hasShareReceipts, setHasShareReceipts] = useState(false);
+  // RN-2.2: a new value can be picked when none was chosen, or when the admin
+  // allowed a change and there is no share receipt in the period yet.
+  const isShareChange = savedShare !== null && shareChangeAllowed && !hasShareReceipts;
+  const canEditShare = savedShare === null || isShareChange;
+  const userPanelDisabled = !canEditShare;
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  // Bulk unlock/lock de todos los accionistas (solo admin).
-  const [bulkLoading, setBulkLoading] = useState<'allow' | 'revoke' | null>(null);
-  // Estadística del estado actual: cuántos accionistas tienen el cambio
-  // habilitado vs total. Se usa para mostrar el estado global y deshabilitar
-  // el botón que ya no aplicaría (p.ej. "Permitir a todos" cuando ya todos
-  // lo tienen habilitado). El admin tiene RLS para leer profiles.
-  const [shareChangeStats, setShareChangeStats] = useState<{
-    enabled: number;
-    total: number;
-  } | null>(null);
 
   // Datos personales (todos los usuarios). Guardamos dos copias: `profileForm`
   // es lo que el usuario está editando y `profileSaved` es el snapshot del
@@ -253,32 +277,6 @@ export default function AjustesPage() {
     }
   };
 
-  const refreshShareChangeStats = useCallback(async () => {
-    const [totalRes, enabledRes] = await Promise.all([
-      supabase
-        .from('profiles')
-        .select('id', { count: 'exact', head: true })
-        .eq('role', 'accionista'),
-      supabase
-        .from('profiles')
-        .select('id', { count: 'exact', head: true })
-        .eq('role', 'accionista')
-        .eq('share_value_change_allowed', true),
-    ]);
-    if (totalRes.error) {
-      console.error('Error contando accionistas:', totalRes.error);
-      return;
-    }
-    if (enabledRes.error) {
-      console.error('Error contando accionistas habilitados:', enabledRes.error);
-      return;
-    }
-    setShareChangeStats({
-      total: totalRes.count ?? 0,
-      enabled: enabledRes.count ?? 0,
-    });
-  }, []);
-
   const refreshCapWindows = useCallback(async () => {
     try {
       const list = await listAdminCapitalizationWindows(supabase);
@@ -290,7 +288,6 @@ export default function AjustesPage() {
 
   useEffect(() => {
     let cancelled = false;
-    let profileChannel: ReturnType<typeof supabase.channel> | null = null;
 
     const init = async () => {
       const {
@@ -355,11 +352,9 @@ export default function AjustesPage() {
             });
           }
 
-          // Si es admin, cargamos el estado global del flag de cambio
-          // para todos los accionistas (habilitados vs total) y la lista
-          // de ventanas activas de capitalización.
+          // Si es admin, cargamos las cuentas bancarias y la lista de
+          // ventanas activas de capitalización.
           if (userRole === 'admin') {
-            refreshShareChangeStats();
             loadBankAccounts();
             try {
               const list = await listAdminCapitalizationWindows(supabase);
@@ -382,59 +377,18 @@ export default function AjustesPage() {
 
           // Al admin no le cargamos valor de acción: no aplica.
           if (userRole !== 'admin') {
-            if (profile.selected_share_value != null) {
-              const val = Number(profile.selected_share_value);
-              setSelectedShare(val);
-              setSavedShare(val);
+            const [membership, withShareReceipts] = await Promise.all([
+              getOpenPeriodMembership(supabase, user.id),
+              hasShareReceiptsInOpenPeriod(supabase, user.id),
+            ]);
+            if (!cancelled) {
+              if (membership?.shareValue != null) {
+                setSelectedShare(membership.shareValue);
+                setSavedShare(membership.shareValue);
+              }
+              setShareChangeAllowed(membership?.changeAllowed ?? false);
+              setHasShareReceipts(withShareReceipts);
             }
-            setCanChange(profile.share_value_change_allowed ?? true);
-
-            // Escuchamos cambios en el propio perfil para reflejar en vivo
-            // cuando el admin habilita/bloquea el cambio del valor de acción
-            // mientras el accionista está en esta pantalla.
-            profileChannel = supabase
-              .channel(`profile-self-${user.id}`)
-              .on(
-                'postgres_changes',
-                {
-                  event: 'UPDATE',
-                  schema: 'public',
-                  table: 'profiles',
-                  filter: `id=eq.${user.id}`,
-                },
-                (payload) => {
-                  if (cancelled) return;
-                  const next = payload.new as {
-                    share_value_change_allowed?: boolean;
-                    selected_share_value?: number | null;
-                  };
-                  if (typeof next.share_value_change_allowed === 'boolean') {
-                    setCanChange((prev) => {
-                      // Feedback visible cuando el admin cambió el permiso.
-                      if (prev !== next.share_value_change_allowed) {
-                        if (next.share_value_change_allowed) {
-                          showToast(
-                            'success',
-                            'El administrador habilitó el cambio de tu valor de acción',
-                          );
-                        } else {
-                          showToast(
-                            'info',
-                            'El administrador bloqueó el cambio de tu valor de acción',
-                          );
-                        }
-                      }
-                      return next.share_value_change_allowed!;
-                    });
-                  }
-                  if (next.selected_share_value != null) {
-                    const val = Number(next.selected_share_value);
-                    setSavedShare(val);
-                    setSelectedShare((prev) => (prev === null ? val : prev));
-                  }
-                },
-              )
-              .subscribe();
           }
         } catch (err) {
           console.error('Error cargando perfil:', err);
@@ -452,7 +406,10 @@ export default function AjustesPage() {
           'four_per_thousand_rate',
           'default_loan_interest_rate',
           'max_active_loans_enabled',
-          'max_active_loans_per_user'
+          'max_active_loans_per_user',
+          AJUSTE_DIA_LIMITE_TASA_COMPLETA,
+          AJUSTE_DIA_DE_CORTE,
+          AJUSTE_PLAZO_HASTA_PERIODO_SIGUIENTE,
         ]);
 
       if (!cancelled && settingsList) {
@@ -479,6 +436,12 @@ export default function AjustesPage() {
 
         const mlp = settingsList.find(s => s.key === 'max_active_loans_per_user')?.value;
         if (mlp !== undefined) setMaxLoansPerUser(Number(mlp));
+
+        const { ajustes: loanSettings, clavesInvalidas } = leerAjustesDePrestamoDesdeFilas(settingsList);
+        setFullRateDayLimit(loanSettings.diaLimiteTasaCompleta);
+        setCutoffDay(loanSettings.diaDeCorte);
+        setExtendedTermEnabled(loanSettings.plazoHastaPeriodoSiguiente);
+        setInvalidLoanSettingKeys(clavesInvalidas);
       }
 
 
@@ -489,7 +452,6 @@ export default function AjustesPage() {
 
     return () => {
       cancelled = true;
-      if (profileChannel) supabase.removeChannel(profileChannel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -687,21 +649,73 @@ export default function AjustesPage() {
     setAllowedShares((prev) => prev.filter((v) => v !== valToRemove));
   };
 
+  // `system_settings` is written only by the server (service role) after it
+  // checks the admin and validates every value. Returns the error message to
+  // show, or null when everything was saved.
+  const postSettings = async (
+    settings: { key: string; value: unknown }[],
+    fallbackError: string,
+  ): Promise<string | null> => {
+    try {
+      const res = await fetch('/api/admin/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings }),
+      });
+      if (res.ok) return null;
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      return body?.error ?? fallbackError;
+    } catch (err) {
+      console.error('Error guardando ajustes:', err);
+      return fallbackError;
+    }
+  };
+
   const saveAdminSettings = async () => {
+    const shares = validarValoresDeAccion(allowedShares);
+    if (!shares.ok) {
+      showToast('error', shares.error.mensaje);
+      return;
+    }
     setSaving(true);
-    const { error } = await supabase
-      .from('system_settings')
-      .upsert({ key: 'allowed_share_values', value: allowedShares });
+    const error = await postSettings(
+      [{ key: 'allowed_share_values', value: shares.value }],
+      'Error al guardar configuración',
+    );
 
     if (error) {
-      showToast('error', 'Error al guardar configuración');
+      showToast('error', error);
     } else {
       showToast('success', 'Configuración actualizada');
     }
     setSaving(false);
   };
 
+  // Validation of the values the admin saves (parametros domain).
+  const loanSettingsCheck = useMemo(
+    () =>
+      validarAjustesDePrestamo({
+        diaLimiteTasaCompleta: fullRateDayLimit,
+        diaDeCorte: cutoffDay,
+        plazoHastaPeriodoSiguiente: extendedTermEnabled,
+      }),
+    [fullRateDayLimit, cutoffDay, extendedTermEnabled],
+  );
+
   const saveResumenSettings = async () => {
+    const checks = [
+      validarFraccion(Number(expensesPercentage) / 100, 'El porcentaje de gastos'),
+      validarFraccion(Number(nextYearSharesPercentage) / 100, 'El porcentaje de acciones del siguiente año'),
+      validarFraccion(Number(fourPerThousandRate) / 100, 'El gravamen 4×1000'),
+      validarFraccion(Number(defaultInterestRate) / 100, 'La tasa de interés'),
+      ...(maxLoansEnabled ? [validarMaximoDePrestamosActivos(Number(maxLoansPerUser))] : []),
+      loanSettingsCheck,
+    ];
+    const failed = checks.find((c) => !c.ok);
+    if (failed && !failed.ok) {
+      showToast('error', failed.error.mensaje);
+      return;
+    }
     setResumenSaving(true);
     const updates = [
       { key: 'resumen_expenses_percentage', value: Number(expensesPercentage) / 100 },
@@ -710,93 +724,52 @@ export default function AjustesPage() {
       { key: 'four_per_thousand_rate', value: Number(fourPerThousandRate) / 100 },
       { key: 'default_loan_interest_rate', value: Number(defaultInterestRate) / 100 },
       { key: 'max_active_loans_enabled', value: Boolean(maxLoansEnabled) },
-      { key: 'max_active_loans_per_user', value: Number(maxLoansPerUser) },
+      // Only validated (and saved) while the limit is enabled.
+      ...(maxLoansEnabled ? [{ key: 'max_active_loans_per_user', value: Number(maxLoansPerUser) }] : []),
+      { key: AJUSTE_DIA_LIMITE_TASA_COMPLETA, value: Number(fullRateDayLimit) },
+      { key: AJUSTE_DIA_DE_CORTE, value: Number(cutoffDay) },
+      { key: AJUSTE_PLAZO_HASTA_PERIODO_SIGUIENTE, value: Boolean(extendedTermEnabled) },
     ];
 
-    const { error } = await supabase
-      .from('system_settings')
-      .upsert(updates);
+    const error = await postSettings(updates, 'Error al guardar la configuración del resumen');
 
     if (error) {
-      showToast('error', 'Error al guardar la configuración del resumen');
+      showToast('error', error);
     } else {
+      // The loan settings on screen are now the stored ones.
+      setInvalidLoanSettingKeys([]);
       showToast('success', 'Configuración de resumen y capitalización actualizada');
     }
     setResumenSaving(false);
   };
 
   const saveUserShare = async () => {
-    if (!userId || !selectedShare) return;
+    if (!userId || !selectedShare || !canEditShare || selectedShare === savedShare) return;
     setSaving(true);
 
     try {
-      await updateProfile(supabase, userId, {
-        selected_share_value: selectedShare,
-      });
-      setSavedShare(selectedShare);
-      // El trigger del backend auto-bloquea tras guardar: reflejamos eso
-      // en el estado local para que la UI se actualice sin refetch.
-      setCanChange(false);
-      showToast('success', 'Valor de acción guardado exitosamente');
-    } catch (err: unknown) {
-      // Supabase devuelve PostgrestError como objeto plano con .message/.hint,
-      // no como Error nativo — leemos ambos shapes.
-      const errObj = err as { message?: string; hint?: string } | null;
-      const message = errObj?.message ?? '';
-      const hint = errObj?.hint ?? '';
-      const isLocked =
-        message.includes('share_value_locked') ||
-        hint.includes('share_value_locked') ||
-        message.includes('autorizar el cambio');
-
-      if (isLocked) {
-        // Silenciamos el console.error: es un flujo esperado (admin bloqueó
-        // el cambio justo antes del guardado). La UI ya lo comunica.
-        showToast(
-          'error',
-          'El administrador bloqueó el cambio de tu valor de acción. Vuelve a pedir autorización para modificarlo.',
-        );
-        // Refrescamos la UI con el nuevo estado bloqueado + restauramos el
-        // valor guardado en el select para que no quede desincronizado.
-        setCanChange(false);
-        setSelectedShare(savedShare);
-      } else {
-        console.error('Error guardando valor de acción:', err);
-        showToast('error', 'Error al guardar tu valor de acción');
-      }
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const bulkChangeAllow = async (allow: boolean) => {
-    setBulkLoading(allow ? 'allow' : 'revoke');
-    try {
-      const res = await fetch('/api/admin/share-value-unlock', {
+      const res = await fetch('/api/acciones/valor', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scope: 'all', allow }),
+        body: JSON.stringify({ shareValue: selectedShare }),
       });
-      const body = await res.json().catch(() => null);
+      const body = (await res.json().catch(() => null)) as
+        | { error?: string; shareValue?: number }
+        | null;
       if (!res.ok) {
-        showToast('error', body?.error ?? 'No se pudo aplicar el cambio');
+        showToast('error', body?.error ?? 'Error al guardar tu valor de acción');
         return;
       }
-      const updated = body?.updated ?? 0;
-      showToast(
-        'success',
-        allow
-          ? `Cambio habilitado para ${updated} accionista${updated === 1 ? '' : 's'}`
-          : `Cambio bloqueado para ${updated} accionista${updated === 1 ? '' : 's'}`,
-      );
-      // Refrescamos el badge para que muestre el estado nuevo y se
-      // deshabilite el botón que ya no aplica.
-      await refreshShareChangeStats();
+      const isChange = savedShare !== null;
+      setSavedShare(body?.shareValue ?? selectedShare);
+      // The permission is good for a single change.
+      if (isChange) setShareChangeAllowed(false);
+      showToast('success', 'Valor de acción guardado exitosamente');
     } catch (err) {
-      console.error('Error bulk share-value-unlock:', err);
-      showToast('error', 'No se pudo aplicar el cambio');
+      console.error('Error guardando valor de acción:', err);
+      showToast('error', 'Error al guardar tu valor de acción');
     } finally {
-      setBulkLoading(null);
+      setSaving(false);
     }
   };
 
@@ -854,10 +827,6 @@ export default function AjustesPage() {
   }
 
   const isAdmin = role === 'admin';
-  // Un accionista puede editar si nunca ha elegido (savedShare === null) o si
-  // el admin le permitió cambiar (canChange === true).
-  const canUserEditShare = savedShare === null || canChange;
-  const userPanelDisabled = !canUserEditShare;
 
   return (
     <div className="flex flex-col gap-7 animate-in fade-in duration-300">
@@ -901,26 +870,27 @@ export default function AjustesPage() {
                     Tu valor de acción
                   </h2>
                 </div>
-                {savedShare !== null &&
-                  (canChange ? (
+                {savedShare !== null && (
+                  isShareChange ? (
                     <Badge tone="success" className="shrink-0">
-                      <Unlock size={11} strokeWidth={1.75} />
                       Cambio habilitado
                     </Badge>
                   ) : (
                     <Badge tone="neutral" className="shrink-0">
                       <Lock size={11} strokeWidth={1.75} />
-                      Bloqueado
+                      Elegido para este periodo
                     </Badge>
-                  ))}
+                  )
+                )}
               </div>
               <p className="text-[var(--color-text-muted)] text-[13px] leading-[1.55]">
                 Selecciona el monto fijo que aportarás mensualmente como acción dentro
                 de la plataforma. Este valor formará parte de tu capital acumulado.
                 <br />
                 <span className="text-[12px] text-[var(--color-text-subtle)]">
-                  Una vez guardes tu selección, no podrás cambiarla sin autorización
-                  del administrador.
+                  Se elige por periodo, al iniciar el año. Solo se puede cambiar si el
+                  administrador lo habilita y todavía no has comprado acciones en el
+                  periodo.
                 </span>
               </p>
 
@@ -973,32 +943,39 @@ export default function AjustesPage() {
                   <div className="flex items-start gap-2 px-3 py-2.5 rounded-[10px] bg-[var(--color-surface-alt)] text-[var(--color-text-muted)] text-[12.5px] leading-[1.5]">
                     <Lock size={14} strokeWidth={1.75} className="mt-0.5 shrink-0" />
                     <span>
-                      Tu valor de acción está bloqueado. Pídele al administrador que
-                      autorice el cambio si necesitas modificarlo.
+                      {hasShareReceipts
+                        ? MENSAJE_VALOR_BLOQUEADO_POR_COMPRA
+                        : MENSAJE_VALOR_YA_ELEGIDO}
+                    </span>
+                  </div>
+                )}
+
+                {isShareChange && (
+                  <div className="flex items-start gap-2 px-3 py-2.5 rounded-[10px] bg-[var(--color-surface-alt)] text-[var(--color-text-muted)] text-[12.5px] leading-[1.5]">
+                    <span>
+                      El administrador te habilitó un cambio. Elige el nuevo valor y
+                      guárdalo; después de guardarlo, el valor vuelve a quedar fijo.
                     </span>
                   </div>
                 )}
               </div>
             </div>
-            <div className="p-4 border-t border-[var(--color-border)] bg-[var(--color-surface-alt)]">
-              <Button
-                className="w-full"
-                onClick={saveUserShare}
-                disabled={
-                  saving ||
-                  !selectedShare ||
-                  selectedShare === savedShare ||
-                  userPanelDisabled
-                }
-              >
-                <Save size={15} strokeWidth={1.75} />
-                {saving
-                  ? 'Guardando...'
-                  : selectedShare === savedShare
-                    ? 'Sin cambios'
-                    : 'Guardar preferencia'}
-              </Button>
-            </div>
+            {!userPanelDisabled && (
+              <div className="p-4 border-t border-[var(--color-border)] bg-[var(--color-surface-alt)]">
+                <Button
+                  className="w-full"
+                  onClick={saveUserShare}
+                  disabled={saving || !selectedShare || selectedShare === savedShare}
+                >
+                  <Save size={15} strokeWidth={1.75} />
+                  {saving
+                    ? 'Guardando...'
+                    : isShareChange
+                      ? 'Guardar nuevo valor'
+                      : 'Guardar valor del periodo'}
+                </Button>
+              </div>
+            )}
           </Card>
         )}
 
@@ -1075,108 +1052,6 @@ export default function AjustesPage() {
                   <Save size={15} strokeWidth={1.75} />
                   {saving ? 'Aplicando...' : 'Aplicar cambios globales'}
                 </Button>
-              </div>
-            </Card>
-
-            {/* Bulk: permitir o revocar cambio de valor a todos los accionistas */}
-            <Card padding="none" className="flex flex-col overflow-hidden">
-              <div className="p-6 flex-1 flex flex-col gap-4">
-                <div className="flex items-center justify-between gap-3 mb-1">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-[10px] bg-[var(--color-brand-soft)] text-[var(--color-brand)] flex items-center justify-center">
-                      <Users size={18} strokeWidth={1.75} />
-                    </div>
-                    <h2 className="text-[15px] font-semibold tracking-tight text-[var(--color-text)]">
-                      Cambio de valor de acción
-                    </h2>
-                  </div>
-                  {(() => {
-                    // Badge de estado actual. Tres casos:
-                    //   - Sin accionistas registrados → no mostramos nada.
-                    //   - Todos habilitados       → verde "Habilitado".
-                    //   - Todos bloqueados        → neutro "Bloqueado".
-                    //   - Mixto                   → warn "N de M habilitados".
-                    if (!shareChangeStats || shareChangeStats.total === 0) {
-                      return null;
-                    }
-                    const { enabled, total } = shareChangeStats;
-                    if (enabled === total) {
-                      return (
-                        <Badge tone="success" dot>
-                          Habilitado
-                        </Badge>
-                      );
-                    }
-                    if (enabled === 0) {
-                      return (
-                        <Badge tone="neutral" dot>
-                          Bloqueado
-                        </Badge>
-                      );
-                    }
-                    return (
-                      <Badge tone="warn" dot>
-                        {enabled} de {total} habilitados
-                      </Badge>
-                    );
-                  })()}
-                </div>
-                <p className="text-[var(--color-text-muted)] text-[13px] leading-[1.55]">
-                  Por defecto cada accionista puede elegir su valor de acción una
-                  sola vez. Si quieres reabrir el cambio para todos (por ejemplo,
-                  cuando ajustas los montos globales), hazlo aquí. También puedes
-                  permitir o revocar uno por uno desde el directorio de accionistas.
-                </p>
-
-                {(() => {
-                  // Derivamos los flags de UI a partir del conteo. Si aún no
-                  // tenemos los datos (primer render), los botones quedan
-                  // activos pero sin saber el estado.
-                  const total = shareChangeStats?.total ?? 0;
-                  const enabled = shareChangeStats?.enabled ?? 0;
-                  const allEnabled = total > 0 && enabled === total;
-                  const allBlocked = total > 0 && enabled === 0;
-
-                  return (
-                    <div className="flex flex-col gap-2 mt-1">
-                      <Button
-                        className="w-full"
-                        onClick={() => bulkChangeAllow(true)}
-                        disabled={bulkLoading !== null || allEnabled}
-                        title={
-                          allEnabled
-                            ? 'Todos los accionistas ya lo tienen habilitado'
-                            : undefined
-                        }
-                      >
-                        <Unlock size={15} strokeWidth={1.75} />
-                        {bulkLoading === 'allow'
-                          ? 'Habilitando...'
-                          : allEnabled
-                            ? 'Ya habilitado para todos'
-                            : 'Permitir cambio a todos los accionistas'}
-                      </Button>
-                      <Button
-                        className="w-full"
-                        variant="secondary"
-                        onClick={() => bulkChangeAllow(false)}
-                        disabled={bulkLoading !== null || allBlocked}
-                        title={
-                          allBlocked
-                            ? 'Ningún accionista lo tiene habilitado'
-                            : undefined
-                        }
-                      >
-                        <Lock size={15} strokeWidth={1.75} />
-                        {bulkLoading === 'revoke'
-                          ? 'Bloqueando...'
-                          : allBlocked
-                            ? 'Ya bloqueado para todos'
-                            : 'Bloquear cambio a todos los accionistas'}
-                      </Button>
-                    </div>
-                  );
-                })()}
               </div>
             </Card>
 
@@ -1266,7 +1141,66 @@ export default function AjustesPage() {
                         Tasa de interés mensual aplicada por defecto a las nuevas solicitudes.
                       </span>
                     </div>
+
+                    <div className="flex flex-col gap-1.5">
+                      <label htmlFor="full_rate_day_limit" className="text-[11px] font-semibold text-[var(--color-text-muted)] uppercase tracking-[0.12em]">
+                        Día límite para tasa completa
+                      </label>
+                      <Input
+                        id="full_rate_day_limit"
+                        type="number"
+                        min="1"
+                        max="27"
+                        step="1"
+                        value={fullRateDayLimit}
+                        onChange={(e) => setFullRateDayLimit(Number(e.target.value))}
+                      />
+                      <span className="text-[11px] text-[var(--color-text-subtle)]">
+                        Si el préstamo se desembolsa después de este día, el primer mes cobra media tasa (15 por defecto).
+                      </span>
+                    </div>
+
+                    <div className="flex flex-col gap-1.5">
+                      <label htmlFor="loan_cutoff_day" className="text-[11px] font-semibold text-[var(--color-text-muted)] uppercase tracking-[0.12em]">
+                        Día de corte del mes aplicado
+                      </label>
+                      <Input
+                        id="loan_cutoff_day"
+                        type="number"
+                        min="2"
+                        max="28"
+                        step="1"
+                        value={cutoffDay}
+                        onChange={(e) => setCutoffDay(Number(e.target.value))}
+                      />
+                      <span className="text-[11px] text-[var(--color-text-subtle)]">
+                        Si el préstamo se desembolsa después de este día, los intereses empiezan a contar el mes siguiente (25 por defecto).
+                      </span>
+                    </div>
                   </div>
+
+                  {invalidLoanSettingKeys.length > 0 && (
+                    <p role="alert" className="text-[12px] text-[var(--color-warn)]">
+                      El valor guardado no es válido; se muestra el valor por defecto
+                      {' ('}
+                      {invalidLoanSettingKeys
+                        .map((key) =>
+                          key === AJUSTE_DIA_LIMITE_TASA_COMPLETA
+                            ? 'día límite para tasa completa'
+                            : key === AJUSTE_DIA_DE_CORTE
+                              ? 'día de corte'
+                              : 'plazo hasta diciembre del periodo siguiente',
+                        )
+                        .join(', ')}
+                      {'). Si guardas, se reemplaza por el valor que ves.'}
+                    </p>
+                  )}
+
+                  {!loanSettingsCheck.ok && (
+                    <p role="alert" className="text-[12px] text-[var(--color-danger)]">
+                      {loanSettingsCheck.error.mensaje}
+                    </p>
+                  )}
 
                   <div className="flex flex-col gap-3 pt-2 border-t border-[var(--color-border)] mt-2">
                     <div className="flex items-center gap-2.5">
@@ -1279,6 +1213,19 @@ export default function AjustesPage() {
                       />
                       <label htmlFor="next_year_capitalization_active" className="text-xs font-semibold text-[var(--color-text)] uppercase tracking-wider cursor-pointer select-none">
                         Habilitar capitalización próximo año (los accionistas podrán seleccionar su monto desde el dashboard)
+                      </label>
+                    </div>
+
+                    <div className="flex items-center gap-2.5">
+                      <input
+                        type="checkbox"
+                        id="loan_extended_term_enabled"
+                        checked={extendedTermEnabled}
+                        onChange={(e) => setExtendedTermEnabled(e.target.checked)}
+                        className="rounded border-[var(--color-border)] text-[var(--color-brand)] focus:ring-[var(--color-ring)] h-4 w-4"
+                      />
+                      <label htmlFor="loan_extended_term_enabled" className="text-xs font-semibold text-[var(--color-text)] uppercase tracking-wider cursor-pointer select-none">
+                        Permitir plazos de préstamo hasta diciembre del periodo siguiente (para todos los accionistas)
                       </label>
                     </div>
 

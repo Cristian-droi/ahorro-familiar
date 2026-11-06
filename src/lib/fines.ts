@@ -1,11 +1,13 @@
-// Helpers para cálculo de fechas en zona horaria America/Bogota y de multas
-// por mora en compra de acciones.
+// Legacy adapter for Bogota dates and late-purchase fines.
 //
-// Toda la lógica que toca fechas del dominio (mes actual, primer día de mes,
-// días de mora) pasa por aquí para que el servidor no dependa de la TZ donde
-// corre Node (Vercel/Railway suelen ser UTC).
+// The fine rule (docs/reglas-negocio.md, RN-3.4) lives in
+// src/modules/acciones/domain/multas.ts; this file only maps the stored
+// `PurchaseRules` and the legacy `Date` anchors to the domain types. It is
+// also the clock edge of the legacy layer: `new Date()` is read here, never in
+// the domain.
 
-const BOGOTA_TZ = 'America/Bogota';
+import { detalleDeMulta, type ReglasDeMulta } from '@/modules/acciones/domain/multas';
+import { hoyBogota, primerDiaDelMes, type FechaISO } from '@/shared/domain/fechas';
 
 export interface PurchaseRules {
   min_shares_per_month: number;
@@ -27,13 +29,7 @@ export const DEFAULT_PURCHASE_RULES: PurchaseRules = {
 // representación es siempre medianoche UTC del día calendario Bogotá para
 // que las operaciones de días sean enteras, sin DST (Colombia no tiene DST).
 export function getBogotaToday(): Date {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: BOGOTA_TZ,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(new Date());
-  const [year, month, day] = parts.split('-').map(Number);
+  const [year, month, day] = hoyBogota(new Date()).split('-').map(Number);
   return new Date(Date.UTC(year, month - 1, day));
 }
 
@@ -47,8 +43,7 @@ export function formatBogotaDate(d: Date): string {
 
 // Primer día del mes actual en Bogotá ("YYYY-MM-01").
 export function getBogotaCurrentMonth(): string {
-  const today = getBogotaToday();
-  return `${today.getUTCFullYear()}-${String(today.getUTCMonth() + 1).padStart(2, '0')}-01`;
+  return primerDiaDelMes(hoyBogota(new Date()));
 }
 
 // Devuelve el primer día de cada mes del año en curso Bogotá que sea >= desde
@@ -88,10 +83,16 @@ export function listAllMonthsOfYear(
   return listMonthsUpToDecember(`${year}-01-01`);
 }
 
-// Calcula la multa por mora para un target_month dado el día de hoy.
-// Reglas: multa empieza el día (grace_period_days + 1). Es (days_late * fine_per_day)
-// con tope fine_max_per_month.
-//
+// Maps the stored purchase rules to the domain fine rules (RN-3.4).
+export function toReglasDeMulta(rules: PurchaseRules): ReglasDeMulta {
+  return {
+    diasDeGracia: rules.grace_period_days,
+    multaPorDia: rules.fine_per_day,
+    topeMensual: rules.fine_max_per_month,
+  };
+}
+
+// Calcula la multa por mora de un target_month al día de hoy (RN-3.4).
 // `today` y `targetMonth` se comparan como fechas calendario Bogotá.
 export function computeFineForMonth(
   targetMonth: string, // "YYYY-MM-01"
@@ -103,25 +104,22 @@ export function computeFineForMonth(
 
 // Variante que también devuelve cuántos días en mora se están cobrando y
 // si llegó al tope. Útil para mostrar la info en la UI sin recalcular.
+// El monto y los días salen de `detalleDeMulta` (RN-3.4).
 export function computeFineDetail(
   targetMonth: string, // "YYYY-MM-01"
   today: Date, // anchor en UTC de día Bogotá
   rules: PurchaseRules,
 ): { amount: number; daysLate: number; chargedDays: number; capped: boolean } {
-  const [year, month] = targetMonth.split('-').map(Number);
-  const graceEnd = new Date(Date.UTC(year, month - 1, rules.grace_period_days));
-
-  const diffMs = today.getTime() - graceEnd.getTime();
-  const daysLate = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
-  if (daysLate <= 0) {
+  const mes = primerDiaDelMes(targetMonth as FechaISO);
+  const hoy = formatBogotaDate(today) as FechaISO;
+  const detalle = detalleDeMulta({ mes, hoy, reglas: toReglasDeMulta(rules) });
+  if (detalle.monto <= 0) {
     return { amount: 0, daysLate: 0, chargedDays: 0, capped: false };
   }
-
-  const raw = daysLate * rules.fine_per_day;
-  const capped = raw > rules.fine_max_per_month;
-  const amount = capped ? rules.fine_max_per_month : raw;
-  const chargedDays = capped
-    ? Math.floor(rules.fine_max_per_month / rules.fine_per_day)
-    : daysLate;
-  return { amount, daysLate, chargedDays, capped };
+  return {
+    amount: detalle.monto,
+    daysLate: detalle.diasDeMora,
+    chargedDays: detalle.diasCobrados,
+    capped: detalle.topado,
+  };
 }

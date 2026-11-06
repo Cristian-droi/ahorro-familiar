@@ -1,6 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from '@/types/database';
 import type { Loan, LoanVote, LoanWithDetails, Profile } from '@/types/entities';
+import { eligibleVoterCount } from './votes';
+import { calcAccruedInterest, summarizeActiveLoanDebt, type LoanInterestItem } from '@/lib/loans';
+import { ajustesDelPrestamo, getAjustesDePrestamo } from '@/lib/loan-settings';
+import type { FechaISO } from '@/shared/domain/fechas';
 
 type SB = SupabaseClient<Database>;
 
@@ -100,6 +104,17 @@ export type PendingLoanSharePurchase = {
   unit_value: number | null;
 };
 
+// PostgreSQL responde 42501 cuando el rol no tiene EXECUTE sobre la RPC. Le
+// pasa a anon (sesión vencida o ausente) desde 20261026000000, que dejó las
+// RPC del accionista solo para authenticated.
+export function isPermissionDeniedError(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as { code?: unknown }).code === '42501'
+  );
+}
+
 export async function getMyPendingLoanSharePurchases(
   supabase: SB,
 ): Promise<PendingLoanSharePurchase[]> {
@@ -144,34 +159,89 @@ export type ActiveLoanDebt = {
   next_due_month: string; // 'YYYY-MM-DD'
 };
 
-export async function getMyActiveLoansDebt(supabase: SB): Promise<ActiveLoanDebt[]> {
-  const { data, error } = await supabase.rpc('get_user_active_loans_debt');
+// Same result as the former SQL `get_user_active_loans_debt`, with the
+// interest owed from the domain (summarizeActiveLoanDebt, section 11 n.º 13).
+// `today` defaults to the Bogota date of the clock.
+export async function getMyActiveLoansDebt(supabase: SB, today?: FechaISO): Promise<ActiveLoanDebt[]> {
+  const { data: auth, error: authError } = await supabase.auth.getUser();
+  if (authError) throw authError;
+  const userId = auth.user?.id;
+  if (!userId) return [];
+
+  const { data: loans, error } = await supabase
+    .from('loans')
+    .select('id, loan_number, disbursement_number, requested_amount, interest_rate, disbursed_at, full_rate_day_limit, cutoff_day')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .not('disbursed_at', 'is', null);
   if (error) throw error;
-  const rows = data ?? [];
+  const rows = (loans ?? []).filter((l): l is typeof l & { disbursed_at: string } => l.disbursed_at != null);
+  if (rows.length === 0) return [];
 
-  // The RPC does not return loan_number, so it is looked up separately.
-  const loanNumbers = new Map<string, number | null>();
-  if (rows.length > 0) {
-    const { data: loans, error: loansError } = await supabase
-      .from('loans')
-      .select('id, loan_number')
-      .in('id', rows.map((r) => r.loan_id));
-    if (loansError) throw loansError;
-    for (const l of loans ?? []) loanNumbers.set(l.id, l.loan_number);
+  const itemsByLoan = await getLoanInterestItems(supabase, rows.map((l) => l.id));
+  const ajustes = await getAjustesDePrestamo(supabase);
+  return rows.map((loan) => {
+    // RN-4.21b: each disbursed loan is computed with its own stored days.
+    const ajustesPropios = ajustesDelPrestamo(loan, ajustes);
+    if (!ajustesPropios.ok) {
+      throw new Error(`No se pudo calcular la deuda del préstamo ${loan.id}: ${ajustesPropios.error.mensaje}`);
+    }
+    const summary = summarizeActiveLoanDebt({
+      requestedAmount: loan.requested_amount,
+      rate: loan.interest_rate,
+      disbursedAt: loan.disbursed_at,
+      items: itemsByLoan.get(loan.id) ?? [],
+      today,
+      ajustes: ajustesPropios.value,
+    });
+    if (!summary.ok) {
+      throw new Error(`No se pudo calcular la deuda del préstamo ${loan.id}: ${summary.error.mensaje}`);
+    }
+    return {
+      loan_id: loan.id,
+      loan_number: loan.loan_number,
+      disbursement_number: loan.disbursement_number,
+      requested_amount: Number(loan.requested_amount),
+      outstanding_capital: summary.value.outstandingCapital,
+      interest_rate: Number(loan.interest_rate),
+      disbursed_at: loan.disbursed_at,
+      interest_owed: summary.value.interestOwed,
+      months_overdue: summary.value.monthsOverdue,
+      next_due_month: summary.value.nextDueMonth,
+    };
+  });
+}
+
+// Interest still owed by one loan, counting approved receipts only (as the
+// former SQL `get_loan_interest_owed` did). A loan that does not exist or is
+// not disbursed owes 0. Throws when the domain rejects the data.
+export async function getLoanInterestOwed(supabase: SB, loanId: string, today?: FechaISO): Promise<number> {
+  const { data: loan, error } = await supabase
+    .from('loans')
+    .select('id, requested_amount, interest_rate, disbursed_at, full_rate_day_limit, cutoff_day')
+    .eq('id', loanId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!loan?.disbursed_at) return 0;
+
+  // RN-4.21b: the loan is computed with its own stored days.
+  const ajustes = ajustesDelPrestamo(loan, await getAjustesDePrestamo(supabase));
+  if (!ajustes.ok) {
+    throw new Error(`No se pudo calcular el interés del préstamo ${loan.id}: ${ajustes.error.mensaje}`);
   }
-
-  return rows.map((row) => ({
-    loan_id: row.loan_id,
-    loan_number: loanNumbers.get(row.loan_id) ?? null,
-    disbursement_number: row.disbursement_number,
-    requested_amount: Number(row.requested_amount),
-    outstanding_capital: Number(row.outstanding_capital),
-    interest_rate: Number(row.interest_rate),
-    disbursed_at: row.disbursed_at,
-    interest_owed: Number(row.interest_owed),
-    months_overdue: Number(row.months_overdue),
-    next_due_month: row.next_due_month,
-  }));
+  const itemsByLoan = await getLoanInterestItems(supabase, [loan.id]);
+  const owed = calcAccruedInterest({
+    requestedAmount: loan.requested_amount,
+    rate: loan.interest_rate,
+    disbursedAt: loan.disbursed_at,
+    items: itemsByLoan.get(loan.id) ?? [],
+    today,
+    ajustes: ajustes.value,
+  });
+  if (!owed.ok) {
+    throw new Error(`No se pudo calcular el interés del préstamo ${loan.id}: ${owed.error.mensaje}`);
+  }
+  return owed.value;
 }
 
 // Préstamos del accionista que ya pasaron la votación y están a la espera
@@ -295,6 +365,7 @@ export type LoanWithBorrower = Loan & {
     first_name: string;
     last_name: string;
     identity_document: string;
+    role: Profile['role'];
   } | null;
 };
 
@@ -302,21 +373,24 @@ export async function getAllLoans(supabase: SB): Promise<LoanWithBorrower[]> {
   const { data, error } = await supabase
     .from('loans')
     .select(
-      `*, borrower:profiles!loans_user_id_fkey(id, first_name, last_name, identity_document)`,
+      `*, borrower:profiles!loans_user_id_fkey(id, first_name, last_name, identity_document, role)`,
     )
     .order('created_at', { ascending: false });
   if (error) throw error;
   return (data ?? []) as unknown as LoanWithBorrower[];
 }
 
+// `eligible_voters` is n from RN-4.6: active shareholders except the applicant.
+export type LoanWithVoting = LoanWithDetails & { eligible_voters: number };
+
 export async function getLoanWithDetails(
   supabase: SB,
   id: string,
-): Promise<LoanWithDetails | null> {
+): Promise<LoanWithVoting | null> {
   const [loanRes, planRes, votesRes, totalRes] = await Promise.all([
     supabase
       .from('loans')
-      .select(`*, borrower:profiles!loans_user_id_fkey(id,first_name,last_name,identity_document,selected_share_value)`)
+      .select(`*, borrower:profiles!loans_user_id_fkey(id,first_name,last_name,identity_document,role)`)
       .eq('id', id)
       .maybeSingle(),
     supabase
@@ -350,14 +424,16 @@ export async function getLoanWithDetails(
   );
 
   const loan = loanRes.data as Record<string, unknown>;
-  const borrower = loan.borrower as LoanWithDetails['borrower'];
+  const borrower = loan.borrower as (LoanWithDetails['borrower'] & { role?: Profile['role'] }) | null;
+  const totalShareholders = Number(totalRes.data ?? 0);
 
   return {
     ...(loan as unknown as Loan),
     borrower: borrower ?? null,
     payment_plan: (planRes.data ?? []) as LoanWithDetails['payment_plan'],
     votes: votes as unknown as LoanWithDetails['votes'],
-    total_active_shareholders: Number(totalRes.data ?? 0),
+    total_active_shareholders: totalShareholders,
+    eligible_voters: eligibleVoterCount({ totalShareholders, applicantRole: borrower?.role }),
     approved_votes: approvedVotes,
     rejected_votes: rejectedVotes,
     has_upfront_shares_receipt: hasUpfront,
@@ -607,4 +683,42 @@ export async function getLibroAccionistaData(
       `${b.user.first_name} ${b.user.last_name}`,
     ),
   );
+}
+
+// Rows per request; it matches the default PostgREST `max-rows`, so a full
+// page means there may be more.
+export const LOAN_INTEREST_ITEMS_PAGE_SIZE = 1000;
+
+// Approved capital and interest items of the given loans for the domain
+// interest owed (calcAccruedInterest). Loans without items map to []. It pages
+// through the results ordered by id, so it never truncates silently (R3-004).
+export async function getLoanInterestItems(
+  supabase: SB,
+  loanIds: string[],
+): Promise<Map<string, LoanInterestItem[]>> {
+  const porPrestamo = new Map<string, LoanInterestItem[]>(loanIds.map((id) => [id, []]));
+  if (loanIds.length === 0) return porPrestamo;
+
+  for (let desde = 0; ; desde += LOAN_INTEREST_ITEMS_PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from('receipt_items')
+      .select('id, loan_id, concept, target_month, amount, receipts!inner(status)')
+      .in('loan_id', loanIds)
+      .in('concept', ['pago_capital', 'pago_intereses'])
+      .eq('receipts.status', 'approved')
+      .order('id')
+      .range(desde, desde + LOAN_INTEREST_ITEMS_PAGE_SIZE - 1);
+    if (error) throw error;
+
+    const pagina = data ?? [];
+    for (const item of pagina) {
+      if (!item.loan_id) continue;
+      porPrestamo.get(item.loan_id)?.push({
+        concept: item.concept,
+        target_month: item.target_month,
+        amount: item.amount,
+      });
+    }
+    if (pagina.length < LOAN_INTEREST_ITEMS_PAGE_SIZE) return porPrestamo;
+  }
 }

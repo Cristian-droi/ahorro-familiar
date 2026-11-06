@@ -1,9 +1,18 @@
 import { z } from 'zod';
 import type { DeductionDetail } from '@/types/entities';
 
+// RN-4.3: the shareholder chooses the term in months, counted from the applied
+// month. Without it the maximum applies. The maximum (December of the period,
+// or of the next one when enabled) is validated by the domain plan.
+const plazoElegido = z
+  .number()
+  .int({ error: 'El plazo debe ser un número entero de meses.' })
+  .min(1, { error: 'El plazo debe ser de al menos 1 mes.' })
+  .optional();
+
 export const createLoanSchema = z.object({
   requested_amount: z.number().int().positive().min(500_000),
-  payment_plan_months: z.number().int().min(1).max(60),
+  payment_plan_months: plazoElegido,
   loan_shares_paid_upfront: z.boolean().default(false),
   deduct_obligations: z.boolean().default(false),
   deducted_capital_amount: z.number().nonnegative().default(0),
@@ -11,7 +20,8 @@ export const createLoanSchema = z.object({
 });
 
 export const updatePaymentPlanSchema = z.object({
-  months: z.number().int().min(1).max(60),
+  months: plazoElegido,
+  // RN-4.26 and RN-4.3b: keys are installment numbers ('5') or calendar months ('2026-06-01').
   capital_overrides: z.record(z.string(), z.number().nonnegative()),
 });
 

@@ -37,6 +37,7 @@ import {
   QrCode,
 } from 'lucide-react';
 import { getProfile } from '@/lib/data/profiles';
+import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import { listReceiptsForUser } from '@/lib/data/receipts';
 import { BankAccount } from '@/types/entities';
 import { parseBankAccounts, pickDefaultBankAccountId } from '@/lib/schemas/bank-account';
@@ -47,6 +48,7 @@ import {
 import {
   getMyActiveLoansDebt,
   getMyPendingLoanSharePurchases,
+  isPermissionDeniedError,
   type ActiveLoanDebt,
   type PendingLoanSharePurchase,
 } from '@/lib/data/loans';
@@ -224,11 +226,14 @@ export default function ComprasPage() {
       setUserId(user.id);
 
       try {
-        const profile = await getProfile(supabase, user.id);
+        const [profile, periodShareValue] = await Promise.all([
+          getProfile(supabase, user.id),
+          getOpenPeriodShareValue(supabase, user.id),
+        ]);
         if (cancelled) return;
         setFirstName(profile.first_name ?? '');
 
-        if (profile.selected_share_value == null) {
+        if (periodShareValue == null) {
           // Sin valor de acción no puede comprar.
           showToast(
             'info',
@@ -237,7 +242,7 @@ export default function ComprasPage() {
           router.replace('/dashboard/ajustes');
           return;
         }
-        setShareValue(Number(profile.selected_share_value));
+        setShareValue(periodShareValue);
       } catch (err) {
         console.error('Error cargando perfil:', err);
         showToast('error', 'No se pudo cargar tu perfil.');
@@ -353,6 +358,16 @@ export default function ComprasPage() {
           setLoanSharesSelected(new Set(pending.map((p) => p.loan_id)));
         }
       } catch (err) {
+        // Sin sesión válida la RPC responde "permission denied" (anon no
+        // tiene EXECUTE). Antes se ocultaba la sección sin avisar; ahora se
+        // pide iniciar sesión, igual que cuando no hay usuario.
+        if (isPermissionDeniedError(err)) {
+          if (!cancelled) {
+            showToast('error', 'Tu sesión expiró. Inicia sesión de nuevo para continuar.');
+            router.replace('/login');
+          }
+          return;
+        }
         console.error('Error cargando acciones por préstamo:', err);
       }
 

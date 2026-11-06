@@ -208,6 +208,7 @@ export type Database = {
           admin_notes: string | null
           borrower_seen_status_at: string | null
           created_at: string
+          cutoff_day: number | null
           deduct_obligations: boolean | null
           deducted_capital_amount: number | null
           deducted_fines_amount: number | null
@@ -219,6 +220,7 @@ export type Database = {
           disbursement_number: string | null
           disbursement_proof_path: string | null
           four_per_thousand: number
+          full_rate_day_limit: number | null
           id: string
           interest_rate: number
           last_interest_payment_date: string | null
@@ -233,6 +235,7 @@ export type Database = {
           rejection_reason: string | null
           requested_amount: number
           status: Database["public"]["Enums"]["loan_status"]
+          submitted_at: string | null
           updated_at: string
           user_id: string
         }
@@ -240,6 +243,7 @@ export type Database = {
           admin_notes?: string | null
           borrower_seen_status_at?: string | null
           created_at?: string
+          cutoff_day?: number | null
           deduct_obligations?: boolean | null
           deducted_capital_amount?: number | null
           deducted_fines_amount?: number | null
@@ -251,6 +255,7 @@ export type Database = {
           disbursement_number?: string | null
           disbursement_proof_path?: string | null
           four_per_thousand?: number
+          full_rate_day_limit?: number | null
           id?: string
           interest_rate?: number
           last_interest_payment_date?: string | null
@@ -265,6 +270,7 @@ export type Database = {
           rejection_reason?: string | null
           requested_amount: number
           status?: Database["public"]["Enums"]["loan_status"]
+          submitted_at?: string | null
           updated_at?: string
           user_id: string
         }
@@ -272,6 +278,7 @@ export type Database = {
           admin_notes?: string | null
           borrower_seen_status_at?: string | null
           created_at?: string
+          cutoff_day?: number | null
           deduct_obligations?: boolean | null
           deducted_capital_amount?: number | null
           deducted_fines_amount?: number | null
@@ -283,6 +290,7 @@ export type Database = {
           disbursement_number?: string | null
           disbursement_proof_path?: string | null
           four_per_thousand?: number
+          full_rate_day_limit?: number | null
           id?: string
           interest_rate?: number
           last_interest_payment_date?: string | null
@@ -297,6 +305,7 @@ export type Database = {
           rejection_reason?: string | null
           requested_amount?: number
           status?: Database["public"]["Enums"]["loan_status"]
+          submitted_at?: string | null
           updated_at?: string
           user_id?: string
         }
@@ -355,6 +364,90 @@ export type Database = {
         }
         Relationships: []
       }
+      period_memberships: {
+        Row: {
+          period_id: string
+          profile_id: string
+          share_value: number | null
+          share_value_change_allowed: boolean
+          share_value_locked_at: string | null
+        }
+        Insert: {
+          period_id: string
+          profile_id: string
+          share_value?: number | null
+          share_value_change_allowed?: boolean
+          share_value_locked_at?: string | null
+        }
+        Update: {
+          period_id?: string
+          profile_id?: string
+          share_value?: number | null
+          share_value_change_allowed?: boolean
+          share_value_locked_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "period_memberships_period_id_fkey"
+            columns: ["period_id"]
+            isOneToOne: false
+            referencedRelation: "periods"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "period_memberships_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      periods: {
+        Row: {
+          closed_at: string | null
+          closed_by: string | null
+          id: string
+          opened_at: string
+          opened_by: string | null
+          status: Database["public"]["Enums"]["period_status"]
+          year: number
+        }
+        Insert: {
+          closed_at?: string | null
+          closed_by?: string | null
+          id?: string
+          opened_at?: string
+          opened_by?: string | null
+          status?: Database["public"]["Enums"]["period_status"]
+          year: number
+        }
+        Update: {
+          closed_at?: string | null
+          closed_by?: string | null
+          id?: string
+          opened_at?: string
+          opened_by?: string | null
+          status?: Database["public"]["Enums"]["period_status"]
+          year?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "periods_closed_by_fkey"
+            columns: ["closed_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "periods_opened_by_fkey"
+            columns: ["opened_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           address: string | null
@@ -372,8 +465,6 @@ export type Database = {
           next_year_capitalization: number | null
           phone: string | null
           role: Database["public"]["Enums"]["user_role"]
-          selected_share_value: number | null
-          share_value_change_allowed: boolean
           updated_at: string
         }
         Insert: {
@@ -392,8 +483,6 @@ export type Database = {
           next_year_capitalization?: number | null
           phone?: string | null
           role?: Database["public"]["Enums"]["user_role"]
-          selected_share_value?: number | null
-          share_value_change_allowed?: boolean
           updated_at?: string
         }
         Update: {
@@ -412,8 +501,6 @@ export type Database = {
           next_year_capitalization?: number | null
           phone?: string | null
           role?: Database["public"]["Enums"]["user_role"]
-          selected_share_value?: number | null
-          share_value_change_allowed?: boolean
           updated_at?: string
         }
         Relationships: []
@@ -563,6 +650,11 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      allow_share_value_change: {
+        Args: { p_allow: boolean; p_profile_id: string }
+        Returns: boolean
+      }
+      choose_share_value: { Args: { p_share_value: number }; Returns: number }
       close_capitalization_window: { Args: never; Returns: Json }
       close_capitalization_window_v2: {
         Args: { p_window_id: string }
@@ -642,6 +734,10 @@ export type Database = {
           utilities_pool: number
         }[]
       }
+      has_share_receipts_in_period: {
+        Args: { p_period_id: string; p_profile_id: string }
+        Returns: boolean
+      }
       is_admin: { Args: never; Returns: boolean }
       mark_my_loans_status_seen: { Args: never; Returns: number }
       open_capitalization_window: {
@@ -669,7 +765,9 @@ export type Database = {
         | "paid"
         | "rejected_by_admin"
         | "rejected_by_shareholders"
+        | "expired"
       loan_vote_value: "approved" | "rejected"
+      period_status: "open" | "closing" | "closed"
       receipt_concept:
         | "acciones"
         | "acciones_prestamo"
@@ -819,8 +917,10 @@ export const Constants = {
         "paid",
         "rejected_by_admin",
         "rejected_by_shareholders",
+        "expired",
       ],
       loan_vote_value: ["approved", "rejected"],
+      period_status: ["open", "closing", "closed"],
       receipt_concept: [
         "acciones",
         "acciones_prestamo",

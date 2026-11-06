@@ -1,11 +1,19 @@
+import { ajustesDelPrestamo, getAjustesDePrestamo } from '@/lib/loan-settings';
 import { type SupabaseClient } from '@supabase/supabase-js';
 import { type Database } from '@/types/database';
-import { getBogotaToday, getBogotaCurrentMonth, DEFAULT_PURCHASE_RULES, type PurchaseRules, computeFineForMonth } from '@/lib/fines';
+import { getOpenPeriodShareValue } from '@/lib/data/share-value';
+import { getLoanInterestItems } from '@/lib/data/loans';
+import { calcAccruedInterest, type LoanInterestItem } from '@/lib/loans';
+import { DEFAULT_PURCHASE_RULES, type PurchaseRules, toReglasDeMulta } from '@/lib/fines';
+import { estadoDeObligaciones, type PrestamoActivo } from '@/modules/pagos/domain/obligaciones';
+import { hoyBogota, type FechaISO } from '@/shared/domain/fechas';
 
 export interface UserObligationsStatus {
   isUpToDate: boolean;
   reasons: string[];
   accionesShortage: boolean;
+  // Open-period share value; null while it is not chosen (RN-2.3).
+  shareValue: number | null;
   finesPending: boolean;
   interestOwed: boolean;
   sharesOwedCount: number;
@@ -57,44 +65,19 @@ async function getPurchaseRules(supabase: SupabaseClient<Database>): Promise<Pur
 
 /**
  * Valida si un accionista está al día con sus obligaciones.
+ * Solo hace la I/O; el cálculo vive en `estadoDeObligaciones` (pagos/domain).
  */
 export async function checkUserObligations(
   supabase: SupabaseClient<Database>,
   userId: string
 ): Promise<UserObligationsStatus> {
-  const reasons: string[] = [];
-  let accionesShortage = false;
-  let finesPending = false;
-  let interestOwed = false;
-
-  // 1. Cargar reglas de compra, perfil del socio y fecha actual en Bogotá
+  // 1. Reglas de compra, valor de acción del periodo y fecha de hoy en Bogotá
   const rules = await getPurchaseRules(supabase);
-  const today = getBogotaToday();
-  const currentMonthStr = getBogotaCurrentMonth(); // YYYY-MM-01
-  const currentYear = today.getUTCFullYear();
+  const hoy = hoyBogota(new Date());
+  const currentYear = Number(hoy.slice(0, 4));
+  const shareValue = await getOpenPeriodShareValue(supabase, userId);
 
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('selected_share_value')
-    .eq('id', userId)
-    .maybeSingle();
-  const shareValue = profile?.selected_share_value ?? 50000;
-
-  // 2. Determinar meses a validar (desde Enero hasta el mes actual del año en Bogotá)
-  const currMonthNum = Number(currentMonthStr.split('-')[1]);
-  const monthsToValidate: string[] = [];
-  for (let m = 1; m <= currMonthNum; m++) {
-    monthsToValidate.push(`${currentYear}-${String(m).padStart(2, '0')}-01`);
-  }
-
-  // Si hoy no ha pasado el periodo de gracia del mes actual, no exigimos el mes actual todavía.
-  const graceEnd = new Date(Date.UTC(currentYear, currMonthNum - 1, rules.grace_period_days));
-  if (today.getTime() <= graceEnd.getTime() && monthsToValidate.length > 0) {
-    // Aún estamos dentro del periodo de gracia del mes actual
-    monthsToValidate.pop();
-  }
-
-  // 3. Consultar ítems de recibos (acciones y multas) del usuario para el año en curso
+  // 2. Ítems de recibos aprobados (acciones y multas) del año en curso
   const startOfYear = `${currentYear}-01-01`;
   const endOfYear = `${currentYear + 1}-01-01`;
   const { data: receiptItems, error: itemsError } = await supabase
@@ -110,83 +93,21 @@ export async function checkUserObligations(
     throw itemsError;
   }
 
-  // Agrupar las acciones compradas y multas pagadas por mes
-  const sharesByMonth = new Map<string, number>();
-  const finesPaidByMonth = new Set<string>();
+  const accionesCompradas: Array<{ mes: FechaISO; acciones: number }> = [];
+  const mesesConMultaPagada: FechaISO[] = [];
   for (const item of receiptItems || []) {
     if (item.concept === 'acciones') {
-      const month = item.target_month;
-      const count = item.share_count ?? 0;
-      sharesByMonth.set(month, (sharesByMonth.get(month) ?? 0) + count);
+      accionesCompradas.push({ mes: item.target_month as FechaISO, acciones: item.share_count ?? 0 });
     } else if (item.concept === 'multa_acciones') {
-      finesPaidByMonth.add(item.target_month);
+      mesesConMultaPagada.push(item.target_month as FechaISO);
     }
   }
 
-  const monthNames = [
-    'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
-    'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
-  ];
-
-  let sharesOwedCount = 0;
-  let sharesOwedAmount = 0;
-  let finesOwedAmount = 0;
-  const overdueMonthsDetails: Array<{
-    month: string;
-    monthName: string;
-    sharesOwed: number;
-    shareValue: number;
-    fineOwed: number;
-  }> = [];
-
-  // Validar cada mes requerido
-  for (const monthStr of monthsToValidate) {
-    const approvedShares = sharesByMonth.get(monthStr) ?? 0;
-    const sharesOwed = Math.max(0, rules.min_shares_per_month - approvedShares);
-    
-    let fineOwed = 0;
-    const monthIndex = Number(monthStr.split('-')[1]) - 1;
-    const monthName = monthNames[monthIndex];
-
-    if (sharesOwed > 0) {
-      reasons.push(
-        `Debés comprar el mínimo de acciones (${rules.min_shares_per_month}) para ${monthName} ${currentYear}.`
-      );
-      accionesShortage = true;
-      sharesOwedCount += sharesOwed;
-      sharesOwedAmount += sharesOwed * shareValue;
-
-      // Si además de faltar acciones hoy ya pasó el día de gracia, hay multa por mora
-      const [y, m] = monthStr.split('-').map(Number);
-      const limitDate = new Date(Date.UTC(y, m - 1, rules.grace_period_days));
-      if (today.getTime() > limitDate.getTime()) {
-        const finePaid = finesPaidByMonth.has(monthStr);
-        if (!finePaid) {
-          fineOwed = computeFineForMonth(monthStr, today, rules);
-          if (fineOwed > 0) {
-            reasons.push(`Tenés una multa pendiente por mora en acciones de ${monthName} ${currentYear}.`);
-            finesPending = true;
-            finesOwedAmount += fineOwed;
-          }
-        }
-      }
-    }
-
-    if (sharesOwed > 0 || fineOwed > 0) {
-      overdueMonthsDetails.push({
-        month: monthStr,
-        monthName,
-        sharesOwed,
-        shareValue,
-        fineOwed
-      });
-    }
-  }
-
-  // 4. Consultar intereses en mora de préstamos activos
+  // 3. Préstamos activos y su interés adeudado, calculado en el dominio
+  //    (interesesAdeudados, sección 11 n.º 13) con una sola consulta de pagos.
   const { data: activeLoans, error: loansError } = await supabase
     .from('loans')
-    .select('id, loan_number, disbursement_number, outstanding_balance')
+    .select('id, loan_number, disbursement_number, outstanding_balance, requested_amount, interest_rate, disbursed_at, full_rate_day_limit, cutoff_day')
     .eq('user_id', userId)
     .eq('status', 'active')
     .not('disbursed_at', 'is', null);
@@ -196,58 +117,88 @@ export async function checkUserObligations(
     throw loansError;
   }
 
-  let interestOwedAmount = 0;
-  const activeLoansDetails: Array<{
-    loanId: string;
-    loanNumber: number | null;
-    disbursementNumber: string | null;
-    outstandingBalance: number;
-    interestOwed: number;
-  }> = [];
+  const loans = activeLoans || [];
+  let itemsByLoan: Map<string, LoanInterestItem[]>;
+  try {
+    itemsByLoan = await getLoanInterestItems(supabase, loans.map((l) => l.id));
+  } catch (interestItemsError) {
+    console.error('Error al consultar pagos de préstamos para verificar obligaciones:', interestItemsError);
+    throw interestItemsError;
+  }
 
-  for (const loan of activeLoans || []) {
-    const { data: interestDebt, error: interestError } = await supabase
-      .rpc('get_loan_interest_owed', { p_loan_id: loan.id });
-
-    if (interestError) {
-      console.error(`Error al consultar interés adeudado para préstamo ${loan.id}:`, interestError);
-      throw interestError;
+  const ajustes = await getAjustesDePrestamo(supabase);
+  const prestamos: PrestamoActivo[] = [];
+  for (const loan of loans) {
+    // RN-4.21b: each disbursed loan is computed with its own stored days.
+    const ajustesPropios = ajustesDelPrestamo(loan, ajustes);
+    if (!ajustesPropios.ok) {
+      console.error(`Error al leer los días del préstamo ${loan.id}:`, ajustesPropios.error);
+      throw new Error(ajustesPropios.error.mensaje);
+    }
+    const interes = calcAccruedInterest({
+      requestedAmount: loan.requested_amount,
+      rate: loan.interest_rate,
+      disbursedAt: loan.disbursed_at as string,
+      items: itemsByLoan.get(loan.id) ?? [],
+      today: hoy,
+      ajustes: ajustesPropios.value,
+    });
+    if (!interes.ok) {
+      console.error(`Error al calcular el interés adeudado del préstamo ${loan.id}:`, interes.error);
+      throw new Error(interes.error.mensaje);
     }
 
-    const debt = Number(interestDebt || 0);
-    const name = loan.loan_number
-      ? `Préstamo #${loan.loan_number}${loan.disbursement_number ? ` (${loan.disbursement_number})` : ''}`
-      : 'préstamo activo';
-    
-    if (debt > 0) {
-      reasons.push(`Tenés intereses en mora en tu ${name}.`);
-      interestOwed = true;
-      interestOwedAmount += debt;
-    }
-
-    activeLoansDetails.push({
-      loanId: loan.id,
-      loanNumber: loan.loan_number,
-      disbursementNumber: loan.disbursement_number,
-      outstandingBalance: Number(loan.outstanding_balance || 0),
-      interestOwed: debt,
+    prestamos.push({
+      id: loan.id,
+      numero: loan.loan_number,
+      numeroDeDesembolso: loan.disbursement_number,
+      saldo: Number(loan.outstanding_balance || 0),
+      interesAdeudado: interes.value,
     });
   }
 
-  const totalOwedAmount = sharesOwedAmount + finesOwedAmount + interestOwedAmount;
+  // 4. Cálculo en el dominio (RN-2.3, RN-3.1, RN-3.4, RN-4.22)
+  const estado = estadoDeObligaciones({
+    hoy,
+    reglas: {
+      compra: {
+        minAccionesPorMes: rules.min_shares_per_month,
+        maxAccionesPorMes: rules.max_shares_per_month,
+      },
+      multa: toReglasDeMulta(rules),
+    },
+    valorDeAccion: shareValue,
+    accionesCompradas,
+    mesesConMultaPagada,
+    prestamos,
+  });
 
   return {
-    isUpToDate: reasons.length === 0,
-    reasons,
-    accionesShortage,
-    finesPending,
-    interestOwed,
-    sharesOwedCount,
-    sharesOwedAmount,
-    finesOwedAmount,
-    interestOwedAmount,
-    totalOwedAmount,
-    overdueMonthsDetails,
-    activeLoansDetails,
+    isUpToDate: estado.alDia,
+    reasons: estado.razones,
+    accionesShortage: estado.faltanAcciones,
+    shareValue: estado.valorDeAccion,
+    finesPending: estado.multasPendientes,
+    interestOwed: estado.debeIntereses,
+    sharesOwedCount: estado.accionesAdeudadas,
+    sharesOwedAmount: estado.montoAcciones,
+    finesOwedAmount: estado.montoMultas,
+    interestOwedAmount: estado.montoIntereses,
+    totalOwedAmount: estado.total,
+    overdueMonthsDetails: estado.mesesEnMora.map((m) => ({
+      month: m.mes,
+      monthName: m.nombreDelMes,
+      sharesOwed: m.accionesAdeudadas,
+      shareValue: m.valorDeAccion,
+      fineOwed: m.multa,
+    })),
+    // `loanNumber` is not in the interface but has always been returned.
+    activeLoansDetails: estado.prestamos.map((p) => ({
+      loanId: p.id,
+      loanNumber: p.numero,
+      disbursementNumber: p.numeroDeDesembolso,
+      outstandingBalance: p.saldo,
+      interestOwed: p.interesAdeudado,
+    })),
   };
 }

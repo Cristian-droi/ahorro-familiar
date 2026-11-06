@@ -9,21 +9,17 @@ import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { showToast } from '@/components/ui/Toast';
 import { ChevronLeft, ThumbsUp, ThumbsDown, Users, AlertTriangle, RotateCcw, Send } from 'lucide-react';
-import { getLoanWithDetails, getMyActiveLoansDebt } from '@/lib/data/loans';
-import type { LoanWithDetails } from '@/types/entities';
+import { getLoanWithDetails, getMyActiveLoansDebt, type LoanWithVoting } from '@/lib/data/loans';
 import { cop } from '@/lib/format';
-import {
-  LOAN_STATUS_LABELS,
-  LOAN_STATUS_TONE,
-  requiredVotes,
-  computeLoanBook,
-  type LoanBook,
-} from '@/lib/loans';
+import { computeLoanBook, type LoanBook } from '@/lib/loans';
+import { ajustesDelPrestamo, getAjustesDePrestamo } from '@/lib/loan-settings';
+import { LOAN_STATUS_LABELS, LOAN_STATUS_TONE } from '@/components/loans/status';
+import { votosNecesarios } from '@/modules/prestamos/domain/votacion';
 
 export default function LoanDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const [loan, setLoan] = useState<LoanWithDetails | null>(null);
+  const [loan, setLoan] = useState<LoanWithVoting | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [voting, setVoting] = useState<'approved' | 'rejected' | null>(null);
@@ -34,6 +30,7 @@ export default function LoanDetailPage() {
   // aplica para el dueño del préstamo cuando está activo.
   const [accruedInterest, setAccruedInterest] = useState<number>(0);
   const [loanBook, setLoanBook] = useState<LoanBook | null>(null);
+  const [loanBookError, setLoanBookError] = useState<string | null>(null);
 
   const load = async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -74,21 +71,32 @@ export default function LoanDetailPage() {
             amount: Number(r.amount),
           }));
 
-        const book = computeLoanBook({
-          requestedAmount: Number(data.requested_amount),
-          plan: data.payment_plan,
-          payments: approvedPayments,
-          interestRate: Number(data.interest_rate),
-          disbursedAt: data.disbursed_at,
-        });
-        setLoanBook(book);
+        // RN-4.21b: a disbursed loan is computed with its own stored days.
+        const ajustes = ajustesDelPrestamo(data, await getAjustesDePrestamo(supabase));
+        const book = ajustes.ok
+          ? computeLoanBook({
+              requestedAmount: Number(data.requested_amount),
+              plan: data.payment_plan,
+              payments: approvedPayments,
+              interestRate: Number(data.interest_rate),
+              disbursedAt: data.disbursed_at,
+              ajustes: ajustes.value,
+            })
+          : ajustes;
+        if (book.ok) {
+          setLoanBook(book.value);
+          setLoanBookError(null);
+        } else {
+          setLoanBook(null);
+          setLoanBookError(`No se pudo calcular la conciliación del préstamo: ${book.error.mensaje}`);
+        }
       } catch (err) {
         console.error('Error calculando conciliación del préstamo:', err);
       }
     }
 
     // Si soy el dueño y el préstamo está activo, traemos el interest_owed
-    // desde el RPC get_user_active_loans_debt — calcula sobre el saldo
+    // desde getMyActiveLoansDebt (dominio, interesesAdeudados) — calcula sobre el saldo
     // al inicio de cada mes vencido (no sobre el saldo actual).
     if (data && data.user_id === user.id && data.status === 'active') {
       try {
@@ -156,7 +164,7 @@ export default function LoanDetailPage() {
       setResubmitting(false);
     }
   };
-  const needed = requiredVotes(loan.total_active_shareholders);
+  const needed = votosNecesarios(loan.eligible_voters);
   const tone = LOAN_STATUS_TONE[loan.status] as Parameters<typeof Badge>[0]['tone'];
 
   return (
@@ -290,6 +298,9 @@ export default function LoanDetailPage() {
             ) : null}
           </Card>
           {/* Plan de pagos */}
+          {loanBookError && (
+            <p className="text-sm text-[var(--color-danger)]">{loanBookError}</p>
+          )}
           {loanBook && loanBook.months.length > 0 && (
             <Card padding="none">
               <div className="px-[22px] pt-[18px] pb-3.5">
@@ -312,7 +323,7 @@ export default function LoanDetailPage() {
                           ? [
                               { name: 'Abono Capital', align: 'right' },
                               { name: 'Abono Interés', align: 'right' },
-                              { name: 'Mora Interés', align: 'right' },
+                              { name: 'Intereses pendientes', align: 'right' },
                             ]
                           : []),
                         { name: 'Saldo Capital', align: 'right' },
@@ -331,7 +342,7 @@ export default function LoanDetailPage() {
                   <tbody>
                     {loanBook.months.map((row) => {
                       const showPayments = loan.status === 'active' || loan.status === 'paid';
-                      const hasDebt = row.interest_debt > 0;
+                      const hasDebt = row.pending_interest > 0;
                       return (
                         <tr key={row.month_number} className="border-t border-[var(--color-border)]">
                           <td className="px-4 py-3 text-[var(--color-text-muted)] font-semibold text-left">
@@ -365,7 +376,7 @@ export default function LoanDetailPage() {
                                   hasDebt ? 'text-[var(--color-danger)] font-semibold' : 'text-[var(--color-text-subtle)]'
                                 }`}
                               >
-                                {hasDebt ? cop(row.interest_debt) : '—'}
+                                {hasDebt ? cop(row.pending_interest) : '—'}
                               </td>
                             </>
                           )}
@@ -382,13 +393,13 @@ export default function LoanDetailPage() {
                         Totales
                       </td>
                       <td className="px-4 py-3 text-right text-[var(--color-text-muted)]">
-                        {cop(loanBook.months.reduce((s, r) => s + r.plan_capital, 0))}
+                        {cop(loanBook.summary.total_plan_capital)}
                       </td>
                       <td className="px-4 py-3 text-right text-[var(--color-text-muted)]">
-                        {cop(loanBook.months.reduce((s, r) => s + r.plan_interest, 0))}
+                        {cop(loanBook.summary.total_plan_interest)}
                       </td>
                       <td className="px-4 py-3 text-right font-semibold">
-                        {cop(loanBook.months.reduce((s, r) => s + r.installment_value, 0))}
+                        {cop(loanBook.summary.total_installment_value)}
                       </td>
                       {/* Si se muestran los pagos, agregamos los totales de los abonos */}
                       {(loan.status === 'active' || loan.status === 'paid') && (
@@ -441,7 +452,7 @@ export default function LoanDetailPage() {
               </div>
 
               <div className="text-[12px] text-[var(--color-text-muted)] text-center">
-                Se necesitan <b>{needed}</b> votos a favor de {loan.total_active_shareholders} accionistas activos
+                Se necesitan <b>{needed}</b> votos a favor de {loan.eligible_voters} votantes habilitados
               </div>
 
               {/* Barra de progreso */}

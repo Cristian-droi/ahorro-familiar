@@ -9,7 +9,9 @@ import { ChevronRight, Search } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { getAllLoans, type LoanWithBorrower } from '@/lib/data/loans';
 import { cop } from '@/lib/format';
-import { LOAN_STATUS_LABELS, LOAN_STATUS_TONE, requiredVotes } from '@/lib/loans';
+import { eligibleVoterCount } from '@/lib/data/votes';
+import { LOAN_STATUS_LABELS, LOAN_STATUS_TONE } from '@/components/loans/status';
+import { votosNecesarios } from '@/modules/prestamos/domain/votacion';
 
 const STATUS_ORDER: Record<string, number> = {
   pending_review: 0,
@@ -103,8 +105,6 @@ export default function AdminPrestamosPage() {
     loans: sorted.filter((l) => g.key.split(',').includes(l.status)),
   })).filter((g) => g.loans.length > 0);
 
-  const needed = requiredVotes(totalShareholders);
-
   return (
     <div className="flex flex-col gap-7 animate-in fade-in duration-300">
       <header>
@@ -156,7 +156,7 @@ export default function AdminPrestamosPage() {
           </div>
           <Card padding="none">
             {group.loans.map((loan) => (
-              <AdminLoanRow key={loan.id} loan={loan} needed={needed} total={totalShareholders} />
+              <AdminLoanRow key={loan.id} loan={loan} totalShareholders={totalShareholders} />
             ))}
           </Card>
         </div>
@@ -167,15 +167,15 @@ export default function AdminPrestamosPage() {
 
 function AdminLoanRow({
   loan,
-  needed,
-  total,
+  totalShareholders,
 }: {
   loan: LoanWithBorrower;
-  needed: number;
-  total: number;
+  totalShareholders: number;
 }) {
   const tone = LOAN_STATUS_TONE[loan.status] as Parameters<typeof Badge>[0]['tone'];
   const b = loan.borrower;
+  const eligibleVoters = eligibleVoterCount({ totalShareholders, applicantRole: b?.role });
+  const needed = votosNecesarios(eligibleVoters);
   const borrowerName = b ? `${b.first_name} ${b.last_name}`.trim() : 'Sin accionista';
   const borrowerDoc = b?.identity_document ?? '';
 
@@ -206,7 +206,7 @@ function AdminLoanRow({
             <> · Saldo: {cop(Number(loan.outstanding_balance))}</>
           )}
           {loan.status === 'pending_shareholder_vote' && (
-            <> · Se necesitan {needed} votos de {total}</>
+            <> · Se necesitan {needed} votos de {eligibleVoters}</>
           )}
         </div>
       </div>

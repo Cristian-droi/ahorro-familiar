@@ -28,15 +28,13 @@ import {
   FileText,
   Landmark,
 } from 'lucide-react';
-import { getLoanWithDetails, getCashBalance } from '@/lib/data/loans';
-import type { LoanWithDetails } from '@/types/entities';
+import { getLoanWithDetails, getCashBalance, getLoanInterestItems, type LoanWithVoting } from '@/lib/data/loans';
+import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import { cop } from '@/lib/format';
-import {
-  LOAN_STATUS_LABELS,
-  LOAN_STATUS_TONE,
-  calcAccruedInterest,
-  requiredVotes,
-} from '@/lib/loans';
+import { calcAccruedInterest, type LoanInterestItem } from '@/lib/loans';
+import { ajustesDelPrestamo, getAjustesDePrestamo, type AjustesDePrestamo } from '@/lib/loan-settings';
+import { LOAN_STATUS_LABELS, LOAN_STATUS_TONE } from '@/components/loans/status';
+import { votosNecesarios } from '@/modules/prestamos/domain/votacion';
 
 function extensionFromMime(mime: string) {
   if (mime === 'image/jpeg') return 'jpg';
@@ -47,9 +45,13 @@ function extensionFromMime(mime: string) {
 
 export default function AdminLoanDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const [loan, setLoan] = useState<LoanWithDetails | null>(null);
+  const [loan, setLoan] = useState<LoanWithVoting | null>(null);
   const [loading, setLoading] = useState(true);
   const [cashBalance, setCashBalance] = useState<number | null>(null);
+  const [shareValue, setShareValue] = useState<number | null>(null);
+  // Approved capital and interest items, for the interest owed (null: not loaded).
+  const [interestItems, setInterestItems] = useState<LoanInterestItem[] | null>(null);
+  const [ajustes, setAjustes] = useState<AjustesDePrestamo | null>(null);
   const [rejectionReason, setRejectionReason] = useState('');
   const [revisionNote, setRevisionNote] = useState('');
   const [adminNotes, setAdminNotes] = useState('');
@@ -68,6 +70,18 @@ export default function AdminLoanDetailPage() {
     ]);
     setLoan(data);
     setCashBalance(balance);
+    setShareValue(
+      data ? await getOpenPeriodShareValue(supabase, data.user_id).catch(() => null) : null,
+    );
+    // Without the settings the interest owed shows as not available.
+    setAjustes(await getAjustesDePrestamo(supabase).catch(() => null));
+    setInterestItems(
+      data?.status === 'active'
+        ? await getLoanInterestItems(supabase, [data.id])
+            .then((porPrestamo) => porPrestamo.get(data.id) ?? [])
+            .catch(() => null)
+        : null,
+    );
     if (data?.admin_notes) setAdminNotes(data.admin_notes);
     setLoading(false);
   }, [id]);
@@ -193,23 +207,27 @@ export default function AdminLoanDetailPage() {
   if (!loan) return <div className="text-sm text-[var(--color-text-muted)]">Préstamo no encontrado.</div>;
 
   const tone = LOAN_STATUS_TONE[loan.status] as Parameters<typeof Badge>[0]['tone'];
-  const needed = requiredVotes(loan.total_active_shareholders);
-  const shareValue = loan.borrower?.selected_share_value;
+  const needed = votosNecesarios(loan.eligible_voters);
   const loanAmount = Number(loan.requested_amount);
   const shortfall = cashBalance !== null ? loanAmount - cashBalance : 0;
   const exceedsBalance = cashBalance !== null && shortfall > 0;
 
-  const accruedInterest =
-    loan.status === 'active' && loan.disbursed_at
-      ? calcAccruedInterest({
-          outstandingBalance: Number(loan.outstanding_balance),
-          rate: Number(loan.interest_rate),
-          disbursedAt: new Date(loan.disbursed_at),
-          lastInterestPaymentDate: loan.last_interest_payment_date
-            ? new Date(loan.last_interest_payment_date)
-            : null,
-        })
-      : 0;
+  // Interest owed from the domain (section 11, n.º 13); null when it cannot be computed.
+  // RN-4.21b: the disbursed loan is computed with its own stored days.
+  const ajustesPropios = ajustes ? ajustesDelPrestamo(loan, ajustes) : null;
+  const accruedInterestResult =
+    loan.status === 'active' && loan.disbursed_at && interestItems && ajustesPropios
+      ? ajustesPropios.ok
+        ? calcAccruedInterest({
+            requestedAmount: loan.requested_amount,
+            rate: loan.interest_rate,
+            disbursedAt: loan.disbursed_at,
+            items: interestItems,
+            ajustes: ajustesPropios.value,
+          })
+        : ajustesPropios
+      : null;
+  const accruedInterest = accruedInterestResult?.ok ? accruedInterestResult.value : null;
 
   return (
     <div className="flex flex-col gap-7 animate-in fade-in duration-300">
@@ -293,7 +311,7 @@ export default function AdminLoanDetailPage() {
               {loan.status === 'active' && (
                 <>
                   <Stat label="Saldo pendiente" value={cop(Number(loan.outstanding_balance))} tone="warn" />
-                  <Stat label="Intereses acumulados" value={cop(accruedInterest)} tone="danger" />
+                  <Stat label="Intereses acumulados" value={accruedInterest === null ? 'No disponible' : cop(accruedInterest)} tone="danger" />
                 </>
               )}
               {loan.deduct_obligations && (
@@ -911,7 +929,7 @@ export default function AdminLoanDetailPage() {
               )}
               {loan.status === 'pending_shareholder_vote' && (
                 <div className="mt-3 text-[12px] text-[var(--color-text-muted)]">
-                  {loan.approved_votes} / {needed} votos necesarios · {loan.total_active_shareholders} accionistas activos
+                  {loan.approved_votes} / {needed} votos necesarios · {loan.eligible_voters} votantes habilitados
                 </div>
               )}
               {loan.status === 'draft' && loan.admin_notes && (

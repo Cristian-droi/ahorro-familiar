@@ -15,17 +15,23 @@ import {
   Check,
   X,
 } from 'lucide-react';
-import { getProfile } from '@/lib/data/profiles';
+import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import { getCashBalance } from '@/lib/data/loans';
-import { cop } from '@/lib/format';
+import { cop, monthLabel } from '@/lib/format';
+import { buildPaymentPlan, type PlanRow } from '@/lib/loans';
 import {
-  calcLoanShares,
-  calcFourPerThousand,
-  calcDisbursedAmount,
-  calcLoanDeductionsAndNet,
-  buildPaymentPlan,
-  type PlanRow,
-} from '@/lib/loans';
+  accionesPorPrestamo,
+  desembolsoDePrestamo,
+  AJUSTES_DE_PRESTAMO_POR_DEFECTO,
+  getAjustesDePrestamo,
+  getTasaCuatroPorMil,
+  type AjustesDePrestamo,
+  TASA_CUATRO_POR_MIL_POR_DEFECTO,
+  getTasaDeInteresGlobal,
+  tasaEnPuntosBasicosDesdeAjuste,
+} from '@/lib/loan-settings';
+import { hoyBogota } from '@/shared/domain/fechas';
+import { mesAplicado, plazoDelPrestamo } from '@/modules/prestamos/domain/calendario';
 import { checkUserObligations, type UserObligationsStatus } from '@/lib/obligations';
 import { DeductionDetail } from '@/types/entities';
 
@@ -34,13 +40,16 @@ export default function NuevaSolicitudPage() {
 
   const [shareValue, setShareValue] = useState<number | null>(null);
   const [interestRate, setInterestRate] = useState(0.02);
+  const [tasaPorMil, setTasaPorMil] = useState(TASA_CUATRO_POR_MIL_POR_DEFECTO);
   const [cashBalance, setCashBalance] = useState<number | null>(null);
   const [obligations, setObligations] = useState<UserObligationsStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const [amountInput, setAmountInput] = useState('');
-  const [months, setMonths] = useState(12);
+  // RN-4.3: chosen term in months; null means the maximum.
+  const [monthsInput, setMonthsInput] = useState<number | null>(null);
   const [paidUpfront, setPaidUpfront] = useState(false);
   const [deductObligations, setDeductObligations] = useState(false);
   const [capitalAbonos, setCapitalAbonos] = useState<Record<string, number>>({});
@@ -48,6 +57,8 @@ export default function NuevaSolicitudPage() {
   const [capitalOverrides, setCapitalOverrides] = useState<Record<number, number>>({});
   const [editingMonth, setEditingMonth] = useState<number | null>(null);
   const [editingValue, setEditingValue] = useState('');
+  // RN-4.20, RN-4.21 and RN-4.3 ⚙️: section 10 defaults until the settings load.
+  const [ajustes, setAjustes] = useState<AjustesDePrestamo>(AJUSTES_DE_PRESTAMO_POR_DEFECTO);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,18 +66,33 @@ export default function NuevaSolicitudPage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.replace('/login'); return; }
 
-      const [profile, rateSetting, balance, obligationsStatus] = await Promise.all([
-        getProfile(supabase, user.id),
-        supabase.from('system_settings').select('value').eq('key', 'loan_interest_rate').maybeSingle(),
-        getCashBalance(supabase).catch(() => null),
-        checkUserObligations(supabase, user.id).catch(() => null),
-      ]);
+      let resultados;
+      try {
+        resultados = await Promise.all([
+          getOpenPeriodShareValue(supabase, user.id),
+          getTasaDeInteresGlobal(supabase),
+          getCashBalance(supabase).catch(() => null),
+          checkUserObligations(supabase, user.id).catch(() => null),
+          getTasaCuatroPorMil(supabase).catch(() => TASA_CUATRO_POR_MIL_POR_DEFECTO),
+          getAjustesDePrestamo(supabase),
+        ]);
+      } catch (err) {
+        console.error('No se pudo cargar la solicitud de préstamo:', err);
+        if (cancelled) return;
+        setLoadError('No se pudo cargar la configuración del préstamo. Intenta de nuevo en un momento.');
+        setLoading(false);
+        return;
+      }
+      const [periodShareValue, rateSetting, balance, obligationsStatus, fourPerThousandRate, loanSettings] = resultados;
 
       if (cancelled) return;
-      setShareValue(profile.selected_share_value ?? null);
-      if (rateSetting.data?.value) setInterestRate(Number(rateSetting.data.value));
+      setShareValue(periodShareValue);
+      // RN-4.18: global setting, 2% when missing or invalid; a failed read stops the page above.
+      setInterestRate(rateSetting);
       setCashBalance(balance);
       setObligations(obligationsStatus);
+      setTasaPorMil(fourPerThousandRate);
+      setAjustes(loanSettings);
       setLoading(false);
     })();
     return () => { cancelled = true; };
@@ -77,10 +103,12 @@ export default function NuevaSolicitudPage() {
     return digits ? Number(digits) : 0;
   }, [amountInput]);
 
-  const { count: sharesCount, amount: sharesAmount } = useMemo(
-    () => (shareValue ? calcLoanShares(requestedAmount, shareValue) : { count: 0, amount: 0 }),
-    [requestedAmount, shareValue],
-  );
+  // RN-4.10: shares rounded up with the configured step.
+  const { cantidad: sharesCount, valor: sharesAmount } = useMemo(() => {
+    if (!shareValue) return { cantidad: 0, valor: 0 };
+    const acciones = accionesPorPrestamo(requestedAmount, shareValue);
+    return acciones.ok ? acciones.value : { cantidad: 0, valor: 0 };
+  }, [requestedAmount, shareValue]);
 
   const deductedShares = useMemo(() => {
     return deductObligations && obligations ? obligations.sharesOwedAmount : 0;
@@ -99,56 +127,91 @@ export default function NuevaSolicitudPage() {
     return Object.values(capitalAbonos).reduce((sum, val) => sum + val, 0);
   }, [deductObligations, capitalAbonos]);
 
-  const { netDisbursed, finalFourPerThousand } = useMemo(() => {
-    if (deductObligations) {
-      const { netDisbursed, fourPerThousand } = calcLoanDeductionsAndNet({
-        requestedAmount,
-        sharesAmount,
-        paidUpfront,
-        deductedShares,
-        deductedFines,
-        deductedInterest,
-        deductedCapital,
+  // RN-4.16: the 4x1000 is computed on the net after deductions. A domain
+  // error (for example, deductions above the amount) is shown, never clamped.
+  const calcularNeto = useCallback(
+    (pagadasPorAdelantado: boolean) => {
+      if (requestedAmount <= 0) return null;
+      return desembolsoDePrestamo({
+        monto: requestedAmount,
+        accionesPorPrestamo: sharesAmount,
+        pagadasPorAdelantado,
+        accionesVencidas: deductedShares,
+        multas: deductedFines,
+        intereses: deductedInterest,
+        capital: deductedCapital,
+        tasaPorMil,
       });
-      return { netDisbursed, finalFourPerThousand: fourPerThousand };
-    } else {
-      const ft = calcFourPerThousand(requestedAmount);
-      const nd = calcDisbursedAmount(requestedAmount, sharesAmount, paidUpfront, ft);
-      return { netDisbursed: nd, finalFourPerThousand: ft };
-    }
-  }, [
-    requestedAmount,
-    sharesAmount,
-    paidUpfront,
-    deductObligations,
-    deductedShares,
-    deductedFines,
-    deductedInterest,
-    deductedCapital,
-  ]);
+    },
+    [requestedAmount, sharesAmount, deductedShares, deductedFines, deductedInterest, deductedCapital, tasaPorMil],
+  );
 
-  const plan: PlanRow[] = useMemo(() => {
-    if (requestedAmount < 500_000 || months < 1) return [];
-    return buildPaymentPlan({
+  const { netDisbursed, finalFourPerThousand, disbursementError } = useMemo(() => {
+    const desembolso = calcularNeto(paidUpfront);
+    if (!desembolso) return { netDisbursed: 0, finalFourPerThousand: 0, disbursementError: null };
+    if (!desembolso.ok) {
+      return { netDisbursed: 0, finalFourPerThousand: 0, disbursementError: desembolso.error.mensaje };
+    }
+    return {
+      netDisbursed: desembolso.value.seTransfiere,
+      finalFourPerThousand: desembolso.value.cuatroPorMil,
+      disbursementError: null,
+    };
+  }, [calcularNeto, paidUpfront]);
+
+  const netoSegunPago = useCallback(
+    (pagadasPorAdelantado: boolean) => {
+      const desembolso = calcularNeto(pagadasPorAdelantado);
+      return desembolso && desembolso.ok ? desembolso.value.seTransfiere : 0;
+    },
+    [calcularNeto],
+  );
+
+  // Today in Bogota is the proxy for the disbursement date; the plan is
+  // recalculated with the real date when the loan is disbursed.
+  const hoy = useMemo(() => hoyBogota(new Date()), []);
+
+  // RN-4.3 and RN-4.15: maximum term, until December of the period (or of
+  // the next period when the admin enables it).
+  const plazoMaximo = useMemo(
+    () =>
+      plazoDelPrestamo({
+        mesAplicado: mesAplicado(hoy, ajustes.diaDeCorte),
+        hastaPeriodoSiguiente: ajustes.plazoHastaPeriodoSiguiente,
+      }),
+    [hoy, ajustes],
+  );
+
+  // RN-4.3: the shareholder chooses the term, up to the maximum.
+  const months = Math.min(monthsInput ?? plazoMaximo.meses, plazoMaximo.meses);
+
+  // RN-4.18: the stored fraction (0.02) shown as a percentage without float noise.
+  const ratePercent = tasaEnPuntosBasicosDesdeAjuste(interestRate) / 100;
+
+  const { plan, planError } = useMemo((): { plan: PlanRow[]; planError: string | null } => {
+    if (requestedAmount < 500_000) return { plan: [], planError: null };
+    const r = buildPaymentPlan({
       requestedAmount,
-      months,
       rate: interestRate,
-      disbursedAt: new Date(),
+      disbursedOn: hoy,
+      months,
       capitalOverrides,
+      // RN-4.3b: same validation as the API when requesting.
+      requesting: true,
+      ajustes,
     });
-  }, [requestedAmount, months, interestRate, capitalOverrides]);
+    return r.ok ? { plan: r.value, planError: null } : { plan: [], planError: r.error.mensaje };
+  }, [requestedAmount, interestRate, hoy, months, capitalOverrides, ajustes]);
 
   const exceedsCashBalance = cashBalance !== null && requestedAmount > cashBalance && requestedAmount > 0;
 
   const validationError = useMemo(() => {
     if (requestedAmount < 500_000) return 'El monto mínimo es $500.000';
     if (!shareValue) return 'Debes definir tu valor de acción en Ajustes';
-    if (months < 1 || months > 60) return 'Los meses deben estar entre 1 y 60';
-    if (deductObligations && netDisbursed < 0) {
-      return 'Las deducciones no pueden superar el monto solicitado.';
-    }
+    if (planError) return planError;
+    if (disbursementError) return disbursementError;
     return null;
-  }, [requestedAmount, shareValue, months, deductObligations, netDisbursed]);
+  }, [requestedAmount, shareValue, planError, disbursementError]);
 
   const canSubmit = useMemo(() => {
     if (submitting || !!validationError || requestedAmount === 0) return false;
@@ -270,6 +333,10 @@ export default function NuevaSolicitudPage() {
     return <div className="animate-pulse text-[var(--color-text-subtle)] text-sm">Cargando…</div>;
   }
 
+  if (loadError) {
+    return <p className="text-sm text-[var(--color-danger)]">{loadError}</p>;
+  }
+
   return (
     <div className="flex flex-col gap-7 animate-in fade-in duration-300">
       <header>
@@ -329,21 +396,28 @@ export default function NuevaSolicitudPage() {
                 </div>
               </div>
               <div>
-                <label className="text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase block mb-1.5">
+                <label
+                  htmlFor="plazo-meses"
+                  className="text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase block mb-1.5"
+                >
                   Plazo (meses)
                 </label>
                 <input
+                  id="plazo-meses"
                   type="number"
                   min={1}
-                  max={60}
+                  max={plazoMaximo.meses}
                   value={months}
                   onChange={(e) => {
-                    const v = Math.max(1, Math.min(60, Number(e.target.value)));
-                    setMonths(v);
+                    const v = Math.max(1, Math.min(plazoMaximo.meses, Math.floor(Number(e.target.value)) || 1));
+                    setMonthsInput(v);
                     setCapitalOverrides({});
                   }}
                   className="w-full h-10 rounded-[9px] bg-[var(--color-surface)] border border-[var(--color-border)] px-3 text-[14px] font-semibold text-[var(--color-text)] focus:outline-none focus:border-[var(--color-brand)]"
                 />
+                <p className="text-[11px] text-[var(--color-text-subtle)] mt-1.5 leading-snug">
+                  Máximo {plazoMaximo.meses} {plazoMaximo.meses === 1 ? 'mes' : 'meses'}, hasta {monthLabel(plazoMaximo.mesFinal, true).toLowerCase()}. Si el desembolso es después del día {ajustes.diaDeCorte}, el préstamo empieza el mes siguiente.
+                </p>
               </div>
             </div>
 
@@ -382,7 +456,7 @@ export default function NuevaSolicitudPage() {
                     Quiero pagar las {sharesCount} acciones por préstamo ({cop(sharesAmount)}) por adelantado
                   </div>
                   <div className="text-[12px] text-[var(--color-text-muted)] mt-0.5">
-                    Si marcás esta opción, recibirás {cop(calcDisbursedAmount(requestedAmount, sharesAmount, true, finalFourPerThousand))} en vez de {cop(calcDisbursedAmount(requestedAmount, sharesAmount, false, finalFourPerThousand))}.
+                    Si marcás esta opción, recibirás {cop(netoSegunPago(true))} en vez de {cop(netoSegunPago(false))}.
                     Deberás comprarlas en el módulo de compras antes del desembolso.
                   </div>
                 </div>
@@ -542,7 +616,7 @@ export default function NuevaSolicitudPage() {
                     Podés editar el capital de cada cuota. Las cuotas sin asignación se ajustan a cero.
                   </p>
                 </div>
-                <Badge tone="info">{interestRate * 100}% mensual</Badge>
+                <Badge tone="info">{ratePercent}% mensual</Badge>
               </div>
 
               <div className="overflow-x-auto">
@@ -691,7 +765,7 @@ export default function NuevaSolicitudPage() {
                 </span>
               </div>
               <p className="text-[11px] text-[var(--color-text-subtle)] leading-snug">
-                Intereses al {interestRate * 100}% mensual sobre {cop(requestedAmount)}.
+                Intereses al {ratePercent}% mensual sobre {cop(requestedAmount)}.
               </p>
             </div>
 

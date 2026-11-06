@@ -3,6 +3,8 @@ import { crearFecha, type FechaISO } from '@/shared/domain/fechas';
 import {
   multaDelMesEnCurso,
   calcularMulta,
+  multaDelMes,
+  detalleDeMulta,
   type ReglasDeMulta,
 } from '@/modules/acciones/domain/multas';
 
@@ -11,7 +13,6 @@ const REGLAS: ReglasDeMulta = {
   diasDeGracia: 10,
   multaPorDia: 500,
   topeMensual: 15000,
-  multaPorMesCompleto: 15000,
 };
 
 function fecha(texto: string): FechaISO {
@@ -40,6 +41,49 @@ describe('multaDelMesEnCurso (RN-3.4)', () => {
   });
 });
 
+describe('multaDelMes (RN-3.4)', () => {
+  it.each([
+    ['2026-08-01', '2026-08-10', 0],
+    ['2026-08-01', '2026-08-11', 500],
+    // Cris, 2026-10-27: a past month keeps adding 500 a day until the cap.
+    ['2026-08-01', '2026-09-02', 11500],
+    ['2026-08-01', '2026-09-09', 15000],
+    ['2026-08-01', '2026-12-31', 15000],
+    ['2026-10-01', '2026-09-20', 0],
+  ])('month %s on %s owes %i', (mes, hoy, esperado) => {
+    expect(multaDelMes({ mes: fecha(mes), hoy: fecha(hoy), reglas: REGLAS })).toBe(esperado);
+  });
+});
+
+describe('detalleDeMulta (RN-3.4)', () => {
+  it('reports the days late and charged days below the cap', () => {
+    expect(detalleDeMulta({ mes: fecha('2026-08-01'), hoy: fecha('2026-09-02'), reglas: REGLAS })).toEqual({
+      monto: 11500,
+      diasDeMora: 23,
+      diasCobrados: 23,
+      topado: false,
+    });
+  });
+
+  it('stops charging days at the monthly cap', () => {
+    expect(detalleDeMulta({ mes: fecha('2026-08-01'), hoy: fecha('2026-09-20'), reglas: REGLAS })).toEqual({
+      monto: 15000,
+      diasDeMora: 41,
+      diasCobrados: 30,
+      topado: true,
+    });
+  });
+
+  it('owes nothing during the grace days', () => {
+    expect(detalleDeMulta({ mes: fecha('2026-08-01'), hoy: fecha('2026-08-10'), reglas: REGLAS })).toEqual({
+      monto: 0,
+      diasDeMora: 0,
+      diasCobrados: 0,
+      topado: false,
+    });
+  });
+});
+
 describe('calcularMulta (RN-3.4)', () => {
   it('matches the rule example: last purchase in July, today is 20 September → 20.000', () => {
     // First month without a purchase is August.
@@ -48,7 +92,13 @@ describe('calcularMulta (RN-3.4)', () => {
       hoy: fecha('2026-09-20'),
       reglas: REGLAS,
     });
-    expect(multa).toEqual({ mesesCompletos: 1, multaMesesCompletos: 15000, multaMesEnCurso: 5000, total: 20000 });
+    expect(multa).toEqual({
+      porMes: [
+        { mes: '2026-08-01', multa: 15000 },
+        { mes: '2026-09-01', multa: 5000 },
+      ],
+      total: 20000,
+    });
   });
 
   it('owes nothing when the current month is already bought', () => {
@@ -57,7 +107,7 @@ describe('calcularMulta (RN-3.4)', () => {
       hoy: fecha('2026-09-20'),
       reglas: REGLAS,
     });
-    expect(multa.total).toBe(0);
+    expect(multa).toEqual({ porMes: [], total: 0 });
   });
 
   it('owes nothing when bought in advance for future months', () => {
@@ -66,16 +116,22 @@ describe('calcularMulta (RN-3.4)', () => {
       hoy: fecha('2026-09-28'),
       reglas: REGLAS,
     });
-    expect(multa).toEqual({ mesesCompletos: 0, multaMesesCompletos: 0, multaMesEnCurso: 0, total: 0 });
+    expect(multa.total).toBe(0);
   });
 
-  it('charges only the current month when it is the first pending one', () => {
+  it('charges a past month by its days late until the cap', () => {
     const multa = calcularMulta({
-      primerMesPendiente: fecha('2026-09-01'),
-      hoy: fecha('2026-09-15'),
+      primerMesPendiente: fecha('2026-08-01'),
+      hoy: fecha('2026-09-02'),
       reglas: REGLAS,
     });
-    expect(multa).toEqual({ mesesCompletos: 0, multaMesesCompletos: 0, multaMesEnCurso: 2500, total: 2500 });
+    expect(multa).toEqual({
+      porMes: [
+        { mes: '2026-08-01', multa: 11500 },
+        { mes: '2026-09-01', multa: 0 },
+      ],
+      total: 11500,
+    });
   });
 
   it('owes nothing for the current month during the grace period', () => {
@@ -87,21 +143,21 @@ describe('calcularMulta (RN-3.4)', () => {
     expect(multa.total).toBe(0);
   });
 
-  it('charges each full month across a year boundary', () => {
+  it('charges each month across a year boundary', () => {
     const multa = calcularMulta({
       primerMesPendiente: fecha('2026-11-01'),
       hoy: fecha('2027-01-15'),
       reglas: REGLAS,
     });
-    expect(multa).toEqual({ mesesCompletos: 2, multaMesesCompletos: 30000, multaMesEnCurso: 2500, total: 32500 });
+    expect(multa.total).toBe(32500);
   });
 
-  it('uses the configured full-month fine', () => {
+  it('uses the configured daily fine and cap', () => {
     const multa = calcularMulta({
-      primerMesPendiente: fecha('2026-07-01'),
-      hoy: fecha('2026-09-05'),
-      reglas: { ...REGLAS, multaPorMesCompleto: 10000 },
+      primerMesPendiente: fecha('2026-09-01'),
+      hoy: fecha('2026-09-20'),
+      reglas: { ...REGLAS, multaPorDia: 1000, topeMensual: 8000 },
     });
-    expect(multa.total).toBe(20000);
+    expect(multa.total).toBe(8000);
   });
 });

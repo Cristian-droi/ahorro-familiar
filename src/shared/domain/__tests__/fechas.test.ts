@@ -8,8 +8,7 @@ import {
   mesesEntre,
   sumarMeses,
   diciembreDelAnio,
-  type FechaISO,
-} from '@/shared/domain/fechas';
+  type FechaISO, diasEntre } from '@/shared/domain/fechas';
 
 // Test helper: builds a known-valid date or fails the test.
 function fecha(texto: string): FechaISO {
@@ -109,5 +108,19 @@ describe('sumarMeses', () => {
 describe('diciembreDelAnio', () => {
   it.each(['2026-01-01', '2026-10-28', '2026-12-31'])('returns 1 December of the same year for %s', (texto) => {
     expect(diciembreDelAnio(fecha(texto))).toBe('2026-12-01');
+  });
+});
+
+describe('diasEntre', () => {
+  it.each([
+    ['2026-08-10', '2026-08-11', 1],
+    ['2026-08-10', '2026-09-02', 23],
+    ['2026-12-10', '2027-01-15', 36],
+    ['2026-09-20', '2026-09-10', -10],
+  ])('from %s to %s is %i days', (desde, hasta, esperado) => {
+    const a = crearFecha(desde);
+    const b = crearFecha(hasta);
+    if (!a.ok || !b.ok) throw new Error('Invalid test date');
+    expect(diasEntre(a.value, b.value)).toBe(esperado);
   });
 });

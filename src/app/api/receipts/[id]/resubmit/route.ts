@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { resubmitReceiptPayload } from '@/lib/schemas/receipt';
-import { getProfile } from '@/lib/data/profiles';
+import { getOpenPeriodShareValue } from '@/lib/data/share-value';
+import { validarPuedeComprar } from '@/modules/acciones/domain/valor-de-accion';
 import {
   buildReceiptItems,
   loadPurchaseRules,
@@ -94,14 +95,13 @@ export async function POST(
       );
     }
 
-    const profile = await getProfile(admin, user.id);
-    if (!profile.selected_share_value) {
-      return NextResponse.json(
-        { error: 'Debes seleccionar tu valor de acción antes de comprar' },
-        { status: 409 },
-      );
+    const puedeComprar = validarPuedeComprar({
+      valorDeAccion: await getOpenPeriodShareValue(admin, user.id),
+    });
+    if (!puedeComprar.ok) {
+      return NextResponse.json({ error: puedeComprar.error.mensaje }, { status: 400 });
     }
-    const unitValue = Number(profile.selected_share_value);
+    const unitValue = puedeComprar.value;
 
     const rules = await loadPurchaseRules(admin);
     const { items: builtItems } = await buildReceiptItems(admin, {

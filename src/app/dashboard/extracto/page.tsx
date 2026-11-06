@@ -35,6 +35,7 @@ import {
 import { Landmark } from 'lucide-react';
 import { exportToExcel, exportToPdf, type ExportSection } from '@/lib/exports';
 import { getProfile } from '@/lib/data/profiles';
+import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import { listReceiptItemsByYear } from '@/lib/data/receipts';
 import {
   getLibroAccionistaData,
@@ -42,7 +43,9 @@ import {
   getUserUtilitiesByYear,
   type MonthlyUtility,
 } from '@/lib/data/loans';
-import { computeLoanBook, LOAN_STATUS_LABELS } from '@/lib/loans';
+import { computeLoanBook, computeUnifiedLoanBook } from '@/lib/loans';
+import { ajustesDelPrestamo, getAjustesDePrestamo } from '@/lib/loan-settings';
+import { LOAN_STATUS_LABELS } from '@/components/loans/status';
 import { cop, monthLabel } from '@/lib/format';
 import {
   computeFineForMonth,
@@ -211,15 +214,14 @@ export function ExtractoView({ targetUserId }: ExtractoViewProps = {}) {
       setUserId(effectiveUserId);
 
       try {
-        const profile = await getProfile(supabase, effectiveUserId);
+        const [profile, periodShareValue] = await Promise.all([
+          getProfile(supabase, effectiveUserId),
+          getOpenPeriodShareValue(supabase, effectiveUserId),
+        ]);
         if (cancelled) return;
         setFirstName(profile.first_name ?? '');
         setLastName(profile.last_name ?? '');
-        if (profile.selected_share_value != null) {
-          setShareValue(Number(profile.selected_share_value));
-        } else {
-          setShareValue(null);
-        }
+        setShareValue(periodShareValue);
       } catch (err) {
         console.error('Error perfil:', err);
       }
@@ -299,40 +301,47 @@ export function ExtractoView({ targetUserId }: ExtractoViewProps = {}) {
 
     (async () => {
       try {
-        const entries = await getLibroAccionistaData(supabase, userId);
+        const [entries, ajustes] = await Promise.all([
+          getLibroAccionistaData(supabase, userId),
+          getAjustesDePrestamo(supabase),
+        ]);
         if (cancelled) return;
         if (entries.length === 0) {
           setLoanSummary(null);
           return;
         }
         const entry = entries[0];
-        const books = entry.loans.map((l) => ({
-          loan: l.loan,
-          book: computeLoanBook({
+        const books = entry.loans.map((l) => {
+          // RN-4.21b: each disbursed loan is computed with its own stored days.
+          const ajustesPropios = ajustesDelPrestamo(l.loan, ajustes);
+          if (!ajustesPropios.ok) throw new Error(ajustesPropios.error.mensaje);
+          const book = computeLoanBook({
             requestedAmount: Number(l.loan.requested_amount),
             plan: l.plan,
             payments: l.payments,
             interestRate: Number(l.loan.interest_rate),
             disbursedAt: l.loan.disbursed_at,
-          }),
-        }));
-        const agg = books.reduce(
-          (acc, b) => {
-            acc.total_requested += b.book.summary.requested_amount;
-            acc.total_paid_capital += b.book.summary.total_paid_capital;
-            acc.total_paid_interest += b.book.summary.total_paid_interest;
-            acc.total_interest_debt += b.book.summary.overdue_interest_debt;
-            acc.current_capital_balance += b.book.summary.current_capital_balance;
-            return acc;
-          },
-          {
-            total_requested: 0,
-            total_paid_capital: 0,
-            total_paid_interest: 0,
-            total_interest_debt: 0,
-            current_capital_balance: 0,
-          },
+            ajustes: ajustesPropios.value,
+          });
+          // Caught below: the monthly table renders without the summary.
+          if (!book.ok) throw new Error(book.error.mensaje);
+          return { loan: l.loan, book: book.value };
+        });
+        const unified = computeUnifiedLoanBook(
+          books.map((b) => ({
+            requested: b.book.summary.requested_amount,
+            book: b.book,
+            disbursedAt: b.loan.disbursed_at,
+          })),
         );
+        if (!unified.ok) throw new Error(unified.error.mensaje);
+        const agg = {
+          total_requested: unified.value.summary.total_requested,
+          total_paid_capital: unified.value.summary.total_paid_capital,
+          total_paid_interest: unified.value.summary.total_paid_interest,
+          total_interest_debt: unified.value.summary.overdue_interest_debt,
+          current_capital_balance: unified.value.summary.current_capital_balance,
+        };
         // Próxima cuota = la más cercana en el tiempo entre todos los préstamos.
         const nextCandidates = books
           .map((b) => b.book.summary)

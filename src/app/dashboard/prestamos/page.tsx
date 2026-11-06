@@ -8,7 +8,10 @@ import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Plus, ChevronRight, Vote, ThumbsUp, ThumbsDown, Clock } from 'lucide-react';
 import { cop } from '@/lib/format';
-import { LOAN_STATUS_LABELS, LOAN_STATUS_TONE, requiredVotes } from '@/lib/loans';
+import { getProfileRole } from '@/lib/data/profiles';
+import { eligibleVoterCount } from '@/lib/data/votes';
+import { LOAN_STATUS_LABELS, LOAN_STATUS_TONE } from '@/components/loans/status';
+import { votosNecesarios } from '@/modules/prestamos/domain/votacion';
 import { PrestamosRealtime } from './PrestamosRealtime';
 import type { Loan } from '@/types/entities';
 
@@ -39,11 +42,14 @@ export default async function PrestamosPage() {
   }
 
   // 2. Cargar datos
-  const [myLoans, votingLoans, totalShareholders] = await Promise.all([
+  const [myLoans, votingLoans, totalShareholders, myRole] = await Promise.all([
     repo.getLoansForUser(user.id),
     repo.getLoansForVoting(user.id),
     repo.countActiveShareholders(),
+    getProfileRole(supabase, user.id),
   ]);
+  // En "Mis solicitudes" el solicitante soy yo (RN-4.6).
+  const eligibleVoters = eligibleVoterCount({ totalShareholders, applicantRole: myRole });
 
   // 3. Cargar resumen de votos para los préstamos propios en votación
   const inVotingIds = myLoans
@@ -115,7 +121,7 @@ export default async function PrestamosPage() {
               key={loan.id}
               loan={loan}
               voteSummary={voteSummaries.get(loan.id)}
-              totalShareholders={totalShareholders}
+              eligibleVoters={eligibleVoters}
             />
           ))}
         </Card>
@@ -127,16 +133,15 @@ export default async function PrestamosPage() {
 function LoanRow({
   loan,
   voteSummary,
-  totalShareholders,
+  eligibleVoters,
 }: {
   loan: Loan;
   voteSummary?: { approved: number; rejected: number };
-  totalShareholders: number;
+  eligibleVoters: number;
 }) {
   const tone = LOAN_STATUS_TONE[loan.status] as 'success' | 'warn' | 'danger' | 'info' | 'brand' | 'neutral';
   const inVoting = loan.status === 'pending_shareholder_vote';
-  const eligibleVoters = Math.max(totalShareholders - 1, 0);
-  const needed = requiredVotes(totalShareholders);
+  const needed = votosNecesarios(eligibleVoters);
   const approved = voteSummary?.approved ?? 0;
   const rejected = voteSummary?.rejected ?? 0;
   const cast = approved + rejected;
@@ -171,13 +176,13 @@ function LoanRow({
               <ThumbsDown size={11} strokeWidth={2} />
               {rejected} en contra
             </span>
-            {totalShareholders > 0 && (
+            {eligibleVoters > 0 && (
               <span className="inline-flex items-center gap-1 text-[var(--color-text-subtle)]">
                 <Clock size={11} strokeWidth={2} />
                 {pending} pendientes
               </span>
             )}
-            {totalShareholders > 0 && (
+            {eligibleVoters > 0 && (
               <span className="text-[var(--color-text-muted)]">
                 · necesita{' '}
                 <span className="font-semibold text-[var(--color-text)]">

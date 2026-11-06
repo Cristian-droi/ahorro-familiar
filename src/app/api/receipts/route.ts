@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { createReceiptPayload } from '@/lib/schemas/receipt';
-import { getProfile } from '@/lib/data/profiles';
+import { getOpenPeriodShareValue } from '@/lib/data/share-value';
+import { validarPuedeComprar } from '@/modules/acciones/domain/valor-de-accion';
 import {
   buildReceiptItems,
   loadPurchaseRules,
@@ -13,7 +14,7 @@ import {
 //
 // Flujo:
 //   1. Auth + validación del payload.
-//   2. Snapshot del valor de acción desde el profile (requerido).
+//   2. Snapshot del valor de acción del periodo abierto (requerido, RN-2.3).
 //   3. Calcula multas de mora por cada target_month distinto (si aplica y si
 //      aún no existe una multa_acciones pendiente/aprobada para ese mes).
 //   4. Inserta receipts y receipt_items con service_role (RLS bypass). Los
@@ -58,14 +59,13 @@ export async function POST(request: Request) {
     }
 
     const admin = createSupabaseAdminClient();
-    const profile = await getProfile(admin, user.id);
-    if (!profile.selected_share_value) {
-      return NextResponse.json(
-        { error: 'Debes seleccionar tu valor de acción antes de comprar' },
-        { status: 409 },
-      );
+    const puedeComprar = validarPuedeComprar({
+      valorDeAccion: await getOpenPeriodShareValue(admin, user.id),
+    });
+    if (!puedeComprar.ok) {
+      return NextResponse.json({ error: puedeComprar.error.mensaje }, { status: 400 });
     }
-    const unitValue = Number(profile.selected_share_value);
+    const unitValue = puedeComprar.value;
 
     const rules = await loadPurchaseRules(admin);
     let builtItems: Awaited<ReturnType<typeof buildReceiptItems>>['items'];

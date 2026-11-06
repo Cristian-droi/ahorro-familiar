@@ -79,9 +79,9 @@ describe('interesDelMes (RN-4.18, RN-4.20)', () => {
   });
 });
 
-// 🟡 RN-4.21 is pending validation with the manager (docs/reglas-negocio.md).
+// RN-4.21, confirmed by Cris on 2026-10-29 (docs/reglas-negocio.md).
 // If the manager decides otherwise, only this block and `tasaDelMes` change.
-describe('🟡 interesDelMes after the cut-off day (RN-4.21, pending validation)', () => {
+describe('interesDelMes after the cut-off day (RN-4.21)', () => {
   it('rule example: disbursed on 28 March, March owes nothing', () => {
     expect(interes('2026-03-28', '2026-03-01')).toBe(0);
   });

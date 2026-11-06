@@ -1,6 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ESLint } from 'eslint';
 import path from 'path';
+
+// The first lint loads the whole ESLint config and takes about 6 s on a cold
+// run, over the default 5 s. Only this file gets the longer timeout.
+vi.setConfig({ testTimeout: 30_000 });
 
 // Layer boundaries from docs/convenciones.md, section 2, enforced by eslint.config.mjs.
 const eslint = new ESLint({ cwd: path.resolve(__dirname, '../..') });

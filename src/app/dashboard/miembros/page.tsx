@@ -13,18 +13,23 @@ import {
   AlertCircle,
   CheckCircle2,
   Copy,
-  Lock,
-  Unlock,
   Search,
   TrendingUp,
   X,
   PauseCircle,
   PlayCircle,
+  Unlock,
+  Lock,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { listMembershipRequests } from '@/lib/data/membership-requests';
 import { listProfiles } from '@/lib/data/profiles';
+import {
+  listOpenPeriodShareValueChangesAllowed,
+  listOpenPeriodShareValues,
+  listProfilesWithShareReceiptsInOpenPeriod,
+} from '@/lib/data/share-value';
 import {
   closeCapitalizationWindowV2,
   listAdminCapitalizationWindows,
@@ -42,8 +47,13 @@ type MemberData = {
   identity_document: string;
   monthly_income: number;
   has_profile: boolean;
-  selected_share_value: number | null;
+  // Open-period share value (RN-2.2); null while not chosen.
+  share_value: number | null;
+  // The admin allowed one change of the share value (RN-2.2).
   share_value_change_allowed: boolean;
+  // A pending or approved share receipt exists in the open period: the value
+  // is fixed until the next period (RN-2.2).
+  has_share_receipts: boolean;
   profile_id?: string;
   bank_name: string | null;
   bank_account_number: string | null;
@@ -56,9 +66,6 @@ export default function MiembrosPage() {
   const [members, setMembers] = useState<MemberData[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  // Marca qué profile está en vuelo para deshabilitar su botón y evitar
-  // doble-click mientras la API responde.
-  const [togglingId, setTogglingId] = useState<string | null>(null);
 
   // Ventanas activas de capitalización — para mostrar estado por accionista.
   // Solo cargamos las ACTIVAS (la global + las individuales abiertas).
@@ -72,10 +79,14 @@ export default function MiembrosPage() {
 
   const fetchMembers = async () => {
     try {
-      const [requests, profiles] = await Promise.all([
-        listMembershipRequests(supabase),
-        listProfiles(supabase),
-      ]);
+      const [requests, profiles, shareValues, changesAllowed, withShareReceipts] =
+        await Promise.all([
+          listMembershipRequests(supabase),
+          listProfiles(supabase),
+          listOpenPeriodShareValues(supabase),
+          listOpenPeriodShareValueChangesAllowed(supabase),
+          listProfilesWithShareReceiptsInOpenPeriod(supabase),
+        ]);
 
       const approved = requests.filter((r) => r.status === 'approved');
       const rows: MemberData[] = approved.map((req) => {
@@ -91,8 +102,9 @@ export default function MiembrosPage() {
           identity_document: req.identity_document,
           monthly_income: req.monthly_income,
           has_profile: !!profile,
-          selected_share_value: profile?.selected_share_value ?? null,
-          share_value_change_allowed: profile?.share_value_change_allowed ?? true,
+          share_value: profile ? (shareValues.get(profile.id) ?? null) : null,
+          share_value_change_allowed: profile ? changesAllowed.has(profile.id) : false,
+          has_share_receipts: profile ? withShareReceipts.has(profile.id) : false,
           profile_id: profile?.id,
           bank_name: profile?.bank_name ?? null,
           bank_account_number: profile?.bank_account_number ?? null,
@@ -231,50 +243,50 @@ export default function MiembrosPage() {
     }
   };
 
+  // Profile whose share value permission is being saved.
+  const [shareChangeSaving, setShareChangeSaving] = useState<string | null>(null);
+
+  const setShareValueChange = async (member: MemberData, allow: boolean) => {
+    if (!member.profile_id) return;
+    setShareChangeSaving(member.profile_id);
+    try {
+      const res = await fetch('/api/admin/share-value-change', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: member.profile_id, allow }),
+      });
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      if (!res.ok) {
+        showToast('error', body?.error ?? 'No se pudo actualizar el permiso.');
+        return;
+      }
+      await fetchMembers();
+      showToast(
+        'success',
+        allow
+          ? 'Cambio de valor habilitado. El accionista podrá cambiarlo una vez.'
+          : 'Permiso de cambio de valor revocado.',
+      );
+    } catch (err) {
+      console.error('Error actualizando el permiso de cambio de valor:', err);
+      showToast('error', 'No se pudo actualizar el permiso.');
+    } finally {
+      setShareChangeSaving(null);
+    }
+  };
+
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     showToast('success', 'Copiado al portapapeles');
   };
 
-  const toggleShareValueLock = async (profileId: string, allow: boolean) => {
-    setTogglingId(profileId);
-    try {
-      const res = await fetch('/api/admin/share-value-unlock', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scope: 'user', userId: profileId, allow }),
-      });
-      const body = await res.json().catch(() => null);
-      if (!res.ok) {
-        showToast('error', body?.error ?? 'No se pudo aplicar el cambio');
-        return;
-      }
-      showToast(
-        'success',
-        allow ? 'Cambio de valor habilitado' : 'Cambio de valor bloqueado',
-      );
-      // La realtime subscription sobre `profiles` disparará un refetch
-      // automático, pero también actualizamos local para feedback inmediato.
-      setMembers((prev) =>
-        prev.map((m) =>
-          m.profile_id === profileId ? { ...m, share_value_change_allowed: allow } : m,
-        ),
-      );
-    } catch (err) {
-      console.error('Error toggling share value lock:', err);
-      showToast('error', 'No se pudo aplicar el cambio');
-    } finally {
-      setTogglingId(null);
-    }
-  };
-
   const { activeCount, pendingCount, missingShareCount } = useMemo(() => {
     return {
-      activeCount: members.filter((m) => m.has_profile && m.selected_share_value)
+      activeCount: members.filter((m) => m.has_profile && m.share_value)
         .length,
       pendingCount: members.filter((m) => !m.has_profile).length,
       missingShareCount: members.filter(
-        (m) => m.has_profile && !m.selected_share_value,
+        (m) => m.has_profile && !m.share_value,
       ).length,
     };
   }, [members]);
@@ -529,7 +541,7 @@ export default function MiembrosPage() {
                           <AlertCircle size={12} strokeWidth={1.75} />
                           Pendiente registro
                         </Badge>
-                      ) : !member.selected_share_value ? (
+                      ) : !member.share_value ? (
                         <Badge tone="warn">
                           <AlertCircle size={12} strokeWidth={1.75} />
                           Falta selección
@@ -547,49 +559,50 @@ export default function MiembrosPage() {
                               className="text-[var(--color-brand)]"
                             />
                             <span className="text-sm font-semibold tabular-nums">
-                              {cop(member.selected_share_value)}
+                              {cop(member.share_value)}
                             </span>
                             <span className="text-[11px] text-[var(--color-text-subtle)]">
                               /acción
                             </span>
                           </div>
-                          {/* Control admin: permitir/bloquear cambio del valor
-                              de acción. Solo tiene sentido cuando el usuario ya
-                              tiene un valor seleccionado — antes de eso puede
-                              elegir libremente la primera vez. */}
-                          {member.profile_id &&
-                            (member.share_value_change_allowed ? (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  toggleShareValueLock(member.profile_id!, false)
-                                }
-                                disabled={togglingId === member.profile_id}
-                                className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50 transition-colors"
-                                title="Bloquear cambio del valor de acción"
+                          {/* Cambio del valor de la acción (RN-2.2) */}
+                          {member.profile_id && (
+                            member.has_share_receipts ? (
+                              <span
+                                className="inline-flex items-center gap-1.5 text-[11px] text-[var(--color-text-subtle)]"
+                                title="Ya compró acciones en este periodo"
                               >
-                                <Unlock
-                                  size={11}
-                                  strokeWidth={1.75}
-                                  className="text-[var(--color-success)]"
-                                />
-                                Cambio habilitado · bloquear
-                              </button>
+                                <Lock size={11} strokeWidth={1.75} />
+                                Valor fijo hasta el próximo periodo
+                              </span>
+                            ) : member.share_value_change_allowed ? (
+                              <div className="flex flex-col gap-0.5">
+                                <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[var(--color-success)]">
+                                  <Unlock size={11} strokeWidth={1.75} />
+                                  Cambio de valor habilitado
+                                </span>
+                                <button
+                                  type="button"
+                                  disabled={shareChangeSaving === member.profile_id}
+                                  onClick={() => setShareValueChange(member, false)}
+                                  className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[var(--color-text-muted)] hover:underline transition-colors w-fit disabled:opacity-60 cursor-pointer"
+                                >
+                                  {shareChangeSaving === member.profile_id ? 'Guardando…' : 'Revocar permiso'}
+                                </button>
+                              </div>
                             ) : (
                               <button
                                 type="button"
-                                onClick={() =>
-                                  toggleShareValueLock(member.profile_id!, true)
-                                }
-                                disabled={togglingId === member.profile_id}
-                                className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[var(--color-brand)] hover:underline disabled:opacity-50 transition-colors"
-                                title="Permitir que el accionista cambie su valor de acción"
+                                disabled={shareChangeSaving === member.profile_id}
+                                onClick={() => setShareValueChange(member, true)}
+                                className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[var(--color-brand)] hover:underline transition-colors w-fit disabled:opacity-60 cursor-pointer"
+                                title="Permite que el accionista cambie su valor una sola vez"
                               >
-                                <Lock size={11} strokeWidth={1.75} />
-                                Permitir cambio
+                                <Unlock size={11} strokeWidth={1.75} />
+                                {shareChangeSaving === member.profile_id ? 'Guardando…' : 'Habilitar cambio de valor'}
                               </button>
-                            ))}
-
+                            )
+                          )}
                           {/* Capitalización individual */}
                           {member.profile_id && (() => {
                             const w = userCapWindowByUserId.get(member.profile_id);

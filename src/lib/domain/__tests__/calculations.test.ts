@@ -1,182 +1,191 @@
 import { describe, it, expect } from 'vitest';
 import {
-  calcLoanShares,
-  calcFourPerThousand,
-  calcDisbursedAmount,
-  calcLoanDeductionsAndNet,
+  agreedPlanFromRows,
   buildPaymentPlan,
   calcAccruedInterest,
 } from '@/lib/loans';
+import { crearFecha, type FechaISO } from '@/shared/domain/fechas';
 
 describe('Financial Calculations', () => {
-  describe('calcLoanShares', () => {
-    it('calculates shares based on step of 500,000', () => {
-      const result = calcLoanShares(1_200_000, 10_000);
-      expect(result.count).toBe(2); // 1,200,000 / 500,000 = 2.4 => 2
-      expect(result.amount).toBe(20_000);
-    });
+  describe('buildPaymentPlan (adapter over planDePagos)', () => {
+    const fecha = (texto: string): FechaISO => {
+      const r = crearFecha(texto);
+      if (!r.ok) throw new Error(`Invalid test date: ${texto}`);
+      return r.value;
+    };
+    const rows = (r: ReturnType<typeof buildPaymentPlan>) => {
+      if (!r.ok) throw new Error(r.error.mensaje);
+      return r.value;
+    };
 
-    it('returns 0 for amounts less than 500,000', () => {
-      const result = calcLoanShares(499_999, 10_000);
-      expect(result.count).toBe(0);
-      expect(result.amount).toBe(0);
-    });
-  });
+    it('builds the plan until December with the stored fractional rate (RN-4.3, RN-4.18)', () => {
+      const plan = rows(buildPaymentPlan({ requestedAmount: 1_000_000, rate: 0.02, disbursedOn: fecha('2026-03-10') }));
 
-  describe('calcFourPerThousand', () => {
-    it('calculates 4x1000 correctly', () => {
-      expect(calcFourPerThousand(1_000_000)).toBe(4_000);
-      expect(calcFourPerThousand(500_000)).toBe(2_000);
-    });
-  });
-
-  describe('calcDisbursedAmount', () => {
-    it('deducts shares amount and 4x1000 when paid upfront is false', () => {
-      const disbursed = calcDisbursedAmount(1_000_000, 20_000, false, 4_000);
-      expect(disbursed).toBe(976_000); // 1,000,000 - 20,000 - 4,000
-    });
-
-    it('only deducts 4x1000 when paid upfront is true', () => {
-      const disbursed = calcDisbursedAmount(1_000_000, 20_000, true, 4_000);
-      expect(disbursed).toBe(996_000); // 1,000,000 - 4,000
-    });
-  });
-
-  describe('calcLoanDeductionsAndNet', () => {
-    it('calculates net and 4x1000 correctly when paid upfront is false and net > 0', () => {
-      const result = calcLoanDeductionsAndNet({
-        requestedAmount: 2_000_000,
-        sharesAmount: 40_000,
-        paidUpfront: false,
-        deductedShares: 50_000,
-        deductedFines: 10_000,
-        deductedInterest: 30_000,
-        deductedCapital: 500_000,
+      expect(plan).toHaveLength(10);
+      expect(plan[0]).toEqual({
+        month_number: 1,
+        due_date: '2026-03-01',
+        capital_amount: 100_000,
+        estimated_interest: 20_000,
+        estimated_balance_after: 900_000,
       });
-      // netBeforeTax = 2,000,000 - 40,000 (shares) - 50,000 - 10,000 - 30,000 - 500,000 = 1,370,000
-      // 4x1000 = 1,370,000 * 0.004 = 5,480
-      // netDisbursed = 1,370,000 - 5,480 = 1,364,520
-      expect(result.fourPerThousand).toBe(5_480);
-      expect(result.netDisbursed).toBe(1_364_520);
+      expect(plan[9]).toMatchObject({ due_date: '2026-12-01', capital_amount: 100_000, estimated_balance_after: 0 });
     });
 
-    it('calculates net and 4x1000 correctly when paid upfront is true and net > 0', () => {
-      const result = calcLoanDeductionsAndNet({
-        requestedAmount: 2_000_000,
-        sharesAmount: 40_000,
-        paidUpfront: true,
-        deductedShares: 50_000,
-        deductedFines: 10_000,
-        deductedInterest: 30_000,
-        deductedCapital: 500_000,
-      });
-      // netBeforeTax = 2,000,000 - 0 (upfront) - 50,000 - 10,000 - 30,000 - 500,000 = 1,410,000
-      // 4x1000 = 1,410,000 * 0.004 = 5,640
-      // netDisbursed = 1,410,000 - 5,640 = 1,404,360
-      expect(result.fourPerThousand).toBe(5_640);
-      expect(result.netDisbursed).toBe(1_404_360);
+    it('keeps installment-number overrides, relative to the applied month (RN-4.26)', () => {
+      const plan = rows(
+        buildPaymentPlan({
+          requestedAmount: 1_000_000,
+          rate: 0.02,
+          disbursedOn: fecha('2026-03-10'),
+          capitalOverrides: { 5: 200_000 },
+        }),
+      );
+      expect(plan[4]).toMatchObject({ due_date: '2026-07-01', capital_amount: 200_000 });
+      expect(plan[5].capital_amount).toBe(80_000);
     });
 
-    it('returns 0 for both 4x1000 and net disbursed when net before tax is 0', () => {
-      const result = calcLoanDeductionsAndNet({
+    it('charges half rate in the first month after day 15 (RN-4.20)', () => {
+      const plan = rows(buildPaymentPlan({ requestedAmount: 1_000_000, rate: 0.02, disbursedOn: fecha('2026-05-20') }));
+      expect(plan[0].estimated_interest).toBe(10_000);
+      expect(plan[1].estimated_interest).toBe(17_500); // 8 months from May: 2% of 875.000
+    });
+
+    it('moves a disbursement after day 25 to the next month (RN-4.15, RN-4.21)', () => {
+      const plan = rows(buildPaymentPlan({ requestedAmount: 1_000_000, rate: 0.02, disbursedOn: fecha('2026-03-28') }));
+      expect(plan[0]).toMatchObject({ month_number: 1, due_date: '2026-04-01', estimated_interest: 20_000 });
+      expect(plan).toHaveLength(9);
+    });
+
+    it('returns the domain error for an invalid override', () => {
+      const r = buildPaymentPlan({
         requestedAmount: 1_000_000,
-        sharesAmount: 20_000,
-        paidUpfront: false,
-        deductedShares: 50_000,
-        deductedFines: 30_000,
-        deductedInterest: 100_000,
-        deductedCapital: 800_000,
-      });
-      // netBeforeTax = 1,000,000 - 20,000 - 50,000 - 30,000 - 100,000 - 800,000 = 0
-      expect(result.fourPerThousand).toBe(0);
-      expect(result.netDisbursed).toBe(0);
-    });
-
-    it('returns 0 for both 4x1000 and net disbursed when net before tax is negative', () => {
-      const result = calcLoanDeductionsAndNet({
-        requestedAmount: 1_000_000,
-        sharesAmount: 20_000,
-        paidUpfront: false,
-        deductedShares: 50_000,
-        deductedFines: 30_000,
-        deductedInterest: 100_000,
-        deductedCapital: 900_000,
-      });
-      // netBeforeTax = 1,000,000 - 20,000 - 50,000 - 30,000 - 100,000 - 900,000 = -100,000 => <= 0
-      expect(result.fourPerThousand).toBe(0);
-      expect(result.netDisbursed).toBe(0);
-    });
-  });
-
-  describe('buildPaymentPlan', () => {
-    it('builds a standard payment plan without overrides', () => {
-      // Use noon to avoid timezone shift causing day to be previous month's end
-      const disbursedAt = new Date('2026-05-10T12:00:00Z');
-      const plan = buildPaymentPlan({
-        requestedAmount: 1_000_000,
-        months: 10,
         rate: 0.02,
-        disbursedAt,
+        disbursedOn: fecha('2026-03-10'),
+        capitalOverrides: { 2: -5 },
       });
-
-      expect(plan.length).toBe(10);
-      expect(plan[0].capital_amount).toBe(100_000);
-      expect(plan[0].estimated_interest).toBe(20_000); // 2% of 1M
-      expect(plan[0].estimated_balance_after).toBe(900_000);
-      
-      expect(plan[9].capital_amount).toBe(100_000);
-      expect(plan[9].estimated_balance_after).toBe(0);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error.codigo).toBe('capital_invalido');
     });
 
-    it('handles capital overrides correctly', () => {
-      const disbursedAt = new Date('2026-05-10T12:00:00Z');
-      const plan = buildPaymentPlan({
-        requestedAmount: 1_000_000,
-        months: 10,
-        rate: 0.02,
-        disbursedAt,
-        capitalOverrides: { 5: 200_000 },
-      });
-
-      expect(plan[4].capital_amount).toBe(200_000); // 5th month (index 4)
-      // 100k for 1..4 (400k), 200k for 5 (200k). Total consumed: 600k. Remaining: 400k for 5 months.
-      expect(plan[5].capital_amount).toBe(80_000); // 6th month (index 5)
+    it('uses the term chosen in months from the applied month (RN-4.3)', () => {
+      const plan = rows(buildPaymentPlan({ requestedAmount: 1_000_000, rate: 0.02, disbursedOn: fecha('2026-03-28'), months: 3 }));
+      expect(plan.map((r) => r.due_date)).toEqual(['2026-04-01', '2026-05-01', '2026-06-01']);
     });
-    
-    it('adjusts first month interest if disbursed after day 15', () => {
-      const disbursedAt = new Date('2026-05-20T12:00:00Z');
-      const plan = buildPaymentPlan({
+
+    it('rejects a term in months beyond December (RN-4.3)', () => {
+      const r = buildPaymentPlan({ requestedAmount: 1_000_000, rate: 0.02, disbursedOn: fecha('2026-03-10'), months: 13 });
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.error.codigo).toBe('plazo_mayor_al_maximo');
+        expect(r.error.mensaje).toBe('El plazo puede ir como máximo hasta diciembre de 2026 (10 meses).');
+      }
+    });
+
+    it.each([0, -1, 2.5])('rejects a term of %s months', (months) => {
+      const r = buildPaymentPlan({ requestedAmount: 1_000_000, rate: 0.02, disbursedOn: fecha('2026-03-10'), months });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error.codigo).toBe('plazo_invalido');
+    });
+
+    it('uses the chosen last calendar month and calendar-month overrides (RN-4.3b)', () => {
+      const plan = rows(
+        buildPaymentPlan({
+          requestedAmount: 1_000_000,
+          rate: 0.02,
+          disbursedOn: fecha('2026-02-02'),
+          lastMonth: fecha('2026-06-01'),
+          capitalOverrides: { '2026-06-01': 1_000_000 },
+        }),
+      );
+      expect(plan.map((r) => r.capital_amount)).toEqual([0, 0, 0, 0, 1_000_000]);
+      expect(plan.map((r) => r.estimated_interest)).toEqual([20_000, 20_000, 20_000, 20_000, 20_000]);
+    });
+
+    it.each([0, -3])('rejects the installment number %s', (n) => {
+      const r = buildPaymentPlan({
         requestedAmount: 1_000_000,
-        months: 10,
         rate: 0.02,
-        disbursedAt,
+        disbursedOn: fecha('2026-03-10'),
+        capitalOverrides: { [n]: 100_000 },
       });
-      // Rate is halved for first month
-      expect(plan[0].estimated_interest).toBe(10_000); // 1% of 1M
-      // Second month normal
-      expect(plan[1].estimated_interest).toBe(18_000); // 2% of 900k
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error.codigo).toBe('cuota_invalida');
+    });
+
+    it("fails when the loan's own rate is missing instead of using 2% (RN-4.18)", () => {
+      for (const rate of [null, undefined, 'abc']) {
+        const r = buildPaymentPlan({ requestedAmount: 1_000_000, rate, disbursedOn: fecha('2026-03-10') });
+        expect(r.ok).toBe(false);
+        if (!r.ok) expect(r.error.codigo).toBe('tasa_invalida');
+      }
     });
   });
 
-  describe('calcAccruedInterest', () => {
-    it('calculates interest correctly for multiple months overdue', async () => {
-      const disbursedAt = new Date('2026-01-10T12:00:00Z');
-      const mockNow = new Date('2026-04-10T12:00:00Z'); // 3 months later
-      
-      const { vi } = await import('vitest');
-      vi.useFakeTimers();
-      vi.setSystemTime(mockNow);
-      
-      const interest = calcAccruedInterest({
-        outstandingBalance: 1_000_000,
-        rate: 0.02,
-        disbursedAt,
-        lastInterestPaymentDate: null,
+  describe('agreedPlanFromRows (RN-4.3, RN-4.3b)', () => {
+    it('reads the last month of the term and the capital by calendar month', () => {
+      const r = agreedPlanFromRows([
+        { due_date: '2026-03-01', capital_amount: 0 },
+        { due_date: '2026-06-01', capital_amount: '1000000' },
+        { due_date: '2026-04-01', capital_amount: 0 },
+      ]);
+      expect(r).toEqual({
+        ok: true,
+        value: {
+          lastMonth: '2026-06-01',
+          capitalOverrides: { '2026-03-01': 0, '2026-04-01': 0, '2026-06-01': 1_000_000 },
+        },
       });
+    });
 
-      // 3 months at 2% = 6% of 1M = 60_000
-      expect(interest).toBe(60_000);
-      vi.useRealTimers();
+    it('returns no term and no capital for an empty plan', () => {
+      expect(agreedPlanFromRows([])).toEqual({ ok: true, value: { lastMonth: undefined, capitalOverrides: {} } });
+    });
+
+    it('rejects a stored row with an invalid date', () => {
+      const r = agreedPlanFromRows([{ due_date: 'junio', capital_amount: 0 }]);
+      expect(r.ok).toBe(false);
+    });
+  });
+
+  describe('disbursement rebuild (RN-4.3b)', () => {
+    const fecha = (texto: string): FechaISO => {
+      const r = crearFecha(texto);
+      if (!r.ok) throw new Error(`Invalid test date: ${texto}`);
+      return r.value;
+    };
+
+    it('a plan agreed in March and disbursed in April keeps the months and moves March capital to the first month (April)', () => {
+      const draft = buildPaymentPlan({ requestedAmount: 1_000_000, rate: 0.02, disbursedOn: fecha('2026-03-10') });
+      if (!draft.ok) throw new Error(draft.error.mensaje);
+      const agreed = agreedPlanFromRows(draft.value);
+      if (!agreed.ok) throw new Error(agreed.error.mensaje);
+
+      const real = buildPaymentPlan({
+        requestedAmount: 1_000_000,
+        rate: 0.02,
+        disbursedOn: fecha('2026-04-10'),
+        lastMonth: agreed.value.lastMonth,
+        capitalOverrides: agreed.value.capitalOverrides,
+      });
+      if (!real.ok) throw new Error(real.error.mensaje);
+      expect(real.value).toHaveLength(9);
+      expect(real.value[0]).toMatchObject({ due_date: '2026-04-01', capital_amount: 200_000, estimated_balance_after: 800_000 });
+      expect(real.value.slice(1).every((r) => r.capital_amount === 100_000)).toBe(true);
+      expect(real.value[8]).toMatchObject({ due_date: '2026-12-01', capital_amount: 100_000, estimated_balance_after: 0 });
+    });
+  });
+
+  describe('calcAccruedInterest (adapter over interesesAdeudados)', () => {
+    it('RN-4.22: three months unpaid on 1.000.000 at 2% owe 60.000', () => {
+      const r = calcAccruedInterest({
+        requestedAmount: 1_000_000,
+        rate: 0.02,
+        disbursedAt: '2026-01-10T17:00:00+00:00',
+        items: [],
+        today: '2026-04-10' as FechaISO,
+      });
+      expect(r).toEqual({ ok: true, value: 60_000 });
     });
   });
 });

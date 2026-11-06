@@ -6,7 +6,7 @@
 // una tabla mes a mes con:
 //   - Cuota esperada (capital + interés plan)
 //   - Capital pagado / Interés pagado
-//   - Intereses en mora (interés plan − interés pagado, si positivo)
+//   - Intereses pendientes acumulados hasta el mes (RN-4.31)
 //   - Saldo de capital tras el mes
 // Además calcula la próxima cuota (primer mes sin capital pagado completo) y
 // un resumen por préstamo y por accionista.
@@ -28,13 +28,9 @@ import {
   type LibroAccionistaEntry,
   type LibroAccionistaLoan,
 } from '@/lib/data/loans';
-import {
-  computeLoanBook,
-  computeUnifiedLoanBook,
-  type LoanBook,
-  type UnifiedLoanBook,
-  LOAN_STATUS_LABELS,
-} from '@/lib/loans';
+import { computeLoanBook, computeUnifiedLoanBook, type LoanBook, type UnifiedLoanBook } from '@/lib/loans';
+import { ajustesDelPrestamo, getAjustesDePrestamo, type AjustesDePrestamo } from '@/lib/loan-settings';
+import { LOAN_STATUS_LABELS } from '@/components/loans/status';
 import { cop, monthLabel } from '@/lib/format';
 
 type BookedLoan = {
@@ -52,32 +48,41 @@ type BookedEntry = {
     interest_debt: number;
     current_balance: number;
   };
-  unified: UnifiedLoanBook;
+  unified: UnifiedLoanBook | null;
+  // A loan with data the domain rejects only affects this shareholder.
+  error: string | null;
 };
 
-function computeBookedEntries(entries: LibroAccionistaEntry[]): BookedEntry[] {
+const SIN_TOTALES = { requested: 0, paid_capital: 0, paid_interest: 0, interest_debt: 0, current_balance: 0 };
+
+function computeBookedEntries(entries: LibroAccionistaEntry[], ajustes: AjustesDePrestamo): BookedEntry[] {
   return entries.map((e) => {
-    const loans: BookedLoan[] = e.loans.map((l) => ({
-      source: l,
-      book: computeLoanBook({
-        requestedAmount: Number(l.loan.requested_amount),
-        plan: l.plan,
-        payments: l.payments,
-        interestRate: Number(l.loan.interest_rate),
-        disbursedAt: l.loan.disbursed_at ?? null,
-      }),
-    }));
-    const totals = loans.reduce(
-      (acc, bl) => ({
-        requested: acc.requested + bl.book.summary.requested_amount,
-        paid_capital: acc.paid_capital + bl.book.summary.total_paid_capital,
-        paid_interest: acc.paid_interest + bl.book.summary.total_paid_interest,
-        interest_debt: acc.interest_debt + bl.book.summary.overdue_interest_debt,
-        current_balance:
-          acc.current_balance + bl.book.summary.current_capital_balance,
-      }),
-      { requested: 0, paid_capital: 0, paid_interest: 0, interest_debt: 0, current_balance: 0 },
-    );
+    const loans: BookedLoan[] = [];
+    for (const l of e.loans) {
+      // RN-4.21b: each disbursed loan is computed with its own stored days.
+      const ajustesPropios = ajustesDelPrestamo(l.loan, ajustes);
+      const book = ajustesPropios.ok
+        ? computeLoanBook({
+            requestedAmount: Number(l.loan.requested_amount),
+            plan: l.plan,
+            payments: l.payments,
+            interestRate: Number(l.loan.interest_rate),
+            disbursedAt: l.loan.disbursed_at ?? null,
+            ajustes: ajustesPropios.value,
+          })
+        : ajustesPropios;
+      if (!book.ok) {
+        const numero = l.loan.loan_number ? ` #${l.loan.loan_number}` : '';
+        return {
+          user: e.user,
+          loans: [],
+          totals: SIN_TOTALES,
+          unified: null,
+          error: `No se pudo calcular el préstamo${numero}: ${book.error.mensaje}`,
+        };
+      }
+      loans.push({ source: l, book: book.value });
+    }
     const unified = computeUnifiedLoanBook(
       loans.map((bl) => ({
         requested: bl.book.summary.requested_amount,
@@ -85,7 +90,17 @@ function computeBookedEntries(entries: LibroAccionistaEntry[]): BookedEntry[] {
         disbursedAt: bl.source.loan.disbursed_at ?? null,
       })),
     );
-    return { user: e.user, loans, totals, unified };
+    if (!unified.ok) {
+      return { user: e.user, loans: [], totals: SIN_TOTALES, unified: null, error: unified.error.mensaje };
+    }
+    const totals = {
+      requested: unified.value.summary.total_requested,
+      paid_capital: unified.value.summary.total_paid_capital,
+      paid_interest: unified.value.summary.total_paid_interest,
+      interest_debt: unified.value.summary.overdue_interest_debt,
+      current_balance: unified.value.summary.current_capital_balance,
+    };
+    return { user: e.user, loans, totals, unified: unified.value, error: null };
   });
 }
 
@@ -101,8 +116,8 @@ export default function LibroAccionistaPage() {
 
   const fetchAll = useCallback(async () => {
     try {
-      const raw = await getLibroAccionistaData(supabase);
-      const booked = computeBookedEntries(raw);
+      const [raw, ajustes] = await Promise.all([getLibroAccionistaData(supabase), getAjustesDePrestamo(supabase)]);
+      const booked = computeBookedEntries(raw, ajustes);
       setEntries(booked);
       if (booked.length > 0) {
         // Mantener la selección actual si sigue existiendo, sino elegir la primera.
@@ -341,7 +356,12 @@ export default function LibroAccionistaPage() {
 
               {/* Tabla unificada — todos los préstamos del accionista
                   combinados mes a mes (vista principal). */}
-              {selected.loans.length > 0 && (
+              {selected.error && (
+                <Card>
+                  <p className="text-sm text-[var(--color-danger)]">{selected.error}</p>
+                </Card>
+              )}
+              {selected.unified && selected.loans.length > 0 && (
                 <UnifiedBookCard unified={selected.unified} />
               )}
 
@@ -439,7 +459,7 @@ export default function LibroAccionistaPage() {
                                 Interés pagado
                               </th>
                               <th className="text-right font-semibold px-4 py-2.5">
-                                Interés en mora
+                                Intereses pendientes
                               </th>
                               <th className="text-right font-semibold px-4 py-2.5">
                                 Saldo capital
@@ -450,7 +470,7 @@ export default function LibroAccionistaPage() {
                             {bl.book.months.map((row) => {
                               const monthStr = row.due_date.slice(0, 7);
                               const isNext = row.is_next_installment;
-                              const hasDebt = row.interest_debt > 0;
+                              const hasDebt = row.pending_interest > 0;
                               return (
                                 <tr
                                   key={row.month_number}
@@ -494,7 +514,7 @@ export default function LibroAccionistaPage() {
                                         : 'text-[var(--color-text-subtle)]'
                                     }`}
                                   >
-                                    {hasDebt ? cop(row.interest_debt) : '—'}
+                                    {hasDebt ? cop(row.pending_interest) : '—'}
                                   </td>
                                   <td className="px-4 py-2.5 text-right font-semibold">
                                     {cop(row.capital_balance_after)}
@@ -507,20 +527,10 @@ export default function LibroAccionistaPage() {
                             <tr>
                               <td className="px-4 py-2.5">Totales</td>
                               <td className="px-4 py-2.5 text-right text-[var(--color-text-muted)]">
-                                {cop(
-                                  bl.book.months.reduce(
-                                    (s, r) => s + r.plan_capital,
-                                    0,
-                                  ),
-                                )}
+                                {cop(bl.book.summary.total_plan_capital)}
                               </td>
                               <td className="px-4 py-2.5 text-right text-[var(--color-text-muted)]">
-                                {cop(
-                                  bl.book.months.reduce(
-                                    (s, r) => s + r.plan_interest,
-                                    0,
-                                  ),
-                                )}
+                                {cop(bl.book.summary.total_plan_interest)}
                               </td>
                               <td className="px-4 py-2.5 text-right text-[var(--color-success)]">
                                 {cop(bl.book.summary.total_paid_capital)}
@@ -565,19 +575,10 @@ function UnifiedBookCard({ unified }: { unified: UnifiedLoanBook }) {
   if (unified.rows.length === 0) {
     return null;
   }
-  const totalRequested = unified.rows.reduce(
-    (s, r) => s + r.disbursed_this_month,
-    0,
-  );
-  const totalPlanCapital = unified.rows.reduce(
-    (s, r) => s + r.plan_capital,
-    0,
-  );
-  const totalPlanInterest = unified.rows.reduce(
-    (s, r) => s + r.plan_interest,
-    0,
-  );
-  const totalCuota = totalPlanCapital + totalPlanInterest;
+  const totalRequested = unified.summary.total_disbursed_in_rows;
+  const totalPlanCapital = unified.summary.total_plan_capital;
+  const totalPlanInterest = unified.summary.total_plan_interest;
+  const totalCuota = unified.summary.total_installment_value;
   const totalPaidCapital = unified.summary.total_paid_capital;
   const totalPaidInterest = unified.summary.total_paid_interest;
   const totalInterestDebt = unified.summary.overdue_interest_debt;
@@ -625,8 +626,8 @@ function UnifiedBookCard({ unified }: { unified: UnifiedLoanBook }) {
           </thead>
           <tbody className="divide-y divide-[var(--color-border)]">
             {unified.rows.map((row) => {
-              const totalCuotaRow = row.plan_capital + row.plan_interest;
-              const hasDebt = row.interest_debt > 0;
+              const totalCuotaRow = row.installment_value;
+              const hasDebt = row.pending_interest > 0;
               return (
                 <tr key={row.month_key}>
                   <td className="px-4 py-2.5 font-medium text-[var(--color-text)]">
@@ -659,7 +660,7 @@ function UnifiedBookCard({ unified }: { unified: UnifiedLoanBook }) {
                         : 'text-[var(--color-text-subtle)]'
                     }`}
                   >
-                    {hasDebt ? cop(row.interest_debt) : '—'}
+                    {hasDebt ? cop(row.pending_interest) : '—'}
                   </td>
                   <td className="px-4 py-2.5 text-right font-semibold">
                     {cop(row.capital_balance_after)}

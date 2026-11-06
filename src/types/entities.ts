@@ -28,8 +28,6 @@ export interface Profile {
   address: string | null;
   monthly_income: number | null;
   role: UserRole;
-  selected_share_value: number | null;
-  share_value_change_allowed: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -106,7 +104,9 @@ export type LoanStatus =
   | 'active'
   | 'paid'
   | 'rejected_by_admin'
-  | 'rejected_by_shareholders';
+  | 'rejected_by_shareholders'
+  // RN-4.5b: more than 15 days from submission without a disbursement.
+  | 'expired';
 
 export type LoanVoteValue = 'approved' | 'rejected';
 
@@ -134,6 +134,12 @@ export interface Loan {
   disbursement_proof_path: string | null;
   disbursement_number: string | null;
   loan_number: number;
+  // RN-4.5b: when the request left draft; null while it is a draft.
+  submitted_at?: string | null;
+  // RN-4.21b: the half-rate day limit and the cut-off day in force when the
+  // loan was disbursed; null until then. Read them with `ajustesDelPrestamo`.
+  full_rate_day_limit?: number | null;
+  cutoff_day?: number | null;
   created_at: string;
   updated_at: string;
   deduct_obligations?: boolean;
@@ -180,7 +186,7 @@ export interface LoanVote {
 export interface LoanWithDetails extends Loan {
   payment_plan: LoanPaymentPlanItem[];
   votes: LoanVote[];
-  borrower: Pick<Profile, 'id' | 'first_name' | 'last_name' | 'identity_document' | 'selected_share_value'> | null;
+  borrower: Pick<Profile, 'id' | 'first_name' | 'last_name' | 'identity_document'> | null;
   total_active_shareholders: number;
   approved_votes: number;
   rejected_votes: number;

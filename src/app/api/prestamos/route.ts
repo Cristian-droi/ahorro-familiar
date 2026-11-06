@@ -2,9 +2,18 @@ import { NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { createLoanSchema } from '@/lib/schemas/loan';
-import { calcLoanShares, buildPaymentPlan, calcLoanDeductionsAndNet } from '@/lib/loans';
-import { getProfile } from '@/lib/data/profiles';
+import { buildPaymentPlan } from '@/lib/loans';
+import {
+  accionesPorPrestamo,
+  desembolsoDePrestamo,
+  getAjustesDePrestamo,
+  getTasaCuatroPorMil,
+  tasaDeInteresGlobalDesdeAjuste,
+} from '@/lib/loan-settings';
+import { getOpenPeriodShareValue } from '@/lib/data/share-value';
+import { validarPuedeComprar } from '@/modules/acciones/domain/valor-de-accion';
 import { checkUserObligations } from '@/lib/obligations';
+import { hoyBogota } from '@/shared/domain/fechas';
 
 // POST /api/prestamos — accionista crea un borrador de préstamo.
 export async function POST(request: Request) {
@@ -43,8 +52,9 @@ export async function POST(request: Request) {
     const maxLoansEnabled = settingsMap.has('max_active_loans_enabled') ? Boolean(settingsMap.get('max_active_loans_enabled')) : true;
     const maxLoansPerUser = settingsMap.has('max_active_loans_per_user') ? Number(settingsMap.get('max_active_loans_per_user')) : 2;
 
+    // RN-4.18: the global setting falls back to the default 2% when missing or invalid.
     const rateVal = settingsMap.get('default_loan_interest_rate') ?? settingsMap.get('loan_interest_rate');
-    const interestRate = rateVal != null ? Number(rateVal) : 0.02;
+    const interestRate = tasaDeInteresGlobalDesdeAjuste(rateVal);
 
     // Verificar límite de préstamos activos si la restricción está activada
     if (maxLoansEnabled) {
@@ -61,17 +71,20 @@ export async function POST(request: Request) {
       }
     }
 
-    // Obtener perfil para valor de acción
-    const profile = await getProfile(admin, user.id);
-    if (!profile.selected_share_value) {
-      return NextResponse.json({ error: 'Debes definir tu valor de acción antes de solicitar un préstamo' }, { status: 422 });
+    // Valor de acción del periodo abierto (RN-2.3)
+    const puedeComprar = validarPuedeComprar({
+      valorDeAccion: await getOpenPeriodShareValue(admin, user.id),
+    });
+    if (!puedeComprar.ok) {
+      return NextResponse.json({ error: puedeComprar.error.mensaje }, { status: 400 });
     }
 
-    // Calcular valores de acciones asociadas al préstamo
-    const { count: sharesCount, amount: sharesAmount } = calcLoanShares(
-      requested_amount,
-      profile.selected_share_value,
-    );
+    // Calcular valores de acciones asociadas al préstamo (RN-4.10)
+    const acciones = accionesPorPrestamo(requested_amount, puedeComprar.value);
+    if (!acciones.ok) {
+      return NextResponse.json({ error: acciones.error.mensaje }, { status: 400 });
+    }
+    const { cantidad: sharesCount, valor: sharesAmount } = acciones.value;
 
     let deductedShares = 0;
     let deductedFines = 0;
@@ -98,19 +111,39 @@ export async function POST(request: Request) {
       }
     }
 
-    const { netDisbursed, fourPerThousand } = calcLoanDeductionsAndNet({
-      requestedAmount: requested_amount,
-      sharesAmount,
-      paidUpfront: loan_shares_paid_upfront,
-      deductedShares,
-      deductedFines,
-      deductedInterest,
-      deductedCapital,
+    // RN-4.16: 4x1000 sobre el neto que sale de la caja, después de las deducciones.
+    const desembolso = desembolsoDePrestamo({
+      monto: requested_amount,
+      accionesPorPrestamo: sharesAmount,
+      pagadasPorAdelantado: loan_shares_paid_upfront,
+      accionesVencidas: deductedShares,
+      multas: deductedFines,
+      intereses: deductedInterest,
+      capital: deductedCapital,
+      tasaPorMil: await getTasaCuatroPorMil(admin),
     });
-
-    if (deduct_obligations && netDisbursed < 0) {
-      return NextResponse.json({ error: 'El neto a recibir no puede ser negativo.' }, { status: 422 });
+    if (!desembolso.ok) {
+      return NextResponse.json({ error: desembolso.error.mensaje }, { status: 422 });
     }
+    const fourPerThousand = desembolso.value.cuatroPorMil;
+
+    // Plan de pagos con la fecha de hoy en Bogotá como proxy del desembolso.
+    // RN-4.3: el plazo lo elige el accionista, con máximo hasta diciembre (si no
+    // lo envía, se usa el máximo). Se rehace por mes calendario al desembolsar.
+    // RN-4.3b: al solicitar no se aceptan meses pasados.
+    const plan = buildPaymentPlan({
+      requestedAmount: requested_amount,
+      rate: interestRate,
+      disbursedOn: hoyBogota(new Date()),
+      months: payment_plan_months,
+      requesting: true,
+      // RN-4.20, RN-4.21 y RN-4.3 ⚙️.
+      ajustes: await getAjustesDePrestamo(admin),
+    });
+    if (!plan.ok) {
+      return NextResponse.json({ error: plan.error.mensaje }, { status: 422 });
+    }
+    const planRows = plan.value;
 
     // Crear el préstamo
     const { data: loan, error: loanError } = await admin
@@ -125,7 +158,7 @@ export async function POST(request: Request) {
         four_per_thousand: fourPerThousand,
         outstanding_balance: 0,
         status: 'draft',
-        payment_plan_months,
+        payment_plan_months: planRows.length,
         deduct_obligations,
         deducted_shares_amount: deductedShares,
         deducted_fines_amount: deductedFines,
@@ -140,14 +173,6 @@ export async function POST(request: Request) {
       console.error('Error creando préstamo:', loanError);
       return NextResponse.json({ error: 'No se pudo crear el préstamo' }, { status: 500 });
     }
-
-    // Generar plan de pagos por defecto (usando fecha actual como proxy de desembolso)
-    const planRows = buildPaymentPlan({
-      requestedAmount: requested_amount,
-      months: payment_plan_months,
-      rate: interestRate,
-      disbursedAt: new Date(),
-    });
 
     if (planRows.length > 0) {
       const planItems = planRows.map((r) => ({ ...r, loan_id: loan.id }));

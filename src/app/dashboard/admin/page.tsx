@@ -233,15 +233,10 @@ export default async function AdminDashboardPage() {
         const mIdx = Number(monthStr.split('-')[1]) - 1;
         overdueMonths.push(monthNamesEs[mIdx]);
 
-        // Si pasamos el periodo de gracia del mes y no se ha pagado la multa, se calcula la multa
-        const [y, m] = monthStr.split('-').map(Number);
-        const limitDate = new Date(Date.UTC(y, m - 1, rules.grace_period_days));
-        if (today.getTime() > limitDate.getTime()) {
-          const finePaid = uFinesPaid.has(monthStr);
-          if (!finePaid) {
-            const fineOwed = computeFineForMonth(monthStr, today, rules);
-            totalFineAmount += fineOwed;
-          }
+        // Si no se ha pagado la multa del mes, se suma (RN-3.4: es 0 durante
+        // los días de gracia).
+        if (!uFinesPaid.has(monthStr)) {
+          totalFineAmount += computeFineForMonth(monthStr, today, rules);
         }
       }
     }

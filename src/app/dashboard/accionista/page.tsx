@@ -23,6 +23,7 @@ import {
   Calendar,
 } from 'lucide-react';
 import { getProfile } from '@/lib/data/profiles';
+import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import {
   countRejectedReceiptsForUser,
   listReceiptsForUser,
@@ -61,9 +62,11 @@ export default async function AccionistaDashboardPage() {
   const uid = user.id;
 
   // Carga del perfil en el servidor
-  const profile = await getProfile(supabase, uid).catch(() => null);
+  const [profile, shareValue] = await Promise.all([
+    getProfile(supabase, uid).catch(() => null),
+    getOpenPeriodShareValue(supabase, uid).catch(() => null),
+  ]);
   const firstName = profile?.first_name || '';
-  const shareValue = profile?.selected_share_value ?? null;
 
   const year = Number(getBogotaCurrentMonth().slice(0, 4));
 
