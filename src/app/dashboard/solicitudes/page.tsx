@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { useAccesoAdmin } from '@/app/dashboard/AccesoAdminContext';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -47,6 +48,7 @@ function StatusBadge({ status }: { status: RequestStatus }) {
 }
 
 export default function SolicitudesPage() {
+  const { soloLectura } = useAccesoAdmin();
   const [requests, setRequests] = useState<MembershipRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterKey>('pending');
@@ -346,7 +348,7 @@ export default function SolicitudesPage() {
                         <StatusBadge status={req.status} />
                       </td>
                       <td className="px-[22px] py-3.5">
-                        {req.status === 'pending' ? (
+                        {soloLectura ? null : req.status === 'pending' ? (
                           <div className="flex gap-1.5 justify-end">
                             <Button
                               variant="danger"

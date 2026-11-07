@@ -41,7 +41,8 @@ import {
   Banknote,
 } from 'lucide-react';
 import { exportToExcel, exportToPdf, type ExportSection } from '@/lib/exports';
-import { getProfileRole, listProfilesWithNames } from '@/lib/data/profiles';
+import { getProfileAdminRole, listProfilesWithNames } from '@/lib/data/profiles';
+import { puedeEscribirAdmin, puedeLeerAdmin, type RolAdmin } from '@/shared/domain/acceso-admin';
 import { listAllReceiptsWithItems } from '@/lib/data/receipts';
 import { getCashBalance, getLoansWithDisbursement, type LoanWithBorrowerName } from '@/lib/data/loans';
 import {
@@ -103,7 +104,8 @@ type ProfileLite = {
 export default function LibroCajaPage() {
   const router = useRouter();
 
-  const [role, setRole] = useState<'admin' | 'accionista' | null>(null);
+  const [role, setRole] = useState<RolAdmin | null>(null);
+  const soloLectura = !puedeEscribirAdmin(role);
   const [loading, setLoading] = useState(true);
   const [receipts, setReceipts] = useState<ReceiptRow[]>([]);
   const [profiles, setProfiles] = useState<ProfileLite[]>([]);
@@ -181,10 +183,10 @@ export default function LibroCajaPage() {
         return;
       }
 
-      const userRole = await getProfileRole(supabase, user.id);
+      const userRole = await getProfileAdminRole(supabase, user.id);
       if (cancelled) return;
 
-      if (userRole !== 'admin') {
+      if (!puedeLeerAdmin(userRole)) {
         router.replace('/dashboard/accionista');
         return;
       }
@@ -601,7 +603,7 @@ export default function LibroCajaPage() {
 
   // ===== Render =====
 
-  if (loading || role !== 'admin') {
+  if (loading || !puedeLeerAdmin(role)) {
     return (
       <div className="animate-pulse text-[var(--color-text-subtle)] text-sm">
         Cargando…
@@ -808,7 +810,7 @@ export default function LibroCajaPage() {
       </Card>
 
       {/* Barra de Aprobación Masiva */}
-      {(status === 'pending' || status === 'all') && (
+      {!soloLectura && (status === 'pending' || status === 'all') && (
         <Card padding="md" className="bg-[var(--color-brand-soft)]/30 border-[var(--color-brand)]/20">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-3">
@@ -1023,7 +1025,7 @@ export default function LibroCajaPage() {
             return (
               <Card key={m.id} padding="none" className="overflow-hidden">
                 <div className="flex items-center gap-4 px-5 py-4">
-                  {r.status === 'pending' && (
+                  {!soloLectura && r.status === 'pending' && (
                     <input
                       type="checkbox"
                       checked={selectedIds.includes(r.id)}
@@ -1079,7 +1081,7 @@ export default function LibroCajaPage() {
                   {/* Acciones rápidas en estado pending — solo desktop. En
                       mobile se accede expandiendo el recibo (los botones
                       grandes ya viven dentro del panel expandido). */}
-                  {r.status === 'pending' && (
+                  {!soloLectura && r.status === 'pending' && (
                     <div className="hidden md:flex items-center gap-1.5 shrink-0">
                       <Button
                         variant="success"
@@ -1263,7 +1265,7 @@ export default function LibroCajaPage() {
                           Ver comprobante
                         </Button>
                       )}
-                      {r.status === 'pending' && (
+                      {!soloLectura && r.status === 'pending' && (
                         <>
                           <Button
                             variant="success"

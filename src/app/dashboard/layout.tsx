@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { getCurrentUser } from '@/lib/current-user';
 import {
   Home,
   FileText,
@@ -24,7 +25,9 @@ import { ToastContainer } from '@/components/ui/Toast';
 import { TopNav } from '@/components/ui/TopNav';
 import { Logo } from '@/components/ui/Logo';
 import { Avatar } from '@/components/ui/Avatar';
-import { getProfile, getProfileRole } from '@/lib/data/profiles';
+import { getProfile, getProfileAdminRole, getProfileRole } from '@/lib/data/profiles';
+import { esRutaAdmin, puedeEscribirAdmin, puedeLeerAdmin, type RolAdmin } from '@/shared/domain/acceso-admin';
+import { AccesoAdminProvider } from './AccesoAdminContext';
 import { countPendingMembershipRequests } from '@/lib/data/membership-requests';
 import {
   countPendingReceipts,
@@ -51,6 +54,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const pathname = usePathname();
   const router = useRouter();
   const [role, setRole] = useState<'admin' | 'accionista' | null>(null);
+  const [adminRole, setAdminRole] = useState<RolAdmin | null>(null);
   const [user, setUser] = useState<DashboardUser>({ first: '', last: '' });
   const [pendingCount, setPendingCount] = useState<number>(0);
   const [pendingReceipts, setPendingReceipts] = useState<number>(0);
@@ -190,22 +194,32 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     };
 
     (async () => {
-      const { data } = await supabase.auth.getUser();
-      if (!data.user || cancelled) return;
+      let currentUser;
+      try {
+        currentUser = await getCurrentUser(supabase);
+      } catch (err) {
+        console.error('Error leyendo la sesión:', err);
+        return;
+      }
+      if (!currentUser || cancelled) return;
 
-      const [currentRole, profile] = await Promise.all([
-        getProfileRole(supabase, data.user.id),
-        getProfile(supabase, data.user.id).catch(() => null),
+      const [currentRole, currentAdminRole, profile] = await Promise.all([
+        getProfileRole(supabase, currentUser.id),
+        getProfileAdminRole(supabase, currentUser.id),
+        getProfile(supabase, currentUser.id).catch(() => null),
       ]);
       if (cancelled) return;
 
       setRole(currentRole);
+      setAdminRole(currentAdminRole);
       setUser({
         first: profile?.first_name ?? '',
         last: profile?.last_name ?? '',
       });
 
-      if (currentRole === 'admin') {
+      const cleanups: Array<() => void> = [];
+
+      if (puedeLeerAdmin(currentAdminRole)) {
         // Suscripciones a contadores pendientes — un único canal con varios
         // listeners para no abrir 3 websockets distintos.
         fetchPendingCount();
@@ -233,12 +247,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             () => fetchPendingLoans(),
           )
           .subscribe();
-        cleanupRef.current = () => supabase.removeChannel(channel);
-      } else {
+        cleanups.push(() => supabase.removeChannel(channel));
+      }
+
+      // Every user is a shareholder, administrators included.
+      const subscribeShareholderCounts = () => {
         // Accionista: contadores de cosas que requieren su acción —
         // préstamos esperando su voto y recibos rechazados (deben editar
         // y reenviar). Suscribimos a loans, loan_votes y receipts.
-        const uid = data.user.id;
+        const uid = currentUser.id;
         const fetchPendingVotes = async () => {
           try {
             const n = await countLoansAwaitingMyVote(supabase, uid);
@@ -322,8 +339,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             },
           )
           .subscribe();
-        cleanupRef.current = () => supabase.removeChannel(channel);
-      }
+        cleanups.push(() => supabase.removeChannel(channel));
+      };
+      subscribeShareholderCounts();
+      cleanupRef.current = () => cleanups.forEach((cleanup) => cleanup());
     })();
 
     return () => {
@@ -382,7 +401,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       href: '/dashboard/admin/resumen',
       icon: TrendingUp,
     },
-    { key: 'ajustes', label: 'Ajustes', href: '/dashboard/ajustes', icon: Settings },
   ];
 
   const accionistaNav: NavItem[] = [
@@ -419,9 +437,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   // profile no existe (posible inconsistencia de DB), tratamos al usuario
   // como accionista. El acceso admin se protege en el servidor con
   // requireAdmin(), así que este default nunca concede permisos reales.
-  const isAdmin = role === 'admin';
-  const nav = isAdmin ? adminNav : accionistaNav;
-  const roleLabel = isAdmin ? 'Administrador' : 'Accionista';
+  const isAdmin = puedeLeerAdmin(adminRole);
+  const navSections = [
+    { title: 'Mi cuenta', items: accionistaNav },
+    ...(isAdmin ? [{ title: 'Administración', items: adminNav }] : []),
+  ];
+  const roleLabel = adminRole === 'tesorero' ? 'Tesorero' : adminRole === 'gerente' ? 'Gerente' : 'Accionista';
   const brandSubtitle = isAdmin ? 'Consola admin' : 'Mi cuenta';
 
   const handleLogout = async () => {
@@ -432,8 +453,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   // Items del dropdown de notificaciones del header. Cambian según el role.
   // El total y el filtrado por count > 0 lo hace TopNav.
   const buildNotifications = (): TopNavNotificationItem[] => {
-    if (isAdmin) {
-      return [
+    // The gerente's own pending items (signatures) arrive with phase 1b.
+    const adminItems: TopNavNotificationItem[] = puedeEscribirAdmin(adminRole)
+      ? [
         {
           key: 'membership',
           label: 'Solicitudes de ingreso',
@@ -462,9 +484,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           href: '/dashboard/admin/prestamos',
           icon: Landmark,
         },
-      ];
-    }
+      ]
+      : [];
     return [
+      ...adminItems,
       {
         key: 'votes',
         label: 'Préstamos esperando tu voto',
@@ -552,29 +575,33 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </div>
 
         {/* Nav section */}
-        <nav className="flex flex-col gap-0.5 mt-1.5">
-          <div className="text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-[0.12em] uppercase px-3 pt-3 pb-2">
-            Principal
-          </div>
-          {nav.map((item) => {
-            const active =
-              item.href === pathname ||
-              (item.key !== 'home' && pathname.startsWith(item.href));
-            return (
-              <NavItem
-                key={item.key}
-                href={item.href}
-                label={item.label}
-                icon={item.icon}
-                badge={item.badge}
-                active={active}
-              />
-            );
-          })}
+        <nav className="flex flex-col gap-0.5 mt-1.5 min-h-0 overflow-y-auto">
+          {navSections.map((section) => (
+            <React.Fragment key={section.title}>
+              <div className="text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-[0.12em] uppercase px-3 pt-3 pb-2">
+                {section.title}
+              </div>
+              {section.items.map((item) => {
+                const active =
+                  item.href === pathname ||
+                  (item.key !== 'home' && pathname.startsWith(item.href));
+                return (
+                  <NavItem
+                    key={item.key}
+                    href={item.href}
+                    label={item.label}
+                    icon={item.icon}
+                    badge={item.badge}
+                    active={active}
+                  />
+                );
+              })}
+            </React.Fragment>
+          ))}
         </nav>
 
         {/* Admin: fund snapshot pill (Utilidades de intereses cobrados) */}
-        {role === 'admin' && (
+        {isAdmin && (
           <div className="mt-auto mx-1.5 mb-3 p-3.5 rounded-[12px] bg-[var(--color-surface-alt)] dark:bg-[var(--color-surface)] border border-[var(--color-border)]">
             <div className="flex items-center gap-2 mb-2.5">
               <span
@@ -605,7 +632,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         {/* User card (bottom) */}
         <div
           className={`${
-            role === 'admin' ? '' : 'mt-auto'
+            isAdmin ? '' : 'mt-auto'
           } flex items-center gap-2.5 px-2 py-2.5 border-t border-[var(--color-border)]`}
         >
           <Avatar name={user.first || '?'} size={32} />
@@ -637,7 +664,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         />
         <div className="flex-1 overflow-y-auto">
           <div className="max-w-[1440px] mx-auto px-4 md:px-5 lg:px-6 py-5 md:py-6 lg:py-7">
-            {children}
+            {adminRole === 'gerente' && esRutaAdmin(pathname) && (
+              <div
+                role="status"
+                className="mb-5 px-4 py-2.5 rounded-[10px] bg-[var(--color-info-soft)] border border-[var(--color-border)] text-[13px] font-semibold"
+              >
+                Modo lectura: como gerente puedes ver esta información, pero no modificarla.
+              </div>
+            )}
+            <AccesoAdminProvider value={adminRole}>{children}</AccesoAdminProvider>
           </div>
         </div>
       </main>

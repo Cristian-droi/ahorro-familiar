@@ -37,7 +37,7 @@ Como **todo usuario es accionista** y algunos además administran, el menú deja
 │   Auditoría              │
 │   Periodo                │
 └──────────────────────────┘
-(T) = solo tesorero; el gerente lo ve en modo lectura o no lo ve.
+(T) = solo tesorero escribe; el gerente lo ve en modo lectura (decisión de Cris, 2026-11-06).
 ```
 
 - **Celular:** barra inferior con las 4 entradas principales de "Mi cuenta" (Mi capital, Comprar, Préstamos, Más). La sección de administración se abre desde "Más".

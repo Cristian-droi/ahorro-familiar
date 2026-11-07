@@ -12,6 +12,30 @@ const ADMIN_CLIENT = {
   message: "The Supabase admin client only belongs in src/modules/*/infra (docs/convenciones.md, rule 4).",
 };
 
+// Files that still import the admin client directly. Each one leaves this list
+// when it moves to a use case; nothing new gets in. Brackets are escaped because
+// these are glob patterns.
+export const LEGACY_ADMIN_CLIENT_FILES = [
+  "src/app/verify-email-change/page.tsx",
+  "src/app/api/password-reset/route.ts",
+  "src/app/api/profile/request-email-change/route.ts",
+  "src/app/api/solicitudes/approve/route.ts",
+  "src/app/api/solicitudes/reject/route.ts",
+  "src/app/api/solicitudes/resend/route.ts",
+  "src/app/api/receipts/route.ts",
+  "src/app/api/receipts/\\[id\\]/approve/route.ts",
+  "src/app/api/receipts/\\[id\\]/reject/route.ts",
+  "src/app/api/receipts/\\[id\\]/resubmit/route.ts",
+  "src/app/api/prestamos/route.ts",
+  "src/app/api/prestamos/\\[id\\]/route.ts",
+  "src/app/api/prestamos/\\[id\\]/disburse/route.ts",
+  "src/app/api/prestamos/\\[id\\]/review/route.ts",
+  "src/app/api/prestamos/\\[id\\]/send-to-vote/route.ts",
+  "src/app/api/prestamos/\\[id\\]/submit/route.ts",
+  "src/app/api/prestamos/\\[id\\]/toggle-upfront-shares/route.ts",
+  "src/app/api/prestamos/\\[id\\]/vote/route.ts",
+];
+
 const FRAMEWORKS_AND_IO = [
   { group: ["@supabase/*"], message: "Domain and application cannot import Supabase. Use a port implemented in infra." },
   { group: ["next", "next/*"], message: "Domain and application cannot import Next.js." },
@@ -36,10 +60,18 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
   ]),
 
-  // Admin client: warning in legacy code until S4 moves writes to use cases.
+  // Admin client: only module infra may import it.
   {
     files: ["src/**/*.{ts,tsx,js,jsx,mjs}"],
     ignores: ["src/modules/*/infra/**", "src/lib/supabase/admin.ts"],
+    rules: {
+      "no-restricted-imports": ["error", { patterns: [ADMIN_CLIENT] }],
+    },
+  },
+
+  // Temporary exception for the legacy files.
+  {
+    files: LEGACY_ADMIN_CLIENT_FILES,
     rules: {
       "no-restricted-imports": ["warn", { patterns: [ADMIN_CLIENT] }],
     },

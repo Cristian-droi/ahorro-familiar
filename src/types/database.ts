@@ -9,6 +9,53 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
+      audit_log: {
+        Row: {
+          action: string
+          actor_id: string
+          after: Json | null
+          before: Json | null
+          created_at: string
+          entity: string
+          entity_id: string | null
+          id: number
+          is_self_action: boolean
+          reason: string | null
+        }
+        Insert: {
+          action: string
+          actor_id: string
+          after?: Json | null
+          before?: Json | null
+          created_at?: string
+          entity: string
+          entity_id?: string | null
+          id?: never
+          is_self_action?: boolean
+          reason?: string | null
+        }
+        Update: {
+          action?: string
+          actor_id?: string
+          after?: Json | null
+          before?: Json | null
+          created_at?: string
+          entity?: string
+          entity_id?: string | null
+          id?: never
+          is_self_action?: boolean
+          reason?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_log_actor_id_fkey"
+            columns: ["actor_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       bank_accounts: {
         Row: {
           account_number: string
@@ -451,6 +498,7 @@ export type Database = {
       profiles: {
         Row: {
           address: string | null
+          admin_role: Database["public"]["Enums"]["admin_role"] | null
           bank_account_number: string | null
           bank_account_type:
             | Database["public"]["Enums"]["bank_account_type"]
@@ -469,6 +517,7 @@ export type Database = {
         }
         Insert: {
           address?: string | null
+          admin_role?: Database["public"]["Enums"]["admin_role"] | null
           bank_account_number?: string | null
           bank_account_type?:
             | Database["public"]["Enums"]["bank_account_type"]
@@ -487,6 +536,7 @@ export type Database = {
         }
         Update: {
           address?: string | null
+          admin_role?: Database["public"]["Enums"]["admin_role"] | null
           bank_account_number?: string | null
           bank_account_type?:
             | Database["public"]["Enums"]["bank_account_type"]
@@ -654,6 +704,22 @@ export type Database = {
         Args: { p_allow: boolean; p_profile_id: string }
         Returns: boolean
       }
+      apply_audited_settings: {
+        Args: { p_actor: string; p_rows: Json }
+        Returns: undefined
+      }
+      apply_audited_update: {
+        Args: {
+          p_action: string
+          p_actor: string
+          p_entity: string
+          p_expected_status: string
+          p_id: string
+          p_patch: Json
+          p_reason?: string
+        }
+        Returns: undefined
+      }
       choose_share_value: { Args: { p_share_value: number }; Returns: number }
       close_capitalization_window: { Args: never; Returns: Json }
       close_capitalization_window_v2: {
@@ -689,7 +755,14 @@ export type Database = {
         }[]
       }
       get_cash_balance: { Args: never; Returns: number }
-      get_loan_interest_owed: { Args: { p_loan_id: string }; Returns: number }
+      get_loan_vote_totals: {
+        Args: { p_loan_ids: string[] }
+        Returns: {
+          approved: number
+          loan_id: string
+          rejected: number
+        }[]
+      }
       get_my_capitalization_state: { Args: never; Returns: Json }
       get_my_pending_loan_share_purchases: {
         Args: never
@@ -734,6 +807,7 @@ export type Database = {
           utilities_pool: number
         }[]
       }
+      has_admin_role: { Args: never; Returns: boolean }
       has_share_receipts_in_period: {
         Args: { p_period_id: string; p_profile_id: string }
         Returns: boolean
@@ -753,8 +827,18 @@ export type Database = {
         }
         Returns: string
       }
+      resubmit_receipt: {
+        Args: {
+          p_actor: string
+          p_items: Json
+          p_patch: Json
+          p_receipt_id: string
+        }
+        Returns: undefined
+      }
     }
     Enums: {
+      admin_role: "gerente" | "tesorero"
       bank_account_type: "ahorros" | "corriente"
       loan_status:
         | "draft"
@@ -907,6 +991,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
+      admin_role: ["gerente", "tesorero"],
       bank_account_type: ["ahorros", "corriente"],
       loan_status: [
         "draft",

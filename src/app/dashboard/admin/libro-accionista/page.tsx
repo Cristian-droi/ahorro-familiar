@@ -22,7 +22,8 @@ import { Badge } from '@/components/ui/Badge';
 import { Avatar } from '@/components/ui/Avatar';
 import { showToast } from '@/components/ui/Toast';
 import { BookUser, ArrowRight, ChevronDown, ChevronUp, Search } from 'lucide-react';
-import { getProfileRole } from '@/lib/data/profiles';
+import { getProfileAdminRole } from '@/lib/data/profiles';
+import { puedeLeerAdmin, type RolAdmin } from '@/shared/domain/acceso-admin';
 import {
   getLibroAccionistaData,
   type LibroAccionistaEntry,
@@ -107,7 +108,7 @@ function computeBookedEntries(entries: LibroAccionistaEntry[], ajustes: AjustesD
 export default function LibroAccionistaPage() {
   const router = useRouter();
 
-  const [role, setRole] = useState<'admin' | 'accionista' | null>(null);
+  const [role, setRole] = useState<RolAdmin | null>(null);
   const [loading, setLoading] = useState(true);
   const [entries, setEntries] = useState<BookedEntry[]>([]);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
@@ -151,9 +152,9 @@ export default function LibroAccionistaPage() {
         router.replace('/login');
         return;
       }
-      const userRole = await getProfileRole(supabase, user.id);
+      const userRole = await getProfileAdminRole(supabase, user.id);
       if (cancelled) return;
-      if (userRole !== 'admin') {
+      if (!puedeLeerAdmin(userRole)) {
         router.replace('/dashboard/accionista');
         return;
       }
@@ -202,7 +203,7 @@ export default function LibroAccionistaPage() {
     });
   };
 
-  if (loading || role !== 'admin') {
+  if (loading || !puedeLeerAdmin(role)) {
     return (
       <div className="animate-pulse text-[var(--color-text-subtle)] text-sm">
         Cargando…

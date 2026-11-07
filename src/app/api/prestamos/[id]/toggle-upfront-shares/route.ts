@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/auth';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { toggleUpfrontSharesSchema } from '@/lib/schemas/loan';
+import { auditedUpdate, isStaleStatus } from '@/lib/audit';
 
 // PATCH /api/prestamos/[id]/toggle-upfront-shares
 // Admin puede cambiar si las acciones por préstamo se pagan por adelantado o se descuentan del desembolso.
@@ -38,14 +39,21 @@ export async function PATCH(
       return NextResponse.json({ error: 'Solo se puede modificar esta opción cuando el préstamo está listo para desembolso' }, { status: 409 });
     }
 
-    const { error: updateError } = await admin
-      .from('loans')
-      .update({
+    const { error: updateError } = await auditedUpdate(admin, {
+      entity: 'loans',
+      id,
+      patch: {
         loan_shares_paid_upfront: parsed.data.loan_shares_paid_upfront,
         updated_at: new Date().toISOString(),
-      })
-      .eq('id', id);
+      },
+      actorId: authCheck.user.id,
+      action: 'loan.toggle_upfront_shares',
+      expectedStatus: 'pending_disbursement',
+    });
 
+    if (isStaleStatus(updateError)) {
+      return NextResponse.json({ error: 'Otra persona ya cambió este préstamo.' }, { status: 409 });
+    }
     if (updateError) {
       return NextResponse.json({ error: 'No se pudo actualizar la opción' }, { status: 500 });
     }

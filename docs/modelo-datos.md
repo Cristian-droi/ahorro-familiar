@@ -106,8 +106,8 @@ erDiagram
 
 | Enum | Valores | Estado |
 |---|---|---|
-| `user_role` | admin, accionista | 🔴 Lo reemplaza `admin_role` |
-| `admin_role` | gerente, tesorero | 🔵 |
+| `user_role` | admin, accionista | 🔴 Lo reemplaza `admin_role`; hoy solo decide votantes y utilidades |
+| `admin_role` | gerente, tesorero | 🟢 |
 | `period_status` | open, closing, closed | 🔵 |
 | `request_status` | pending, approved, rejected | 🟢 |
 | `receipt_status` | pending, approved, rejected, **voided** | 🟡 se agrega `voided` |
@@ -129,7 +129,7 @@ erDiagram
 
 **`profiles`** 🟡
 - Se mantiene: `id` (FK a `auth.users`), `first_name`, `last_name`, `identity_document` (UK), `phone`, `address`, `monthly_income`, datos bancarios, `created_at` y `updated_at`.
-- 🔵 `admin_role admin_role null`: null significa solo accionista.
+- 🟢 `admin_role admin_role null`: null significa solo accionista. Es la única fuente de autorización administrativa.
 - 🔵 `is_active bool not null default true`: lo usan la votación y las utilidades.
 - 🔴 `role`: migra a `admin_role` (admin pasa a tesorero).
 - 🔴 `selected_share_value`, `share_value_change_allowed` y `next_year_capitalization`: pasan a `period_memberships`.
@@ -224,7 +224,7 @@ erDiagram
 
 ### 4.9 Control 🔵
 
-**`audit_log`** (RN-9)
+**`audit_log`** 🟢 (RN-9). Se escribe con `apply_audited_update`, `apply_audited_settings`, `allow_share_value_change` y `resubmit_receipt`.
 - `id bigint generated always as identity PK`.
 - `actor_id` (FK a `profiles`), `action text not null` (por ejemplo `loan.disburse`), `entity text not null`, `entity_id uuid`.
 - `before jsonb`, `after jsonb`, `reason text`.
@@ -245,7 +245,7 @@ erDiagram
 ## 5. Funciones SQL
 
 ### 5.1 Se mantienen (persistencia y validación) 🟢
-- `is_admin()` 🟡 → pasa a `has_admin_role(role)`, `is_treasurer()` e `is_manager()`.
+- `is_admin()` 🟢: significa tesorero, para escribir. `has_admin_role()` 🟢: gerente o tesorero, para leer. `is_manager()` llega con la doble firma (fase 1b).
 - `set_updated_at`, `assign_receipt_number`, `assign_loan_number`, `assign_disbursement_number` (pasa a `cash_outflows`).
 - `validate_receipt_item_target_month`, `enforce_max_shares_per_month`, `recompute_receipt_total`, `validate_receipt_item_capitalization`, `validate_receipt_item_loan_payment`.
 - `open_capitalization_window_v2` y `close_capitalization_window_v2`.
@@ -256,7 +256,7 @@ Hoy **calculan reglas de negocio en SQL**. Se reemplazan por consultas que **tra
 
 | Función actual | Regla | Destino |
 |---|---|---|
-| `get_user_active_loans_debt`, `get_loan_interest_owed` | Intereses (RN-4.18 a 4.22) | `prestamos/domain` |
+| `get_user_active_loans_debt` | Intereses (RN-4.18 a 4.22) | `prestamos/domain` |
 | `get_my_utilities_by_year`, `get_user_utilities_by_year`, `get_all_users_utilities_by_year` | Utilidades (RN-6) | `utilidades/domain` |
 | `get_cash_balance` | Saldo de caja | `caja/domain`, con `cash_outflows` |
 | `get_my_capitalization_state`, `get_capitalization_windows_admin` | Cupo de capitalización | `utilidades/domain` o `periodos/domain`. Además, **no debe mutar datos dentro de una consulta**. |
@@ -286,7 +286,7 @@ Reciben los valores **ya calculados por el dominio**, validan invariantes, escri
 | Los *default privileges* dan CRUD a `authenticated` sobre las tablas futuras | Revocar. Permisos explícitos por tabla. |
 | `loans_update_own_draft` permite editar cualquier columna (incluida la tasa) | El borrador se edita por caso de uso. RLS de UPDATE solo para el servidor. |
 | `loan_payment_plan_items`: el dueño puede escribir en borrador | Igual que el anterior: escritura solo desde el servidor |
-| `get_loan_interest_owed` no valida el dueño | Se elimina (sección 5.2) |
+| `get_loan_interest_owed` no validaba el dueño | Eliminada en la S4 (F19); el interés lo calcula `prestamos/domain` |
 | `admin` como único rol | `is_treasurer()` para escribir e `is_manager() OR is_treasurer()` para leer todo |
 
 **Regla general de RLS para las tablas de dinero** (`receipts`, `receipt_items`, `loans`, `cash_outflows`, `expenses`, `audit_log`, `approvals`):

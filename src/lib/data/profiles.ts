@@ -32,6 +32,21 @@ export async function getProfileRole(
   return data?.role ?? null;
 }
 
+// Authoritative administrative role. Null means shareholder only.
+export async function getProfileAdminRole(
+  client: TypedSupabaseClient,
+  id: string,
+): Promise<'gerente' | 'tesorero' | null> {
+  const { data, error } = await client
+    .from('profiles')
+    .select('admin_role')
+    .eq('id', id)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data?.admin_role ?? null;
+}
+
 export async function getProfileByDocument(
   client: TypedSupabaseClient,
   identityDocument: string,

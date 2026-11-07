@@ -84,6 +84,7 @@ const { error: profileErr } = await admin.from('profiles').upsert(
     last_name: lastName,
     identity_document: document,
     role: 'admin',
+    admin_role: 'tesorero',
   },
   { onConflict: 'id' },
 );

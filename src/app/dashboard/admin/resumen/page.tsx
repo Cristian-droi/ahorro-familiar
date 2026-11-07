@@ -3,7 +3,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase/client';
-import { getProfileRole } from '@/lib/data/profiles';
+import { getProfileAdminRole } from '@/lib/data/profiles';
+import { puedeLeerAdmin, type RolAdmin } from '@/shared/domain/acceso-admin';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { showToast } from '@/components/ui/Toast';
@@ -64,7 +65,7 @@ interface ShareholderRow {
 
 export default function AdminResumenPage() {
   const router = useRouter();
-  const [role, setRole] = useState<'admin' | 'accionista' | null>(null);
+  const [role, setRole] = useState<RolAdmin | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
   const [shareholders, setShareholders] = useState<ShareholderRow[]>([]);
@@ -323,9 +324,9 @@ export default function AdminResumenPage() {
         router.replace('/login');
         return;
       }
-      const userRole = await getProfileRole(supabase, user.id);
+      const userRole = await getProfileAdminRole(supabase, user.id);
       if (cancelled) return;
-      if (userRole !== 'admin') {
+      if (!puedeLeerAdmin(userRole)) {
         router.replace('/dashboard/accionista');
         return;
       }

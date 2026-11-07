@@ -13,6 +13,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { getCurrentUser } from '@/lib/current-user';
 import { Avatar } from '@/components/ui/Avatar';
 import { useTheme } from '@/lib/theme';
 import { getProfile } from '@/lib/data/profiles';
@@ -51,10 +52,10 @@ export function TopNav({ notifications, onToggleSidebar, sidebarOpen }: TopNavPr
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const { data } = await supabase.auth.getUser();
-      if (!data.user || cancelled) return;
       try {
-        const profile = await getProfile(supabase, data.user.id);
+        const user = await getCurrentUser(supabase);
+        if (!user || cancelled) return;
+        const profile = await getProfile(supabase, user.id);
         if (!cancelled && profile?.first_name) setFirstName(profile.first_name);
       } catch {
         /* ignore */

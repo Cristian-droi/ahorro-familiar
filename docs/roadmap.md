@@ -22,8 +22,8 @@
 | **S0** | 14–18 oct | Diseño y modelo: AppFlow, Design Brief, Backend Schema, orden del repositorio y merge a `master` | ~10 | ✅ |
 | **S1** | 19–25 oct | **Cimientos:** Supabase local, migraciones reproducibles, seguridad base, `shared/domain` | 8 | ✅ |
 | **S2** | 26 oct – 1 nov | **Dominio I (TDD):** acciones, multas y cálculos de préstamos | 8 | ✅ |
-| **S3** | 2–8 nov | **Dominio II (TDD):** votación, aplicación de pagos y migración de `src/lib` al dominio | 8 | |
-| **S4** | 9–15 nov | **Seguridad:** roles nuevos, bloqueo de escrituras con RLS y `audit_log` | 8 | |
+| **S3** | 2–8 nov | **Dominio II (TDD):** votación, aplicación de pagos y migración de `src/lib` al dominio | 8 | ✅ |
+| **S4** | 9–15 nov | **Seguridad:** roles nuevos, bloqueo de escrituras con RLS y `audit_log` | 8 | 🟡 Rama lista; faltan PR y nube |
 | **S5** | 16–22 nov | **Préstamos:** desembolso atómico y flujo de pago en la UI | 8 | |
 | **S6** | 23–29 nov | **Utilidades:** cálculo en el dominio, más extracto y panel servidos desde el servidor | 8 | |
 | **S7** | 30 nov – 6 dic | **Arranque 2027:** importación validada de saldos y despliegue | 8 | |
@@ -65,11 +65,11 @@
 - [x] Periodos y valor de acción por periodo (RN-2.2).
 
 ### S4 · Seguridad (9–15 nov)
-- [ ] `profiles.admin_role` (`gerente` o `tesorero`) y ajuste de `src/proxy.ts` y del menú en dos secciones.
-- [ ] RLS: escrituras de dinero solo desde el servidor. Corregir `loans_update_own_draft`.
-- [ ] Restricción en la base: saldo e intereses de préstamos nunca negativos (RN-4.29).
-- [ ] `audit_log` inmutable, escrita por los casos de uso.
-- [ ] Subir a **error** la regla de ESLint del cliente admin fuera de `infra` (hoy es warning por el código legado).
+- [x] `profiles.admin_role` (`gerente` o `tesorero`) y ajuste de `src/proxy.ts` y del menú en dos secciones.
+- [x] RLS: escrituras de dinero solo desde el servidor. Corregir `loans_update_own_draft`.
+- [x] Restricción en la base: saldo e intereses de préstamos nunca negativos (RN-4.29). Falta rechazar el sobrepago de intereses (F10 en `odd/tasks/s4-seguridad.md`).
+- [x] `audit_log` inmutable, escrita por los casos de uso. El desembolso entra en la S5.
+- [x] Subir a **error** la regla de ESLint del cliente admin fuera de `infra`, con excepción temporal para 18 archivos viejos.
 
 ### S5 · Préstamos (16–22 nov)
 - [ ] RPC `desembolsar_prestamo` atómica, con `cash_outflows` (CE) y bloqueo de acciones por adelantado.
