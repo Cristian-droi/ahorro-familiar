@@ -48,7 +48,7 @@ El CLI de Supabase es el global de scoop (2.90.0). `npx supabase` baja la 3.0.0,
 
 ## Estado actual (2026-11-06)
 
-- El trabajo nuevo va en ramas `tipo/descripcion` con PR. La S1 (cimientos) se mergeó el 2026-10-25 (PR #3), la S2 (dominio I) el 2026-10-26 (PR #5) y la S3 (dominio II) el 2026-11-05 (PR #7). La S4 (seguridad) está en la rama `feat/s4-seguridad`, con el PR #9 abierto y ya aplicada en la nube, que se reinició desde cero el 2026-11-06; su estado y pendientes están en `odd/tasks/s4-seguridad.md`.
+- El trabajo nuevo va en ramas `tipo/descripcion` con PR. La S1 (cimientos) se mergeó el 2026-10-25 (PR #3), la S2 (dominio I) el 2026-10-26 (PR #5), la S3 (dominio II) el 2026-11-05 (PR #7) y la S4 (seguridad) el 2026-11-06 (PR #9). La nube de pruebas se reinició desde cero ese día y tiene todas las migraciones, con un tesorero de prueba creado a mano; los pendientes de la S4 están en `odd/tasks/s4-seguridad.md`.
 - **Supabase local:** `supabase start` aplica todas las migraciones desde cero. Los tipos se generan desde local con `npm run gen:types`.
 - **Ya existen** `src/shared/domain` (`fechas.ts`, `result.ts`) y `src/modules/` con el dominio de acciones, préstamos, pagos y parámetros. Los cálculos de dinero de préstamos, multas y obligaciones ya salen del dominio; `src/lib/` queda como adaptador.
 - **GGA** revisa cada commit con las reglas de `REVIEW.md`. En Windows necesita la variable `CLAUDE_CODE_GIT_BASH_PATH`.
