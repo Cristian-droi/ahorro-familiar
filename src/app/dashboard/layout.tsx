@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { getCurrentUser } from '@/lib/current-user';
 import {
   Home,
   FileText,
@@ -193,13 +194,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     };
 
     (async () => {
-      const { data } = await supabase.auth.getUser();
-      if (!data.user || cancelled) return;
+      let currentUser;
+      try {
+        currentUser = await getCurrentUser(supabase);
+      } catch (err) {
+        console.error('Error leyendo la sesión:', err);
+        return;
+      }
+      if (!currentUser || cancelled) return;
 
       const [currentRole, currentAdminRole, profile] = await Promise.all([
-        getProfileRole(supabase, data.user.id),
-        getProfileAdminRole(supabase, data.user.id),
-        getProfile(supabase, data.user.id).catch(() => null),
+        getProfileRole(supabase, currentUser.id),
+        getProfileAdminRole(supabase, currentUser.id),
+        getProfile(supabase, currentUser.id).catch(() => null),
       ]);
       if (cancelled) return;
 
@@ -248,7 +255,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         // Accionista: contadores de cosas que requieren su acción —
         // préstamos esperando su voto y recibos rechazados (deben editar
         // y reenviar). Suscribimos a loans, loan_votes y receipts.
-        const uid = data.user.id;
+        const uid = currentUser.id;
         const fetchPendingVotes = async () => {
           try {
             const n = await countLoansAwaitingMyVote(supabase, uid);

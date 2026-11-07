@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { getCurrentUser } from '@/lib/current-user';
 import { useAccesoAdmin } from '@/app/dashboard/AccesoAdminContext';
 import { puedeLeerAdmin } from '@/shared/domain/acceso-admin';
 import { Card } from '@/components/ui/Card';
@@ -111,6 +112,7 @@ export default function AjustesPage() {
   const userPanelDisabled = !canEditShare;
 
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
 
   // Datos personales (todos los usuarios). Guardamos dos copias: `profileForm`
@@ -294,9 +296,7 @@ export default function AjustesPage() {
     let cancelled = false;
 
     const init = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const user = await getCurrentUser(supabase);
       if (user && !cancelled) {
         setUserId(user.id);
 
@@ -453,7 +453,13 @@ export default function AjustesPage() {
       if (!cancelled) setLoading(false);
     };
 
-    init();
+    init().catch((err) => {
+      console.error('Error cargando ajustes:', err);
+      if (!cancelled) {
+        setLoadFailed(true);
+        setLoading(false);
+      }
+    });
 
     return () => {
       cancelled = true;
@@ -827,6 +833,18 @@ export default function AjustesPage() {
     return (
       <div className="p-8 text-center text-[var(--color-text-muted)] text-sm">
         Cargando ajustes...
+      </div>
+    );
+  }
+
+  // Without this, the form would show empty values as if they were the saved ones.
+  if (loadFailed) {
+    return (
+      <div className="p-8 text-center text-[var(--color-text-muted)] text-sm">
+        <p>No se pudieron cargar los ajustes.</p>
+        <button type="button" className="mt-3 underline" onClick={() => window.location.reload()}>
+          Reintentar
+        </button>
       </div>
     );
   }

@@ -544,6 +544,43 @@ select pg_temp.expect('audit: postgres cannot delete from it',
 select pg_temp.expect('audit: postgres cannot truncate it',
   pg_temp.attempt('postgres', null, 'truncate public.audit_log'), 'denied');
 
+-- F28: internal helpers are not callable from the API.
+select pg_temp.expect('shareholder cannot ask about another shareholder''s purchases',
+  pg_temp.attempt('authenticated', '00000000-0000-0000-0000-00000000000a',
+    $q$select public.has_share_receipts_in_period('00000000-0000-0000-0000-00000000000b', (select id from public.periods where status = 'open'))$q$), 'denied');
+select pg_temp.expect('shareholder cannot read the capitalization window helper',
+  pg_temp.attempt('authenticated', '00000000-0000-0000-0000-00000000000a',
+    $q$select public.get_capitalization_window_state()$q$), 'denied');
+select pg_temp.expect('service role keeps the purchases helper',
+  pg_temp.attempt('service_role', null,
+    $q$select public.has_share_receipts_in_period('00000000-0000-0000-0000-00000000000b', (select id from public.periods where status = 'open'))$q$), '1');
+
+-- F28: the flows that use those helpers keep working from a session.
+insert into public.system_settings (key, value) values ('allowed_share_values', '[10000, 25000]')
+  on conflict (key) do update set value = excluded.value;
+select pg_temp.expect('shareholder chooses a share value',
+  pg_temp.attempt('authenticated', '00000000-0000-0000-0000-00000000000b',
+    $q$select public.choose_share_value(10000)$q$), '1');
+select pg_temp.expect('tesorero enables a share value change',
+  pg_temp.attempt('authenticated', '00000000-0000-0000-0000-00000000000c',
+    $q$select public.allow_share_value_change('00000000-0000-0000-0000-00000000000b', true)$q$), '1');
+select pg_temp.expect('shareholder changes the share value through the trigger',
+  pg_temp.attempt('authenticated', '00000000-0000-0000-0000-00000000000b',
+    $q$select public.choose_share_value(25000)$q$), '1');
+select pg_temp.expect('new share value stored',
+  (select share_value::text from public.period_memberships
+    where profile_id = '00000000-0000-0000-0000-00000000000b'
+      and period_id = (select id from public.periods where status = 'open')), '25000');
+
+-- F28: every public function has a fixed search_path.
+select pg_temp.expect('no public function has a mutable search_path',
+  (select count(*)::text
+     from pg_proc p
+     join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.prokind = 'f'
+      and not exists (select 1 from unnest(coalesce(p.proconfig, '{}')) c where c like 'search_path=%')), '0');
+
 -- The server keeps its access.
 select pg_temp.expect('service role writes loans',
   pg_temp.attempt('service_role', null,
