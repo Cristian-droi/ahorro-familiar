@@ -56,6 +56,13 @@
     `multa_mes = MIN(días_de_mora × 500, 15.000)`, donde `días_de_mora` son los días desde el día 10 de ese mes hasta hoy.
   - Un mes pasado **sigue sumando** 500 por día hasta llegar al tope; no se cobran los 15.000 de una vez al terminar el mes. *Aclarado por Cris el 2026-10-27.*
 - **RN-3.5** Las multas **no se reparten** como utilidades. Ingresan a la caja del banco.
+- **RN-3.6** Un accionista que ingresa a mitad del periodo compra acciones, y paga multas, **desde el mes de ingreso**, que es el mes en que se aprueba su ingreso. Los meses anteriores no le generan obligación ni multa. *Validado con el gerente el 2026-11-07.*
+
+**Ejemplo:** el ingreso se aprueba el 5 de agosto, no compra nada y hoy es 20 de septiembre.
+- Enero a julio: nada.
+- Agosto: 41 días de mora, con tope: **15.000**.
+- Septiembre: (20 − 10) × 500 = **5.000**.
+- **Multa total: 20.000**, más las acciones de agosto y septiembre.
 
 **Ejemplo:** la última compra fue en julio y hoy es 20 de septiembre.
 - Agosto: 41 días de mora (del 10 de agosto al 20 de septiembre) × 500 = 20.500, con tope: **15.000**.
@@ -256,8 +263,8 @@ En diciembre las utilidades llegan a 10.000.000, pero el gasto **sigue siendo 20
   - Una vez elegida queda **reservada**: no se puede usar para pagar deudas y pasa obligatoriamente al periodo siguiente.
   - Ese fondo financia los préstamos a plazo extendido (RN-4.3).
 - **RN-8.5** **Deuda trasladada a voluntad:** solo **después de saldar los intereses**, el accionista puede elegir trasladar parte de su capital adeudado al periodo siguiente y recibir el resto de sus aportes.
-- 🟡 **RN-8.6** **Si la reserva voluntaria deja sin cubrir los intereses de diciembre**, el accionista paga los intereses de su bolsillo y la reserva no se toca. *Validar con el gerente.*
-  - **Caso para el gerente:** en junio Juan tiene 2.000.000 en aportes, la retención es de 600.000 y reserva 1.400.000. En agosto pide un préstamo grande y deja de pagar intereses. En diciembre debe 200.000 de intereses y no le alcanzan los aportes.
+- **RN-8.6** **Si la reserva voluntaria deja sin cubrir los intereses de diciembre**, el accionista paga los intereses de su bolsillo y la reserva no se toca. *Validado con el gerente el 2026-11-07.*
+  - **Ejemplo:** en junio Juan tiene 2.000.000 en aportes, la retención es de 600.000 y reserva 1.400.000. En agosto pide un préstamo grande y deja de pagar intereses. En diciembre debe 200.000 de intereses y no le alcanzan los aportes: los paga de su bolsillo, y los 1.400.000 reservados pasan completos al periodo siguiente.
 - **RN-8.7** La **devolución** se registra como un CE por accionista, con el concepto **"Devolución de utilidades"** y el medio de pago (efectivo o transferencia, y a qué cuenta).
 - **RN-8.8** ✅ La **Deuda año anterior** se registra **automáticamente al liquidar**, como préstamo de enero del nuevo periodo. Sus condiciones:
   - **No exige acciones por préstamo** (RN-4.11).
@@ -295,7 +302,7 @@ En diciembre las utilidades llegan a 10.000.000, pero el gasto **sigue siendo 20
 - **RN-9.3** El registro de auditoría es **solo de agregar**: nunca se edita ni se borra.
 - **RN-9.4** ✅ **Conflicto de interés.** Cuando un administrador actúa sobre sus **propios** movimientos:
   - **Préstamos** (revisión y aprobación) **y desembolsos:** exigen **doble firma**, es decir, la aprobación del gerente.
-  - **Recibos** (acciones, multas, pagos): el administrador puede aprobarlos, pero quedan **marcados** en la auditoría y el gerente **recibe un aviso**.
+  - **Recibos** (acciones, multas, pagos): el administrador puede aprobarlos, pero quedan **marcados** en la auditoría y el gerente **recibe un aviso dentro de la app**. *Canal validado con el gerente el 2026-11-07.*
   - Todo queda en la auditoría de todas formas.
 
 ---
@@ -347,13 +354,14 @@ En diciembre las utilidades llegan a 10.000.000, pero el gasto **sigue siendo 20
 | 15 | RN-9 auditoría | `audit_log` existe desde la S4 para préstamos, recibos y ajustes | Falta el desembolso (S5), solicitudes y capitalizaciones; el aviso al gerente y la vista llegan después |
 | 16 | Seguridad | `loans_update_own_draft` permite editar la tasa; `system_settings` sin migración ni RLS | Corregir |
 | 17 | RN-4.29 abono mayor al saldo | Resuelto en la S4 para capital; el trigger ya no recorta el saldo a 0 | Falta el sobrepago de intereses, que depende de RN-4.22b |
+| 18 | RN-3.6 mes de ingreso | Los meses pendientes y las multas se cuentan desde enero del periodo, y no se guarda la fecha de ingreso | Guardar la fecha de ingreso y contar desde ese mes (F27 en `odd/tasks/s4-seguridad.md`) |
 
 ---
 
 ## 12. Pendientes
 
 ### 🟡 Para validar con el gerente
-2. **RN-8.6:** capitalización reservada frente a intereses impagos al cierre.
+Ninguna por ahora (validadas el 2026-11-07).
 
 ### ❓ Abiertas
-Ninguna por ahora (cerradas el 2026-10-14).
+1. **RN-3.6:** si el ingreso se aprueba después del día 10, ¿la multa del mes de ingreso cuenta desde el día 10, como en RN-3.4, o desde el día de la aprobación?
