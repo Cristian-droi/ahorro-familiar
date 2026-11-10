@@ -15,7 +15,8 @@ export function utilidadDelMes(params: {
   if (aporteDelGrupo <= 0 || aporteDelAccionista <= 0 || interesesPagados <= 0) return 0;
   const numerador = BigInt(aporteDelAccionista) * BigInt(interesesPagados);
   const total = BigInt(aporteDelGrupo);
-  return Number((numerador * 2n + total) / (total * 2n));
+  const dos = BigInt(2);
+  return Number((numerador * dos + total) / (total * dos));
 }
 
 export interface AporteDelMes {
