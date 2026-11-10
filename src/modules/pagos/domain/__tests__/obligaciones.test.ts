@@ -178,3 +178,30 @@ describe('estadoDeObligaciones (RN-3.1, RN-3.4, RN-2.3, RN-4.22)', () => {
     });
   });
 });
+
+describe('estadoDeObligaciones with the joining date (RN-3.6)', () => {
+  it('RN-3.6: approved on 5 August, on 20 September only August and September are owed (15.000 + 5.000 of fines)', () => {
+    const r = estadoDeObligaciones(entrada({ hoy: f('2026-09-20'), fechaDeIngreso: f('2026-08-05') }));
+    expect(r.mesesEnMora.map((m) => [m.mes, m.multa])).toEqual([
+      ['2026-08-01', 15000],
+      ['2026-09-01', 5000],
+    ]);
+    expect(r.montoMultas).toBe(20000);
+    expect(r.accionesAdeudadas).toBe(2);
+  });
+
+  it('RN-3.6: approved on 20 August, on 30 August the August fine is 5.000', () => {
+    const r = estadoDeObligaciones(entrada({ hoy: f('2026-08-30'), fechaDeIngreso: f('2026-08-20') }));
+    expect(r.mesesEnMora.map((m) => [m.mes, m.multa])).toEqual([['2026-08-01', 5000]]);
+  });
+
+  it('RN-3.6: a shareholder who joined in an earlier year owes from January', () => {
+    const r = estadoDeObligaciones(entrada({ hoy: f('2026-02-20'), fechaDeIngreso: f('2025-06-15') }));
+    expect(r.mesesEnMora.map((m) => m.mes)).toEqual(['2026-01-01', '2026-02-01']);
+  });
+
+  it('without a joining date the months start in January, as before', () => {
+    const r = estadoDeObligaciones(entrada({ hoy: f('2026-02-20'), fechaDeIngreso: null }));
+    expect(r.mesesEnMora.map((m) => m.mes)).toEqual(['2026-01-01', '2026-02-01']);
+  });
+});

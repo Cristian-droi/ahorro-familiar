@@ -356,7 +356,7 @@ En diciembre las utilidades llegan a 10.000.000, pero el gasto **sigue siendo 20
 | 15 | RN-9 auditoría | `audit_log` existe desde la S4 para préstamos, recibos y ajustes | Falta el desembolso (S5), solicitudes y capitalizaciones; el aviso al gerente y la vista llegan después |
 | 16 | Seguridad | `loans_update_own_draft` permite editar la tasa; `system_settings` sin migración ni RLS | Corregir |
 | 17 | RN-4.29 abono mayor al saldo | Resuelto en la S4 para capital; el trigger ya no recorta el saldo a 0 | Falta el sobrepago de intereses, que depende de RN-4.22b |
-| 18 | RN-3.6 mes de ingreso | Los meses pendientes y las multas se cuentan desde enero del periodo, y no se guarda la fecha de ingreso | Guardar la fecha de ingreso y contar desde ese mes (F27 en `odd/tasks/s4-seguridad.md`) |
+| 18 | RN-3.6 mes de ingreso | ✅ Resuelto en la S5: `profiles.joined_on` guarda el día de aprobación y las obligaciones y multas cuentan desde ese mes. Los accionistas sin fecha (los de antes y los creados a mano) siguen desde enero | Cargar la fecha de ingreso de los accionistas actuales que entraron este año, si aplica |
 
 ---
 

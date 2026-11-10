@@ -601,6 +601,7 @@ export type Database = {
           first_name: string
           id: string
           identity_document: string
+          joined_on: string | null
           last_name: string
           monthly_income: number | null
           next_year_capitalization: number | null
@@ -620,6 +621,7 @@ export type Database = {
           first_name: string
           id: string
           identity_document: string
+          joined_on?: string | null
           last_name?: string
           monthly_income?: number | null
           next_year_capitalization?: number | null
@@ -639,6 +641,7 @@ export type Database = {
           first_name?: string
           id?: string
           identity_document?: string
+          joined_on?: string | null
           last_name?: string
           monthly_income?: number | null
           next_year_capitalization?: number | null

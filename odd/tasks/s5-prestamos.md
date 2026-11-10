@@ -29,7 +29,7 @@ Cut order if time runs out (approved): T3 first; T1 and T2 are never cut.
 |---|---|---|---|---|
 | T0 | S6 | inline | done | RN-3.6 sub-rule and example added to `docs/reglas-negocio.md`, open question closed |
 | T1 | S1–S4 | inline | done | RED: `disbursement.test.ts` failed on the missing module → GREEN 11/11; probes `s5_disbursement.sql` 21/21, `s4_rls.sql` 120/120, suite 668/668, `tsc` clean, lint 0 errors. Independent verifier: S1–S4 met, no blockers (L5) |
-| T2 | S5–S7 | inline | pending | |
+| T2 | S5–S7 | inline | done | RED: 5 domain tests + 2 adapter tests failed → GREEN; suite 681/681, probes `s5_joined_on.sql` 4/4, `s4_rls.sql` 120/120, `s5_disbursement.sql` 21/21, `tsc` clean, lint 0 errors (L7) |
 | T3 | S8 | inline | pending | |
 | T4 | S9–S11 | inline | pending | |
 
@@ -41,6 +41,7 @@ Route evidence: no writer trigger fires (tasks are sequential and share the loan
 |---|---|---|
 | G1 | Already at baseline (verifier, L5): `get_cash_balance` overstates the cash box by the interest and capital deducted at disbursement; only the discounted loan shares are netted out. In a probe the box dropped 656.400 instead of the 776.400 transferred | The balance reads `cash_outflows` and drops the `loans.disbursed_amount` term, with a probe |
 | G2 | A trigger rejection inside the disbursement (max shares per month, loan not active, target month) now returns a generic 500 instead of a readable 422. Before, the receipt failure was swallowed and the loan was disbursed anyway | Known trigger errors mapped to 422 with their message |
+| G4 | T1 review advisories: no probe disburses with `pago_intereses`, `multa_acciones` or capital deductions, nor checks `last_interest_payment_date` on the referenced loan; no route-level test for the RPC payload (`applied_month`, `'cash'` proof, error mapping). R1-001/R3 "deductions without `deduct_obligations`" does not apply: the route passes `[]` when the flag is false (`disburse/route.ts:70-72`) | Probe and route test added |
 | G3 | `last_interest_payment_date` on other loans is updated without an `audit_log` row (as before); voiding a CE has columns but no RPC | Audited, and a void RPC when voiding is needed |
 
 ## Log
@@ -50,3 +51,5 @@ Route evidence: no writer trigger fires (tasks are sequential and share the loan
 - **L3** T0 done (commit 5ff7be5): rule recorded for approval after day 10; approval on or before day 10 keeps RN-3.4. Next: T1.
 - **L4** T1 in progress, uncommitted: `src/lib/disbursement.ts` + test (RED on missing module, then GREEN 11/11), migration `20261109010000_atomic_disbursement.sql` (`cash_outflows`, `desembolsar_prestamo` with advisory lock, upfront and cash checks, audited loan and receipt updates), route rewritten to call it, probes `supabase/tests/s5_disbursement.sql`. Blocked until Cris got Docker running.
 - **L5** T1 verified. Probes 21/21 (one added for approved upfront shares), S4 probes 120/120, vitest 668/668, `tsc` clean, lint 0 errors (24 warnings, same as baseline). Independent verifier: S1–S4 met, no blockers; unrequested changes: plan errors now reported before the upfront error (same 422), receipt trigger failures abort the disbursement (G2), the orphan empty receipt no longer appears. Advisories became G1–G3.
+- **L6** T1 commit eaa13f6 (GGA passed). Native review: assess `high` (item 1 escalated), consent granted by Cris, lenses risk/resilience/reliability, approved with 5 informational findings (G2, G4), acknowledged (`review-5df8e61af38f7428`). Reviewed boundary is now eaa13f6. Next: T2.
+- **L7** T2 done: `profiles.joined_on` (migration `20261109020000`), set to the Bogotá day by the membership approval route; a shareholder cannot change it (self-update policy), the tesorero can. Domain: `detalleDeMulta`/`multaDelMes` take `ingreso` (no fine before the joining month; after day 10 the joining month counts from the approval day), `estadoDeObligaciones` takes `fechaDeIngreso` (months from the joining month). Callers pass it: `obligations.ts`, `receipts-build.ts` (server fines on receipts), admin overdue list, compras, extracto, historial. Null keeps January, so existing members do not change. Not covered: no route test for the approval route setting `joined_on`; members who joined earlier this year need their date loaded by hand if Cris wants it.

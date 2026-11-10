@@ -18,6 +18,19 @@ export async function getProfile(client: TypedSupabaseClient, id: string) {
   return data;
 }
 
+// RN-3.6: the day the membership was approved, or null for members who owe
+// from January.
+export async function getJoinedOn(client: TypedSupabaseClient, id: string): Promise<string | null> {
+  const { data, error } = await client
+    .from('profiles')
+    .select('joined_on')
+    .eq('id', id)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data?.joined_on ?? null;
+}
+
 export async function getProfileRole(
   client: TypedSupabaseClient,
   id: string,
@@ -79,7 +92,7 @@ export async function listProfilesWithNames(client: TypedSupabaseClient) {
   const { data, error } = await client
     .from('profiles')
     .select(
-      'id, first_name, last_name, identity_document, role',
+      'id, first_name, last_name, identity_document, role, joined_on',
     )
     .eq('role', 'accionista')
     .order('first_name');

@@ -225,7 +225,10 @@ export default async function AdminDashboardPage() {
     let totalFineAmount = 0;
     const overdueMonths: string[] = [];
 
+    // RN-3.6: nothing is owed before the joining month.
+    const joinedMonth = p.joined_on ? `${p.joined_on.slice(0, 7)}-01` : null;
     for (const monthStr of monthsToValidate) {
+      if (joinedMonth && monthStr < joinedMonth) continue;
       const approvedShares = uShares.get(monthStr) || 0;
       const sharesOwed = Math.max(0, rules.min_shares_per_month - approvedShares);
 
@@ -236,7 +239,7 @@ export default async function AdminDashboardPage() {
         // Si no se ha pagado la multa del mes, se suma (RN-3.4: es 0 durante
         // los días de gracia).
         if (!uFinesPaid.has(monthStr)) {
-          totalFineAmount += computeFineForMonth(monthStr, today, rules);
+          totalFineAmount += computeFineForMonth(monthStr, today, rules, p.joined_on);
         }
       }
     }

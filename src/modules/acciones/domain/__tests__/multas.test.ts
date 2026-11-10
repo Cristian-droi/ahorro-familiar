@@ -161,3 +161,33 @@ describe('calcularMulta (RN-3.4)', () => {
     expect(multa.total).toBe(8000);
   });
 });
+
+describe('detalleDeMulta with the joining date (RN-3.6)', () => {
+  it('RN-3.6: approved on 20 August, on 30 August the August fine counts from the approval: 10 × 500 = 5.000', () => {
+    const d = detalleDeMulta({ mes: fecha('2026-08-01'), hoy: fecha('2026-08-30'), reglas: REGLAS, ingreso: fecha('2026-08-20') });
+    expect(d.monto).toBe(5000);
+    expect(d.diasDeMora).toBe(10);
+  });
+
+  it('RN-3.6: approved on 5 August, on 20 September August keeps RN-3.4 (41 days, capped at 15.000)', () => {
+    const d = detalleDeMulta({ mes: fecha('2026-08-01'), hoy: fecha('2026-09-20'), reglas: REGLAS, ingreso: fecha('2026-08-05') });
+    expect(d.monto).toBe(15000);
+    expect(d.diasDeMora).toBe(41);
+  });
+
+  it('RN-3.6: September of that shareholder is a normal month: (20 − 10) × 500 = 5.000', () => {
+    expect(multaDelMes({ mes: fecha('2026-09-01'), hoy: fecha('2026-09-20'), reglas: REGLAS, ingreso: fecha('2026-08-05') })).toBe(5000);
+  });
+
+  it('RN-3.6: months before the joining month have no fine', () => {
+    expect(multaDelMes({ mes: fecha('2026-07-01'), hoy: fecha('2026-09-20'), reglas: REGLAS, ingreso: fecha('2026-08-05') })).toBe(0);
+  });
+
+  it('RN-3.6: approved after day 10, nothing is owed on the approval day', () => {
+    expect(multaDelMes({ mes: fecha('2026-08-01'), hoy: fecha('2026-08-20'), reglas: REGLAS, ingreso: fecha('2026-08-20') })).toBe(0);
+  });
+
+  it('without a joining date the fine is the same as before', () => {
+    expect(multaDelMes({ mes: fecha('2026-08-01'), hoy: fecha('2026-08-30'), reglas: REGLAS })).toBe(10000);
+  });
+});

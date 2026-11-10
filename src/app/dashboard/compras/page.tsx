@@ -133,6 +133,8 @@ export default function ComprasPage() {
   // Datos iniciales del usuario.
   const [userId, setUserId] = useState<string | null>(null);
   const [firstName, setFirstName] = useState<string>('');
+  // RN-3.6: the joining month's fine counts from the approval day.
+  const [joinedOn, setJoinedOn] = useState<string | null>(null);
   const [shareValue, setShareValue] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -232,6 +234,7 @@ export default function ComprasPage() {
         ]);
         if (cancelled) return;
         setFirstName(profile.first_name ?? '');
+        setJoinedOn(profile.joined_on ?? null);
 
         if (periodShareValue == null) {
           // Sin valor de acción no puede comprar.
@@ -522,7 +525,7 @@ export default function ComprasPage() {
     }[] = [];
     for (const m of distinctMonths) {
       if (monthsAlreadyFined.has(m)) continue;
-      const detail = computeFineDetail(m, today, rules);
+      const detail = computeFineDetail(m, today, rules, joinedOn);
       if (detail.amount > 0) {
         out.push({
           month: m,
@@ -533,7 +536,7 @@ export default function ComprasPage() {
       }
     }
     return out;
-  }, [lines, rules, monthsAlreadyFined]);
+  }, [lines, rules, monthsAlreadyFined, joinedOn]);
 
   // Mapa mes → multa (para mostrar la info inline en cada línea).
   const fineByMonth = useMemo(() => {

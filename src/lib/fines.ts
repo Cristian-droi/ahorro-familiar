@@ -98,8 +98,9 @@ export function computeFineForMonth(
   targetMonth: string, // "YYYY-MM-01"
   today: Date, // anchor en UTC de día Bogotá
   rules: PurchaseRules,
+  joinedOn?: string | null, // RN-3.6: profiles.joined_on
 ): number {
-  return computeFineDetail(targetMonth, today, rules).amount;
+  return computeFineDetail(targetMonth, today, rules, joinedOn).amount;
 }
 
 // Variante que también devuelve cuántos días en mora se están cobrando y
@@ -109,10 +110,12 @@ export function computeFineDetail(
   targetMonth: string, // "YYYY-MM-01"
   today: Date, // anchor en UTC de día Bogotá
   rules: PurchaseRules,
+  joinedOn?: string | null, // RN-3.6: profiles.joined_on
 ): { amount: number; daysLate: number; chargedDays: number; capped: boolean } {
   const mes = primerDiaDelMes(targetMonth as FechaISO);
   const hoy = formatBogotaDate(today) as FechaISO;
-  const detalle = detalleDeMulta({ mes, hoy, reglas: toReglasDeMulta(rules) });
+  const ingreso = joinedOn ? (joinedOn as FechaISO) : null;
+  const detalle = detalleDeMulta({ mes, hoy, reglas: toReglasDeMulta(rules), ingreso });
   if (detalle.monto <= 0) {
     return { amount: 0, daysLate: 0, chargedDays: 0, capped: false };
   }

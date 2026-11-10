@@ -40,6 +40,7 @@ import {
 } from 'lucide-react';
 import { exportToExcel, exportToPdf, type ExportSection } from '@/lib/exports';
 import { getOpenPeriodShareValue } from '@/lib/data/share-value';
+import { getJoinedOn } from '@/lib/data/profiles';
 import {
   computeFineForMonth,
   DEFAULT_PURCHASE_RULES,
@@ -93,6 +94,8 @@ export default function HistorialPage() {
 
   const [userId, setUserId] = useState<string | null>(null);
   const [shareValue, setShareValue] = useState<number | null>(null);
+  // RN-3.6: the joining month's fine counts from the approval day.
+  const [joinedOn, setJoinedOn] = useState<string | null>(null);
   const [rules, setRules] = useState<PurchaseRules>(DEFAULT_PURCHASE_RULES);
   const [receipts, setReceipts] = useState<ReceiptWithItems[]>([]);
   const [loading, setLoading] = useState(true);
@@ -185,11 +188,15 @@ export default function HistorialPage() {
       setUserId(user.id);
 
       try {
-        const periodShareValue = await getOpenPeriodShareValue(supabase, user.id);
+        const [periodShareValue, joined] = await Promise.all([
+          getOpenPeriodShareValue(supabase, user.id),
+          getJoinedOn(supabase, user.id),
+        ]);
         if (cancelled) return;
         if (periodShareValue != null) {
           setShareValue(periodShareValue);
         }
+        setJoinedOn(joined);
       } catch (err) {
         console.error('Error perfil:', err);
       }
@@ -300,11 +307,11 @@ export default function HistorialPage() {
     const out: { month: string; amount: number }[] = [];
     for (const m of distinct) {
       if (fined.has(m)) continue;
-      const fine = computeFineForMonth(m, today, rules);
+      const fine = computeFineForMonth(m, today, rules, joinedOn);
       if (fine > 0) out.push({ month: m, amount: fine });
     }
     return out;
-  }, [editing, editLines, monthsFinedElsewhere, rules]);
+  }, [editing, editLines, monthsFinedElsewhere, rules, joinedOn]);
 
   const editSharesSubtotal = useMemo(() => {
     if (shareValue == null) return 0;

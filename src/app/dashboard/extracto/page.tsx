@@ -174,6 +174,8 @@ export function ExtractoView({ targetUserId }: ExtractoViewProps = {}) {
 
   const [userId, setUserId] = useState<string | null>(null);
   const [firstName, setFirstName] = useState<string>('');
+  // RN-3.6: no projected fine before joining.
+  const [joinedOn, setJoinedOn] = useState<string | null>(null);
   const [lastName, setLastName] = useState<string>('');
   const [shareValue, setShareValue] = useState<number | null>(null);
   const [rules, setRules] = useState<PurchaseRules>(DEFAULT_PURCHASE_RULES);
@@ -221,6 +223,7 @@ export function ExtractoView({ targetUserId }: ExtractoViewProps = {}) {
         if (cancelled) return;
         setFirstName(profile.first_name ?? '');
         setLastName(profile.last_name ?? '');
+        setJoinedOn(profile.joined_on ?? null);
         setShareValue(periodShareValue);
       } catch (err) {
         console.error('Error perfil:', err);
@@ -492,7 +495,7 @@ export function ExtractoView({ targetUserId }: ExtractoViewProps = {}) {
 
       let projectedFine = 0;
       if (!hasActiveFine && year === currentYearValue) {
-        projectedFine = computeFineForMonth(m.value, today, rules);
+        projectedFine = computeFineForMonth(m.value, today, rules, joinedOn);
       }
 
       // Préstamos del mes (vienen de loanMonthly).
@@ -534,7 +537,7 @@ export function ExtractoView({ targetUserId }: ExtractoViewProps = {}) {
         distribution,
       };
     });
-  }, [items, year, rules, loanMonthly, utilities]);
+  }, [items, year, rules, loanMonthly, utilities, joinedOn]);
 
   // ===== Totales anuales (solo aprobados cuentan como "real") =====
 
