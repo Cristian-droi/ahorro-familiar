@@ -72,9 +72,9 @@
 - [x] Subir a **error** la regla de ESLint del cliente admin fuera de `infra`, con excepción temporal para 18 archivos viejos.
 
 ### S5 · Préstamos (16–22 nov)
-- [ ] RPC `desembolsar_prestamo` atómica, con `cash_outflows` (CE) y bloqueo de acciones por adelantado.
-- [ ] Excepción en acciones por préstamo con motivo obligatorio (RN-4.12).
-- [ ] Flujo "Comprar y pagar" con pagos a préstamos.
+- [x] RPC `desembolsar_prestamo` atómica, con `cash_outflows` (CE) y bloqueo de acciones por adelantado.
+- [x] Excepción en acciones por préstamo con motivo obligatorio (RN-4.12).
+- [x] Flujo "Comprar y pagar" con pagos a préstamos. Además: pago parcial de intereses (RN-4.25) y obligaciones desde el mes de ingreso (RN-3.6).
 
 ### S6 · Utilidades (23–29 nov)
 - [ ] `utilidades/domain` (RN-6). Reemplaza los cálculos que hoy se hacen en el cliente.
