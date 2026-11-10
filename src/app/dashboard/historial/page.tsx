@@ -188,9 +188,13 @@ export default function HistorialPage() {
       setUserId(user.id);
 
       try {
+        // A failed joining-date read must not hide the share value.
         const [periodShareValue, joined] = await Promise.all([
           getOpenPeriodShareValue(supabase, user.id),
-          getJoinedOn(supabase, user.id),
+          getJoinedOn(supabase, user.id).catch((joinedErr) => {
+            console.error('Error leyendo la fecha de ingreso:', joinedErr);
+            return null;
+          }),
         ]);
         if (cancelled) return;
         if (periodShareValue != null) {
