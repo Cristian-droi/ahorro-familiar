@@ -339,7 +339,7 @@ En diciembre las utilidades llegan a 10.000.000, pero el gasto **sigue siendo 20
 | # | Regla | Código actual | Acción |
 |---|---|---|---|
 | 1 | RN-4.10 acciones por préstamo | Redondeo hacia **abajo** (`src/lib/loans.ts`, `calcLoanShares`) | Cambiar a **TECHO** |
-| 2 | RN-4.12 excepción con auditoría | No existe | Implementar |
+| 2 | RN-4.12 excepción con auditoría | ✅ Resuelto en la S5: al aprobar, el tesorero cambia la cantidad con motivo obligatorio; quedan `loan_shares_suggested`, el motivo y el registro en la auditoría | — |
 | 3 | RN-4.1 mínimo de préstamo | 500.000 fijo (`schemas/loan.ts`) | Convertir en parámetro opcional |
 | 4 | RN-4.2 préstamos activos | Máximo 2 | Parámetro opcional, sin límite por defecto |
 | 5 | RN-4.3 plazo | 1 a 60 meses | Lo elige el accionista con máximo hasta diciembre, o diciembre del año siguiente si se habilita |

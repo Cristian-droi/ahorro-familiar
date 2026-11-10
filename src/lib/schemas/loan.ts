@@ -29,6 +29,9 @@ export const reviewPlanSchema = z.object({
   action: z.enum(['approve', 'reject', 'request_revision']),
   rejection_reason: z.string().min(1).optional(),
   admin_notes: z.string().optional(),
+  // RN-4.12: final loan shares when approving; a change needs its reason.
+  loan_shares_count: z.number().int().nonnegative().optional(),
+  loan_shares_reason: z.string().max(500).optional(),
 });
 
 export const disburseSchema = z.object({

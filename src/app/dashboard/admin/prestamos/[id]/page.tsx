@@ -55,6 +55,9 @@ export default function AdminLoanDetailPage() {
   const [rejectionReason, setRejectionReason] = useState('');
   const [revisionNote, setRevisionNote] = useState('');
   const [adminNotes, setAdminNotes] = useState('');
+  // RN-4.12: loan shares the tesorero may change when approving.
+  const [sharesCount, setSharesCount] = useState('');
+  const [sharesReason, setSharesReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   // Comprobante de desembolso
@@ -83,6 +86,7 @@ export default function AdminLoanDetailPage() {
         : null,
     );
     if (data?.admin_notes) setAdminNotes(data.admin_notes);
+    if (data) setSharesCount(String(data.loan_shares_count ?? 0));
     setLoading(false);
   }, [id]);
 
@@ -111,8 +115,26 @@ export default function AdminLoanDetailPage() {
     }
   };
 
-  const approvePlan = () =>
-    call('review', 'POST', { action: 'approve', admin_notes: adminNotes || undefined });
+  const suggestedShares = loan ? (loan.loan_shares_suggested ?? Number(loan.loan_shares_count ?? 0)) : 0;
+  const sharesChanged = sharesCount.trim() !== '' && Number(sharesCount) !== suggestedShares;
+
+  const approvePlan = () => {
+    const count = Number(sharesCount);
+    if (sharesCount.trim() === '' || !Number.isInteger(count) || count < 0) {
+      showToast('error', 'Las acciones por préstamo deben ser un número entero de cero o más');
+      return;
+    }
+    if (sharesChanged && !sharesReason.trim()) {
+      showToast('error', 'Indicá el motivo del cambio de acciones por préstamo');
+      return;
+    }
+    call('review', 'POST', {
+      action: 'approve',
+      admin_notes: adminNotes || undefined,
+      loan_shares_count: count,
+      loan_shares_reason: sharesChanged ? sharesReason.trim() : undefined,
+    });
+  };
 
   const rejectPlan = () => {
     if (!rejectionReason.trim()) {
@@ -585,6 +607,37 @@ export default function AdminLoanDetailPage() {
                     className="w-full rounded-[9px] bg-[var(--color-surface)] border border-[var(--color-border)] px-3 py-2 text-[13px] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-brand)] resize-none"
                   />
                 </div>
+
+                <div>
+                  <label className="text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase block mb-1.5">
+                    Acciones por préstamo (sugeridas: {suggestedShares})
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    inputMode="numeric"
+                    value={sharesCount}
+                    onChange={(e) => setSharesCount(e.target.value)}
+                    className="w-full rounded-[9px] bg-[var(--color-surface)] border border-[var(--color-border)] px-3 py-2 text-[13px] text-[var(--color-text)] tabular focus:outline-none focus:border-[var(--color-brand)]"
+                  />
+                </div>
+
+                {sharesChanged && (
+                  <div>
+                    <label className="text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase block mb-1.5">
+                      Motivo del cambio (obligatorio)
+                    </label>
+                    <textarea
+                      value={sharesReason}
+                      onChange={(e) => setSharesReason(e.target.value)}
+                      rows={2}
+                      maxLength={500}
+                      placeholder="Por qué se cobra una cantidad distinta a la sugerida..."
+                      className="w-full rounded-[9px] bg-[var(--color-surface)] border border-[var(--color-border)] px-3 py-2 text-[13px] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-brand)] resize-none"
+                    />
+                  </div>
+                )}
 
                 <Button size="md" className="w-full" disabled={submitting} onClick={approvePlan}>
                   <CheckCircle2 size={15} strokeWidth={1.75} />

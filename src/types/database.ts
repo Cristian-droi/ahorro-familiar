@@ -367,7 +367,9 @@ export type Database = {
           loan_number: number | null
           loan_shares_amount: number
           loan_shares_count: number
+          loan_shares_override_reason: string | null
           loan_shares_paid_upfront: boolean
+          loan_shares_suggested: number | null
           outstanding_balance: number
           payment_plan_months: number | null
           plan_rejection_reason: string | null
@@ -402,7 +404,9 @@ export type Database = {
           loan_number?: number | null
           loan_shares_amount?: number
           loan_shares_count?: number
+          loan_shares_override_reason?: string | null
           loan_shares_paid_upfront?: boolean
+          loan_shares_suggested?: number | null
           outstanding_balance?: number
           payment_plan_months?: number | null
           plan_rejection_reason?: string | null
@@ -437,7 +441,9 @@ export type Database = {
           loan_number?: number | null
           loan_shares_amount?: number
           loan_shares_count?: number
+          loan_shares_override_reason?: string | null
           loan_shares_paid_upfront?: boolean
+          loan_shares_suggested?: number | null
           outstanding_balance?: number
           payment_plan_months?: number | null
           plan_rejection_reason?: string | null

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createLoanSchema, updatePaymentPlanSchema } from '@/lib/schemas/loan';
+import { createLoanSchema, reviewPlanSchema, updatePaymentPlanSchema } from '@/lib/schemas/loan';
 
 // RN-4.3: the shareholder chooses the term. The schema only checks the shape
 // (a whole number of months); the maximum is validated by the domain plan.
@@ -50,5 +50,20 @@ describe('updatePaymentPlanSchema (RN-4.3, RN-4.3b, RN-4.26)', () => {
 
   it('still rejects a negative edited capital', () => {
     expect(updatePaymentPlanSchema.safeParse({ capital_overrides: { '1': -1 } }).success).toBe(false);
+  });
+});
+
+describe('reviewPlanSchema (RN-4.12)', () => {
+  it('accepts an approval without loan shares, as before', () => {
+    expect(reviewPlanSchema.safeParse({ action: 'approve' }).success).toBe(true);
+  });
+
+  it('RN-4.12: accepts the final loan shares and the reason', () => {
+    const r = reviewPlanSchema.safeParse({ action: 'approve', loan_shares_count: 20, loan_shares_reason: 'Excepción aprobada' });
+    expect(r.success && r.data.loan_shares_count).toBe(20);
+  });
+
+  it.each([-1, 2.5, '20'])('rejects loan shares of %s', (count) => {
+    expect(reviewPlanSchema.safeParse({ action: 'approve', loan_shares_count: count }).success).toBe(false);
   });
 });

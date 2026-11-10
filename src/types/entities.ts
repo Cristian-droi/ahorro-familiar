@@ -119,6 +119,9 @@ export interface Loan {
   interest_rate: number;
   loan_shares_count: number;
   loan_shares_amount: number;
+  // RN-4.12: set when the tesorero changed the suggested count.
+  loan_shares_suggested?: number | null;
+  loan_shares_override_reason?: string | null;
   loan_shares_paid_upfront: boolean;
   four_per_thousand: number;
   disbursed_amount: number | null;
