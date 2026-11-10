@@ -46,9 +46,9 @@ npm run gen:types  # regenerar tipos de Supabase
 
 El CLI de Supabase es el global de scoop (2.90.0). `npx supabase` baja la 3.0.0, que rechaza `supabase/config.toml`. `.env.local` apunta a la nube: para probar la app, usa Supabase local con las variables de entorno sobrescritas.
 
-## Estado actual (2026-11-06)
+## Estado actual (2026-11-10)
 
-- El trabajo nuevo va en ramas `tipo/descripcion` con PR. La S1 (cimientos) se mergeó el 2026-10-25 (PR #3), la S2 (dominio I) el 2026-10-26 (PR #5), la S3 (dominio II) el 2026-11-05 (PR #7) y la S4 (seguridad) el 2026-11-06 (PR #9). La nube de pruebas se reinició desde cero ese día y tiene todas las migraciones, con un tesorero de prueba creado a mano; los pendientes de la S4 están en `odd/tasks/s4-seguridad.md`.
+- El trabajo nuevo va en ramas `tipo/descripcion` con PR. La S1 (cimientos) se mergeó el 2026-10-25 (PR #3), la S2 (dominio I) el 2026-10-26 (PR #5), la S3 (dominio II) el 2026-11-05 (PR #7) y la S4 (seguridad) el 2026-11-06 (PR #9). La nube de pruebas se reinició desde cero ese día, con un tesorero de prueba creado a mano; los pendientes de la S4 están en `odd/tasks/s4-seguridad.md`. La S5 (préstamos) está terminada en `feat/s5-prestamos`, sin PR todavía; sus 3 migraciones no están en la nube y sus pendientes están en `odd/tasks/s5-prestamos.md`.
 - **Supabase local:** `supabase start` aplica todas las migraciones desde cero. Los tipos se generan desde local con `npm run gen:types`.
 - **Ya existen** `src/shared/domain` (`fechas.ts`, `result.ts`) y `src/modules/` con el dominio de acciones, préstamos, pagos y parámetros. Los cálculos de dinero de préstamos, multas y obligaciones ya salen del dominio; `src/lib/` queda como adaptador.
 - **GGA** revisa cada commit con las reglas de `REVIEW.md`. En Windows necesita la variable `CLAUDE_CODE_GIT_BASH_PATH`.

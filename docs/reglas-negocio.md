@@ -59,6 +59,7 @@
 - **RN-3.6** Un accionista que ingresa a mitad del periodo compra acciones, y paga multas, **desde el mes de ingreso**, que es el mes en que se aprueba su ingreso. Los meses anteriores no le generan obligación ni multa. *Validado con el gerente el 2026-11-07.*
   - **Multa del mes de ingreso:** si el ingreso se aprueba después del día 10, la multa de ese mes corre **desde la fecha de aprobación**, no desde el día 10. Si se aprueba hasta el día 10, se aplica RN-3.4 sin cambios. *Respondido por el gerente el 2026-11-09.*
   - **Ejemplo:** se aprueba el 20 de agosto y el accionista no compra. El 30 de agosto debe 10 días × 500 = **5.000** de multa de agosto, y no 10.000.
+  - **Sin gracia después del día 10:** si el ingreso se aprueba después del día 10, ese mes no tiene días de gracia: la acción se debe desde el día de aprobación y la multa empieza a contar ese mismo día. Si se aprueba hasta el día 10, tiene hasta el día 10 para pagar sin multa. *Cris, 2026-11-10.*
 
 **Ejemplo:** el ingreso se aprueba el 5 de agosto, no compra nada y hoy es 20 de septiembre.
 - Enero a julio: nada.
