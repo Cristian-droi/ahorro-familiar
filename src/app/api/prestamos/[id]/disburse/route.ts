@@ -8,7 +8,8 @@ import { disburseSchema, deductionsDetailSchema } from '@/lib/schemas/loan';
 import { getCashBalance } from '@/lib/data/loans';
 import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import { validarPuedeComprar } from '@/modules/acciones/domain/valor-de-accion';
-import type { Database } from '@/types/database';
+import { buildDisbursementReceipt, disburseLoan } from '@/lib/disbursement';
+import { mesAplicado } from '@/modules/prestamos/domain/calendario';
 import { hoyBogota } from '@/shared/domain/fechas';
 
 // POST /api/prestamos/[id]/disburse — admin realiza el desembolso del préstamo.
@@ -20,10 +21,10 @@ import { hoyBogota } from '@/shared/domain/fechas';
 //   - Se calcula el monto real desembolsado
 //   - Se actualiza outstanding_balance = requested_amount
 //   - Se recalcula el plan de pagos con la fecha real de desembolso
-//   - El trigger assigns CE- number automáticamente
-//   - El préstamo queda active
+//   - El préstamo queda active, con su CE en cash_outflows y su registro en audit_log
 //   - Si loan_shares_paid_upfront=false y loan_shares_amount>0, o si tiene deduct_obligations=true:
 //       Se crea automáticamente un único recibo aprobado con los ítems correspondientes.
+//   - Todo se escribe en una sola transacción (RN-4.17): RPC desembolsar_prestamo.
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -115,26 +116,6 @@ export async function POST(
       );
     }
 
-    // Si el accionista eligió pagar acciones por adelantado, verificar que lo hizo
-    if (loan.loan_shares_paid_upfront) {
-      const { data: upfrontItems } = await admin
-        .from('receipt_items')
-        .select('id, receipts!inner(status)')
-        .eq('concept', 'acciones_prestamo')
-        .eq('loan_id', id);
-
-      const paid = (upfrontItems ?? []).some(
-        (item) => (item as Record<string, unknown> & { receipts: { status: string } }).receipts?.status === 'approved',
-      );
-
-      if (!paid) {
-        return NextResponse.json(
-          { error: 'El accionista eligió pagar las acciones por adelantado. El recibo de acciones por préstamo aún no está aprobado.' },
-          { status: 422 },
-        );
-      }
-    }
-
     const disbursedAt = new Date();
     const disbursedAmount = netAmount;
 
@@ -154,12 +135,13 @@ export async function POST(
     }
 
     // RN-4.20, RN-4.21 and RN-4.3 ⚙️. RN-4.21b: the days in force today are
-    // the ones this loan keeps; they are stored below with disbursed_at.
+    // the ones this loan keeps; they are stored with disbursed_at.
     const ajustes = await getAjustesDePrestamo(admin);
+    const disbursedOn = hoyBogota(disbursedAt);
     const plan = buildPaymentPlan({
       requestedAmount: Number(loan.requested_amount),
       rate: loan.interest_rate,
-      disbursedOn: hoyBogota(disbursedAt),
+      disbursedOn,
       lastMonth: agreed.value.lastMonth,
       capitalOverrides: agreed.value.capitalOverrides,
       ajustes,
@@ -167,171 +149,56 @@ export async function POST(
     if (!plan.ok) {
       return NextResponse.json({ error: plan.error.mensaje }, { status: 422 });
     }
-    const planRows = plan.value;
 
-    // Actualizar préstamo (el trigger assign_disbursement_number asigna CE- automáticamente)
-    const { error: updateError } = await admin
-      .from('loans')
-      .update({
-        status: 'active',
+    // RN-4.14: shares not paid upfront are discounted here, in the same receipt
+    // as the deducted obligations. A missing share value keeps unit_value null.
+    let unitValue: number | null = null;
+    if (!loan.loan_shares_paid_upfront && Number(loan.loan_shares_amount) > 0) {
+      try {
+        const puedeComprar = validarPuedeComprar({ valorDeAccion: await getOpenPeriodShareValue(admin, loan.user_id) });
+        unitValue = puedeComprar.ok ? puedeComprar.value : null;
+      } catch (shareValueErr) {
+        console.error('disburse: no se pudo leer el valor de acción del periodo', shareValueErr);
+      }
+    }
+    const receipt = buildDisbursementReceipt({
+      loanId: id,
+      loanSharesAmount: Number(loan.loan_shares_amount || 0),
+      loanSharesCount: loan.loan_shares_count != null ? Number(loan.loan_shares_count) : null,
+      loanSharesPaidUpfront: Boolean(loan.loan_shares_paid_upfront),
+      deductions: deductionsDetail,
+      unitValue,
+      disbursedAt,
+    });
+
+    // RN-4.17: one transaction. It also blocks unpaid upfront shares (RN-4.14)
+    // and a short cash box (RN-4.9) inside the database.
+    const result = await disburseLoan(admin, {
+      loanId: id,
+      actorId: authCheck.user.id,
+      disbursement: {
         disbursed_amount: disbursedAmount,
         four_per_thousand: fourPerThousand,
         disbursed_at: disbursedAt.toISOString(),
-        // RN-4.21b: the loan is always computed with these days.
         full_rate_day_limit: ajustes.diaLimiteTasaCompleta,
         cutoff_day: ajustes.diaDeCorte,
-        outstanding_balance: loan.requested_amount,
-        disbursement_proof_path: payment_method === 'cash' ? 'cash' : disbursement_proof_path,
-        updated_at: disbursedAt.toISOString(),
-      })
-      .eq('id', id);
-
-    if (updateError) {
-      return NextResponse.json({ error: 'No se pudo actualizar el préstamo' }, { status: 500 });
-    }
-
-    // Reemplazar el plan con las fechas reales
-    await admin.from('loan_payment_plan_items').delete().eq('loan_id', id);
-    if (planRows.length > 0) {
-      await admin
-        .from('loan_payment_plan_items')
-        .insert(planRows.map((r) => ({ ...r, loan_id: id })));
-    }
-
-    // ====================================================================
-    // Deducciones y Acciones por préstamo descontadas — generar recibo automático.
-    //
-    // Si el socio eligió deducir obligaciones o descontar las acciones por préstamo
-    // al desembolso, creamos automáticamente un ÚNICO recibo.
-    // Para que los triggers de base de datos se disparen correctamente (por ejemplo,
-    // actualizando saldos de capital a través del trigger en update de status de receipts),
-    // primero insertamos el recibo como 'pending', insertamos los ítems, y luego
-    // lo actualizamos a 'approved'.
-    // ====================================================================
-    const loanSharesAmount = Number(loan.loan_shares_amount);
-    const hasLoanSharesDeduction = !loan.loan_shares_paid_upfront && loanSharesAmount > 0;
-    
-    const deductedShares = Number(loan.deducted_shares_amount || 0);
-    const deductedFines = Number(loan.deducted_fines_amount || 0);
-    const deductedInterest = Number(loan.deducted_interest_amount || 0);
-    const deductedCapital = Number(loan.deducted_capital_amount || 0);
-    const totalDeductions = deductedShares + deductedFines + deductedInterest + deductedCapital;
-
-    const totalReceiptAmount = totalDeductions + (hasLoanSharesDeduction ? loanSharesAmount : 0);
-
-    if (totalReceiptAmount > 0) {
-      const { data: createdReceipt, error: receiptErr } = await admin
-        .from('receipts')
-        .insert({
-          user_id: loan.user_id,
-          status: 'pending',
-          submitted_at: disbursedAt.toISOString(),
-          reviewed_at: null,
-          reviewed_by: null,
-          total_amount: 0, // el trigger de BD lo recalculará
-          payment_method: payment_method,
-        })
-        .select('id')
-        .single();
-
-      if (receiptErr || !createdReceipt) {
-        console.error('disburse: no se pudo crear el recibo de deducciones', receiptErr);
-      } else {
-        const itemsToInsert: Database['public']['Tables']['receipt_items']['Insert'][] = [];
-
-        // A. Acciones por préstamo descontadas (acciones_prestamo)
-        if (hasLoanSharesDeduction) {
-          // The receipt already exists here, so a missing value or a failed
-          // read keeps the previous behavior (unit_value null) instead of aborting.
-          let valorDeAccion: number | null = null;
-          try {
-            valorDeAccion = await getOpenPeriodShareValue(admin, loan.user_id);
-          } catch (shareValueErr) {
-            console.error('disburse: no se pudo leer el valor de acción del periodo', shareValueErr);
-          }
-          const puedeComprar = validarPuedeComprar({ valorDeAccion });
-          const unitValue = puedeComprar.ok ? puedeComprar.value : null;
-          
-          const yyyy = disbursedAt.getFullYear();
-          const mm = String(disbursedAt.getMonth() + 1).padStart(2, '0');
-          const targetMonth = `${yyyy}-${mm}-01`;
-          const sharesCount = loan.loan_shares_count != null && Number(loan.loan_shares_count) > 0 ? Number(loan.loan_shares_count) : null;
-
-          itemsToInsert.push({
-            receipt_id: createdReceipt.id,
-            concept: 'acciones_prestamo',
-            target_month: targetMonth,
-            share_count: sharesCount,
-            unit_value: sharesCount != null ? unitValue : null,
-            amount: loanSharesAmount,
-            loan_id: id,
-            auto_generated: false,
-          });
-        }
-
-        // B. Deducciones de obligaciones y capital
-        if (loan.deduct_obligations) {
-          for (const detail of deductionsDetail) {
-            itemsToInsert.push({
-              receipt_id: createdReceipt.id,
-              concept: detail.concept,
-              target_month: detail.target_month,
-              share_count: detail.share_count ?? null,
-              unit_value: detail.unit_value ?? null,
-              amount: detail.amount,
-              loan_id: detail.loan_id ?? null,
-              auto_generated: detail.concept === 'multa_acciones',
-            });
-          }
-        }
-
-        if (itemsToInsert.length > 0) {
-          const { error: itemsErr } = await admin.from('receipt_items').insert(itemsToInsert);
-          if (itemsErr) {
-            console.error('disburse: no se pudieron crear los items del recibo de deducciones', itemsErr);
-            await admin.from('receipts').delete().eq('id', createdReceipt.id);
-          } else {
-            // Actualizar a aprobado para disparar el trigger trg_apply_loan_payment
-            const { error: approveErr } = await admin
-              .from('receipts')
-              .update({
-                status: 'approved',
-                reviewed_at: disbursedAt.toISOString(),
-                reviewed_by: authCheck.user.id,
-              })
-              .eq('id', createdReceipt.id);
-
-            if (approveErr) {
-              console.error('disburse: no se pudo aprobar el recibo de deducciones', approveErr);
-            } else {
-              // Actualizar last_interest_payment_date de los préstamos cuyos intereses fueron descontados
-              const interestPaymentDetails = itemsToInsert.filter(
-                (it): it is typeof it & { loan_id: string } => it.concept === 'pago_intereses' && !!it.loan_id,
-              );
-              const firstOfMonth = new Date(disbursedAt.getFullYear(), disbursedAt.getMonth(), 1)
-                .toISOString()
-                .split('T')[0];
-
-              for (const item of interestPaymentDetails) {
-                const { error: updateInterestErr } = await admin
-                  .from('loans')
-                  .update({
-                    last_interest_payment_date: firstOfMonth,
-                    updated_at: disbursedAt.toISOString(),
-                  })
-                  .eq('id', item.loan_id);
-                
-                if (updateInterestErr) {
-                  console.error(`disburse: no se pudo actualizar last_interest_payment_date para el préstamo ${item.loan_id}`, updateInterestErr);
-                }
-              }
-            }
-          }
-        }
+        disbursement_proof_path: payment_method === 'cash' ? 'cash' : (disbursement_proof_path ?? null),
+        payment_method,
+        applied_month: mesAplicado(disbursedOn, ajustes.diaDeCorte),
+        interest_paid_month: receipt.interestPaidMonth,
+      },
+      plan: plan.value,
+      receiptItems: receipt.items,
+    });
+    if (!result.ok) {
+      if (result.status === 500) {
+        console.error('disburse: la RPC desembolsar_prestamo falló', result.message);
+        return NextResponse.json({ error: 'No se pudo registrar el desembolso' }, { status: 500 });
       }
+      return NextResponse.json({ error: result.message, code: result.code }, { status: result.status });
     }
 
-    return NextResponse.json({ success: true, disbursed_amount: disbursedAmount });
+    return NextResponse.json({ success: true, disbursed_amount: disbursedAmount, ce_number: result.ceNumber });
   } catch (err) {
     console.error('API Error POST /api/prestamos/[id]/disburse:', err);
     return NextResponse.json({ error: 'Error interno del servidor' }, { status: 500 });
