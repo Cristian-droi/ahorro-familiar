@@ -51,6 +51,9 @@ export default function AdminLoanDetailPage() {
   const [shareValue, setShareValue] = useState<number | null>(null);
   // Approved capital and interest items, for the interest owed (null: not loaded).
   const [interestItems, setInterestItems] = useState<LoanInterestItem[] | null>(null);
+  // Section 4.7 and RN-4.30: computed on the server for active loans.
+  type Ritmo = { saldo: number; cuotaPactadaDelMes: number; cuotaParaCerrar: number };
+  const [ritmo, setRitmo] = useState<{ loan: Ritmo; shareholder: Ritmo & { active_loans: number } } | null>(null);
   const [ajustes, setAjustes] = useState<AjustesDePrestamo | null>(null);
   const [rejectionReason, setRejectionReason] = useState('');
   const [revisionNote, setRevisionNote] = useState('');
@@ -82,6 +85,13 @@ export default function AdminLoanDetailPage() {
       data?.status === 'active'
         ? await getLoanInterestItems(supabase, [data.id])
             .then((porPrestamo) => porPrestamo.get(data.id) ?? [])
+            .catch(() => null)
+        : null,
+    );
+    setRitmo(
+      data?.status === 'active'
+        ? await fetch(`/api/prestamos/${data.id}/ritmo`, { cache: 'no-store' })
+            .then((r) => (r.ok ? r.json() : null))
             .catch(() => null)
         : null,
     );
@@ -361,6 +371,32 @@ export default function AdminLoanDetailPage() {
               </div>
             )}
           </Card>
+
+          {/* Ritmo de pago: plan pactado vs cuota para cerrar el año (sección 4.7, RN-4.30) */}
+          {loan.status === 'active' && (
+            <Card padding="lg">
+              <div className="text-[14px] font-semibold tracking-tight mb-1">Ritmo de pago</div>
+              <div className="text-[12px] text-[var(--color-text-muted)] mb-4">
+                Solo la ven el gerente y el tesorero. La cuota para cerrar el año es el saldo dividido entre los meses que quedan del plazo, incluido el actual.
+              </div>
+              {ritmo === null ? (
+                <div className="text-[13px] text-[var(--color-text-muted)]">No disponible.</div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <Stat label="Saldo de este préstamo" value={cop(ritmo.loan.saldo)} />
+                  <Stat label="Cuota pactada este mes" value={cop(ritmo.loan.cuotaPactadaDelMes)} />
+                  <Stat label="Cuota para cerrar el año" value={cop(ritmo.loan.cuotaParaCerrar)} tone="warn" />
+                  {ritmo.shareholder.active_loans > 1 && (
+                    <>
+                      <Stat label={`Saldo de sus ${ritmo.shareholder.active_loans} préstamos`} value={cop(ritmo.shareholder.saldo)} />
+                      <Stat label="Cuota pactada este mes (todos)" value={cop(ritmo.shareholder.cuotaPactadaDelMes)} />
+                      <Stat label="Cuota para cerrar el año (todos)" value={cop(ritmo.shareholder.cuotaParaCerrar)} tone="warn" />
+                    </>
+                  )}
+                </div>
+              )}
+            </Card>
+          )}
 
           {/* Plan de pagos */}
           {loan.payment_plan.length > 0 && (

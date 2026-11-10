@@ -39,10 +39,9 @@ import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import { listReceiptItemsByYear } from '@/lib/data/receipts';
 import {
   getLibroAccionistaData,
-  getMyUtilitiesByYear,
-  getUserUtilitiesByYear,
   type MonthlyUtility,
 } from '@/lib/data/loans';
+import { fetchUtilitiesByYear } from '@/lib/data/utilities-client';
 import { computeLoanBook, computeUnifiedLoanBook } from '@/lib/loans';
 import { ajustesDelPrestamo, getAjustesDePrestamo } from '@/lib/loan-settings';
 import { LOAN_STATUS_LABELS } from '@/components/loans/status';
@@ -267,15 +266,9 @@ export function ExtractoView({ targetUserId }: ExtractoViewProps = {}) {
     (async () => {
       setLoading(true);
       try {
-        const utilitiesPromise = isAdminView
-          ? getUserUtilitiesByYear(supabase, userId, year).catch((err) => {
-              console.error('Error cargando utilidades:', err);
-              return [] as MonthlyUtility[];
-            })
-          : getMyUtilitiesByYear(supabase, year).catch((err) => {
-              console.error('Error cargando utilidades:', err);
-              return [] as MonthlyUtility[];
-            });
+        // RN-6: profits are computed on the server (utilidades/domain). A failure
+        // goes to the page error instead of showing 0.
+        const utilitiesPromise = fetchUtilitiesByYear(year, isAdminView ? userId : undefined);
         const [rows, utilitiesRows] = await Promise.all([
           listReceiptItemsByYear(supabase, { userId, year }),
           utilitiesPromise,

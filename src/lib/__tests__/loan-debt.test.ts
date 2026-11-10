@@ -6,6 +6,7 @@ import { summarizeActiveLoanDebt, type LoanInterestItem } from '@/lib/loans';
 import {
   getLoanInterestItems,
   getLoanInterestOwed,
+  getAllActiveLoansDebt,
   getMyActiveLoansDebt,
   LOAN_INTEREST_ITEMS_PAGE_SIZE,
 } from '@/lib/data/loans';
@@ -253,5 +254,29 @@ describe('getMyActiveLoansDebt (replaces get_user_active_loans_debt)', () => {
   it('without a signed-in user it returns an empty list', async () => {
     const { supabase } = fakeClient({ loans }, null);
     expect(await getMyActiveLoansDebt(supabase, fecha('2026-04-10'))).toEqual([]);
+  });
+});
+
+describe('getAllActiveLoansDebt (admin summary)', () => {
+  const loans = [
+    { id: 'loan-1', user_id: 'user-1', status: 'active', loan_number: 7, disbursement_number: 'D-7', requested_amount: 1_000_000, interest_rate: 0.02, disbursed_at: '2026-01-10T15:00:00+00:00', full_rate_day_limit: 15, cutoff_day: 25 },
+    { id: 'loan-2', user_id: 'user-1', status: 'paid', loan_number: 8, disbursement_number: 'D-8', requested_amount: 500_000, interest_rate: 0.02, disbursed_at: '2026-01-10T15:00:00+00:00', full_rate_day_limit: 15, cutoff_day: 25 },
+    { id: 'loan-3', user_id: 'user-2', status: 'active', loan_number: 9, disbursement_number: 'D-9', requested_amount: 500_000, interest_rate: 0.02, disbursed_at: '2026-01-10T15:00:00+00:00', full_rate_day_limit: 15, cutoff_day: 25 },
+  ];
+
+  it('RN-4.22: returns every active loan of every shareholder with its owner and the interest owed from the domain', async () => {
+    const { supabase } = fakeClient({
+      loans,
+      receipt_items: [
+        item('a', 'loan-1', 'pago_capital', 400_000, 'approved'),
+        item('b', 'loan-1', 'pago_intereses', 30_000, 'approved'),
+      ],
+    });
+    const deudas = await getAllActiveLoansDebt(supabase, fecha('2026-04-10'));
+    expect(deudas.map((d) => [d.user_id, d.loan_id, d.interest_owed, d.outstanding_capital])).toEqual([
+      ['user-1', 'loan-1', 22_000, 600_000],
+      // Jan, Feb and Mar at 2% of 500.000.
+      ['user-2', 'loan-3', 30_000, 500_000],
+    ]);
   });
 });

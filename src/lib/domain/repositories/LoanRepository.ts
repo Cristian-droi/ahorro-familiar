@@ -3,8 +3,6 @@ import type { Database } from '@/types/database';
 import type { Loan, LoanVote, LoanWithDetails } from '@/types/entities';
 import {
   countAdminPendingLoans,
-  getMyUtilitiesByYear,
-  getUserUtilitiesByYear,
   getMyPendingLoanSharePurchases,
   countMyPendingLoanSharePurchases,
   getMyActiveLoansDebt,
@@ -23,7 +21,6 @@ import {
   getLoansWithDisbursement,
   getLibroAccionistaData,
   type AdminPendingLoanCounts,
-  type MonthlyUtility,
   type PendingLoanSharePurchase,
   type ActiveLoanDebt,
   type LoanWithBorrowerName,
@@ -43,13 +40,7 @@ export class LoanRepository {
     return countAdminPendingLoans(this.supabase);
   }
 
-  async getMyUtilitiesByYear(year: number): Promise<MonthlyUtility[]> {
-    return getMyUtilitiesByYear(this.supabase, year);
-  }
 
-  async getUserUtilitiesByYear(userId: string, year: number): Promise<MonthlyUtility[]> {
-    return getUserUtilitiesByYear(this.supabase, userId, year);
-  }
 
   async getMyPendingLoanSharePurchases(): Promise<PendingLoanSharePurchase[]> {
     return getMyPendingLoanSharePurchases(this.supabase);

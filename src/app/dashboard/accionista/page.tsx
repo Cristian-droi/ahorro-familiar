@@ -23,6 +23,8 @@ import {
   Calendar,
 } from 'lucide-react';
 import { getProfile } from '@/lib/data/profiles';
+import { consultarUtilidades } from '@/modules/utilidades/application/consultar-utilidades';
+import { utilidadesRepo } from '@/modules/utilidades/infra/utilidades-repo';
 import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import {
   countRejectedReceiptsForUser,
@@ -94,7 +96,10 @@ export default async function AccionistaDashboardPage() {
       .gte('target_month', `${year}-01-01`)
       .lt('target_month', `${year + 1}-01-01`),
     repo.getMyActiveLoansDebt().catch(() => []),
-    repo.getMyUtilitiesByYear(year).catch(() => []),
+    // RN-6: profits from utilidades/domain.
+    consultarUtilidades(utilidadesRepo, { anio: year, accionistaId: uid })
+      .then((porAccionista) => porAccionista.get(uid) ?? [])
+      .catch(() => []),
     countRejectedReceiptsForUser(supabase, uid).catch(() => 0),
     repo.countLoansAwaitingMyVote(uid).catch(() => 0),
     repo.countLoansRequiringActionForUser(uid).catch(() => 0),

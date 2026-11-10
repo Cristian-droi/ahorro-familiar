@@ -216,6 +216,7 @@
 ## 6. Utilidades ✅
 
 - **RN-6.1** Las utilidades vienen de los **intereses efectivamente pagados** en el mes, no de los intereses que se deben.
+  - **Mes del reparto:** como los intereses se pagan a mes vencido (RN-4.22b), lo que se paga en junio por los intereses de mayo se reparte como utilidad de **mayo**, con la participación de mayo. *Cris, 2026-11-10.*
 - **RN-6.2** `participación(mes) = (valor acumulado de acciones + acciones por préstamo + capitalizaciones del accionista) / (total del grupo)`. Se calcula con lo acumulado hasta ese mes inclusive.
 - **RN-6.3** `utilidad(mes) = intereses pagados en el mes × participación(mes)`.
 - **RN-6.4** Las multas **no** entran en el reparto.

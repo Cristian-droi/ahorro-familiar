@@ -44,53 +44,17 @@ export async function countAdminPendingLoans(
   };
 }
 
-// Distribución mensual de utilidades del accionista para un año dado.
-// El cálculo lo hace el RPC get_my_utilities_by_year (security definer):
-//   participation = aportes_mios_acumulados / aportes_totales_acumulados
-//   pool          = intereses pagados por todos en el mes (target_month)
-//   distribution  = participation * pool
+// Monthly profits of a shareholder (RN-6), as served by GET /api/utilidades.
+// They are computed in utilidades/domain:
+//   participation = the shareholder's accumulated contributions / the group's
+//   pool          = interest paid for that month by everyone (target_month)
+//   distribution  = participation × pool, rounded to the peso
 export type MonthlyUtility = {
   month_number: number; // 1..12
   participation: number; // 0..1
   utilities_pool: number;
   distribution: number;
 };
-
-export async function getMyUtilitiesByYear(
-  supabase: SB,
-  year: number,
-): Promise<MonthlyUtility[]> {
-  const { data, error } = await supabase.rpc('get_my_utilities_by_year', {
-    p_year: year,
-  });
-  if (error) throw error;
-  return (data ?? []).map((row) => ({
-    month_number: Number(row.month_number),
-    participation: Number(row.participation),
-    utilities_pool: Number(row.utilities_pool),
-    distribution: Number(row.distribution),
-  }));
-}
-
-// Variante admin: consulta la distribución mensual de utilidades de
-// cualquier accionista. RPC valida is_admin().
-export async function getUserUtilitiesByYear(
-  supabase: SB,
-  userId: string,
-  year: number,
-): Promise<MonthlyUtility[]> {
-  const { data, error } = await supabase.rpc('get_user_utilities_by_year', {
-    p_user_id: userId,
-    p_year: year,
-  });
-  if (error) throw error;
-  return (data ?? []).map((row) => ({
-    month_number: Number(row.month_number),
-    participation: Number(row.participation),
-    utilities_pool: Number(row.utilities_pool),
-    distribution: Number(row.distribution),
-  }));
-}
 
 // Préstamos del accionista en pending_disbursement con upfront=true que
 // todavía no tienen recibo (pending o approved) cubriendo las acciones
@@ -170,12 +134,51 @@ export async function getMyActiveLoansDebt(supabase: SB, today?: FechaISO): Prom
 
   const { data: loans, error } = await supabase
     .from('loans')
-    .select('id, loan_number, disbursement_number, requested_amount, interest_rate, disbursed_at, full_rate_day_limit, cutoff_day')
+    .select('id, user_id, loan_number, disbursement_number, requested_amount, interest_rate, disbursed_at, full_rate_day_limit, cutoff_day')
     .eq('user_id', userId)
     .eq('status', 'active')
     .not('disbursed_at', 'is', null);
   if (error) throw error;
-  const rows = (loans ?? []).filter((l): l is typeof l & { disbursed_at: string } => l.disbursed_at != null);
+  return (await debtOfLoans(supabase, loans ?? [], today)).map((debt) => {
+    const own: ActiveLoanDebt & { user_id?: string } = { ...debt };
+    delete own.user_id;
+    return own;
+  });
+}
+
+// Every active loan of every shareholder, for the admin summary (RLS lets the
+// gerente and the tesorero read them). Interest owed comes from the domain.
+export async function getAllActiveLoansDebt(
+  supabase: SB,
+  today?: FechaISO,
+): Promise<(ActiveLoanDebt & { user_id: string })[]> {
+  const { data: loans, error } = await supabase
+    .from('loans')
+    .select('id, user_id, loan_number, disbursement_number, requested_amount, interest_rate, disbursed_at, full_rate_day_limit, cutoff_day')
+    .eq('status', 'active')
+    .not('disbursed_at', 'is', null);
+  if (error) throw error;
+  return debtOfLoans(supabase, loans ?? [], today);
+}
+
+type DebtLoanRow = {
+  id: string;
+  user_id: string;
+  loan_number: number | null;
+  disbursement_number: string | null;
+  requested_amount: number;
+  interest_rate: number;
+  disbursed_at: string | null;
+  full_rate_day_limit: number | null;
+  cutoff_day: number | null;
+};
+
+async function debtOfLoans(
+  supabase: SB,
+  loans: DebtLoanRow[],
+  today?: FechaISO,
+): Promise<(ActiveLoanDebt & { user_id: string })[]> {
+  const rows = loans.filter((l): l is DebtLoanRow & { disbursed_at: string } => l.disbursed_at != null);
   if (rows.length === 0) return [];
 
   const itemsByLoan = await getLoanInterestItems(supabase, rows.map((l) => l.id));
@@ -198,6 +201,7 @@ export async function getMyActiveLoansDebt(supabase: SB, today?: FechaISO): Prom
       throw new Error(`No se pudo calcular la deuda del préstamo ${loan.id}: ${summary.error.mensaje}`);
     }
     return {
+      user_id: loan.user_id,
       loan_id: loan.id,
       loan_number: loan.loan_number,
       disbursement_number: loan.disbursement_number,
