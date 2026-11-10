@@ -25,7 +25,7 @@
 | **S3** | 2–8 nov | **Dominio II (TDD):** votación, aplicación de pagos y migración de `src/lib` al dominio | 8 | ✅ |
 | **S4** | 9–15 nov | **Seguridad:** roles nuevos, bloqueo de escrituras con RLS y `audit_log` | 8 | ✅ |
 | **S5** | 16–22 nov | **Préstamos:** desembolso atómico y flujo de pago en la UI | 8 | ✅ |
-| **S6** | 23–29 nov | **Utilidades:** cálculo en el dominio, más extracto y panel servidos desde el servidor | 8 | |
+| **S6** | 23–29 nov | **Utilidades:** cálculo en el dominio, más extracto y panel servidos desde el servidor | 8 |✅ |
 | **S7** | 30 nov – 6 dic | **Arranque 2027:** importación validada de saldos y despliegue | 8 | |
 | **S8** | 7–13 dic | **UI/UX:** base de 16px y las 6 pantallas clave, con datos de demo | 8 | |
 | **S9** | 14–19 dic | **Colchón y ensayo.** Congelamiento del código el 18 de diciembre. | 8 | |
@@ -134,3 +134,4 @@ Se sacaron del plan hasta la demo por falta de capacidad. Ninguna es necesaria p
 | S3 | 8 | 10 | ✅ | Terminada el 5 de nov, antes de la fecha planeada, con 2 h más de lo planeado. Además de lo previsto: reglas nuevas de Cris (RN-2.2, RN-3.4, RN-4.3b, RN-4.5b, RN-4.21b, RN-4.22b, RN-4.29b/c, RN-4.31), una sola fuente de intereses, ajustes configurables y guardado de Ajustes desde el servidor |
 | S4 | 8 | 5 | ✅ | Terminada el 6 de nov (PR #9, mergeado el mismo día), antes de la fecha planeada, con 3 h menos de lo planeado. Además de lo previsto: carreras de dinero al aprobar, rechazar y reenviar (F18 y F24), permisos de funciones internas (F19 y F28), Ajustes colgada con dos pestañas (F25) y reinicio de la nube de pruebas desde cero, con 51 migraciones |
 | S5 | 8 | 4 | ✅ | Terminada el 10 de nov en `feat/s5-prestamos`, antes de la fecha planeada, con 4 h menos de lo planeado. Además de lo previsto: mes de ingreso (RN-3.6), pago parcial de intereses (RN-4.25) y respuestas del gerente. Pendientes en `odd/tasks/s5-prestamos.md` (G1–G6); las 3 migraciones nuevas aún no están en la nube |
+| S6 | 8 | 4 | ✅ | Terminada el 10 de nov en `feat/s6-utilidades`, antes de la fecha planeada, con 4 h menos de lo planeado. Las utilidades salen del dominio y se eliminaron las 3 funciones SQL. Por decisión de Cris, del resumen solo se corrigió la deuda de intereses; la liquidación completa (RN-8.2) queda pendiente para antes de la demo. Pendientes en `odd/tasks/s6-utilidades.md` (H1–H6) |
