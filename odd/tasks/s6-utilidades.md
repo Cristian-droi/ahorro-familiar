@@ -23,7 +23,7 @@ Cut order (roadmap): T4 first.
 | T1 | S1–S5 | inline | done | RED: module missing → GREEN 9/9 (`utilidades.test.ts`), `tsc` clean |
 | T2 | S1, S6 | inline | done | Use case + API + 3 screens; differential on local data identical to the SQL (L4); suite 717/717, probes 150/150, `tsc` clean, lint 0 errors (24 warnings, as before) |
 | T3 | S6 | inline | done | Scope cut by Cris (L7). RED → GREEN: `deudaPorAccionista` 2, `getAllActiveLoansDebt` 1, `resumenDelPeriodo`/`interesesPorMesDelAnio` 4, `resumirUtilidades` 1; browser on local data (L8) |
-| T4 | S7 | inline | pending | |
+| T4 | S7 | inline | done | RED → GREEN `ritmo-de-pago.test.ts` 7/7 (section 4.7 and RN-4.30 examples); browser on local data (L9) |
 
 ## Follow-ups
 
@@ -45,3 +45,4 @@ Cut order (roadmap): T4 first.
 - **L6** T1–T2 verified: independent verifier S1–S6 met, no blockers; equivalence with the old SQL on 60 rows except the period floor (intended) and one 1-peso half-up case (H1). Native review `review-c2ea4b2e1769fef7` (consent granted by Cris, lens reliability) approved, acknowledged; advisories H2–H4.
 - **L7 (Cris, 2026-11-10)** "Solo corregir deuda, pero queda pendiente la liquidación completa" — T3 narrowed to the resumen interest debt and the admin indicator; the full liquidation is H5.
 - **L8** T3: `getAllActiveLoansDebt` (shared `debtOfLoans` with `getMyActiveLoansDebt`), domain `deudaPorAccionista`, `GET /api/prestamos/deuda` (gerente or tesorero); resumen interest debt now comes from it instead of plan estimate minus paid. Indicator: domain `interesesPorMesDelAnio` + `resumenDelPeriodo`, use case `resumirUtilidades`, `GET /api/utilidades?summary=1`; it shows the period's interest (Bogotá year) and the last closed month against the one before. Browser: API debt for Ana 206.667 (= 240.000 − 33.333 Sep payment) and the same in resumen; indicator 673.333, +1820,0 %. Extracto still computes loan books in the browser (not in the narrowed scope).
+- **L9** T4: domain `ritmoDePago` (balance, agreed capital of the current month, `cuotaParaCerrarElAnio` up to the last plan month) and `ritmoDelAccionista` (adds every active loan, section 4.7); `GET /api/prestamos/[id]/ritmo` (gerente or tesorero, 409 if not active); "Ritmo de pago" card on the admin loan page, with the shareholder totals when they have more than one active loan. Assumptions, not in the rules: past the last plan month the whole balance is due now; a loan that starts next month (RN-4.15) has 0 to close. Browser: loan of 10.000.000 with plan Nov 5.000.000 / Dec 6.000.000 shows 5.000.000 agreed and 5.000.000 to close in November.
