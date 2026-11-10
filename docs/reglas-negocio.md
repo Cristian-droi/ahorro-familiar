@@ -57,6 +57,8 @@
   - Un mes pasado **sigue sumando** 500 por día hasta llegar al tope; no se cobran los 15.000 de una vez al terminar el mes. *Aclarado por Cris el 2026-10-27.*
 - **RN-3.5** Las multas **no se reparten** como utilidades. Ingresan a la caja del banco.
 - **RN-3.6** Un accionista que ingresa a mitad del periodo compra acciones, y paga multas, **desde el mes de ingreso**, que es el mes en que se aprueba su ingreso. Los meses anteriores no le generan obligación ni multa. *Validado con el gerente el 2026-11-07.*
+  - **Multa del mes de ingreso:** si el ingreso se aprueba después del día 10, la multa de ese mes corre **desde la fecha de aprobación**, no desde el día 10. Si se aprueba hasta el día 10, se aplica RN-3.4 sin cambios. *Respondido por el gerente el 2026-11-09.*
+  - **Ejemplo:** se aprueba el 20 de agosto y el accionista no compra. El 30 de agosto debe 10 días × 500 = **5.000** de multa de agosto, y no 10.000.
 
 **Ejemplo:** el ingreso se aprueba el 5 de agosto, no compra nada y hoy es 20 de septiembre.
 - Enero a julio: nada.
@@ -364,4 +366,4 @@ En diciembre las utilidades llegan a 10.000.000, pero el gasto **sigue siendo 20
 Ninguna por ahora (validadas el 2026-11-07).
 
 ### ❓ Abiertas
-1. **RN-3.6:** si el ingreso se aprueba después del día 10, ¿la multa del mes de ingreso cuenta desde el día 10, como en RN-3.4, o desde el día de la aprobación?
+Ninguna por ahora (la de RN-3.6 se respondió el 2026-11-09).
