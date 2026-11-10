@@ -44,9 +44,9 @@ describe('utilidadesDelAnio (RN-6.1 to RN-6.4)', () => {
         { mes: f('2026-05-01'), monto: 100_000 },
       ],
     });
-    expect(r.get('ana')?.[3]).toEqual({ mes: '2026-04-01', interesesDelMes: 100_000, utilidad: 30_000 });
+    expect(r.get('ana')?.[3]).toEqual({ mes: '2026-04-01', interesesDelMes: 100_000, participacion: 0.3, utilidad: 30_000 });
     // May: Ana 1.300.000 of 2.000.000 = 65%
-    expect(r.get('ana')?.[4]).toEqual({ mes: '2026-05-01', interesesDelMes: 100_000, utilidad: 65_000 });
+    expect(r.get('ana')?.[4]).toEqual({ mes: '2026-05-01', interesesDelMes: 100_000, participacion: 0.65, utilidad: 65_000 });
     expect(r.get('luis')?.[4].utilidad).toBe(35_000);
   });
 

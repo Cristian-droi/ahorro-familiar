@@ -9,6 +9,7 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { showToast } from '@/components/ui/Toast';
 import { cop } from '@/lib/format';
+import { fetchAllUtilitiesByYear } from '@/lib/data/utilities-client';
 import { exportToExcel, exportToPdf, type ExportColumn, type ExportRow, type ExportSection } from '@/lib/exports';
 import {
   FileSpreadsheet,
@@ -169,8 +170,9 @@ export default function AdminResumenPage() {
       }
 
       // 6. Cargar utilidades distribuidas en el año para TODOS los usuarios en una sola consulta
-      const { data: allUtilities } = await supabase
-        .rpc('get_all_users_utilities_by_year', { p_year: year });
+      // RN-6: profits are computed on the server (utilidades/domain). A failure
+      // stops the load: a 0 here would flow into the liquidation figures.
+      const allUtilities = await fetchAllUtilitiesByYear(year);
 
       const utilitiesMap = new Map<string, number>();
       for (const u of (allUtilities || [])) {

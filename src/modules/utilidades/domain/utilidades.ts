@@ -37,6 +37,8 @@ export interface InteresesDelMes {
 export interface UtilidadMensual {
   mes: FechaISO;
   interesesDelMes: number;
+  // RN-6.2, for display only; the profit is computed with exact pesos.
+  participacion: number;
   utilidad: number;
 }
 
@@ -71,11 +73,13 @@ export function utilidadesDelAnio(params: {
     }
     const interesesDelMes = interesesPorMes.get(mes) ?? 0;
     for (const [id, filas] of resultado) {
+      const aporte = acumuladoPorAccionista.get(id) ?? 0;
       filas.push({
         mes,
         interesesDelMes,
+        participacion: acumuladoDelGrupo > 0 ? aporte / acumuladoDelGrupo : 0,
         utilidad: utilidadDelMes({
-          aporteDelAccionista: acumuladoPorAccionista.get(id) ?? 0,
+          aporteDelAccionista: aporte,
           aporteDelGrupo: acumuladoDelGrupo,
           interesesPagados: interesesDelMes,
         }),

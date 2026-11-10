@@ -840,16 +840,6 @@ export type Database = {
         }
         Returns: string
       }
-      get_all_users_utilities_by_year: {
-        Args: { p_year: number }
-        Returns: {
-          distribution: number
-          month_number: number
-          participation: number
-          user_id: string
-          utilities_pool: number
-        }[]
-      }
       get_capitalization_window_state: { Args: never; Returns: Json }
       get_capitalization_windows_admin: {
         Args: never
@@ -887,15 +877,6 @@ export type Database = {
           unit_value: number
         }[]
       }
-      get_my_utilities_by_year: {
-        Args: { p_year: number }
-        Returns: {
-          distribution: number
-          month_number: number
-          participation: number
-          utilities_pool: number
-        }[]
-      }
       get_user_active_loans_debt: {
         Args: never
         Returns: {
@@ -908,15 +889,6 @@ export type Database = {
           next_due_month: string
           outstanding_capital: number
           requested_amount: number
-        }[]
-      }
-      get_user_utilities_by_year: {
-        Args: { p_user_id: string; p_year: number }
-        Returns: {
-          distribution: number
-          month_number: number
-          participation: number
-          utilities_pool: number
         }[]
       }
       has_admin_role: { Args: never; Returns: boolean }

@@ -44,53 +44,17 @@ export async function countAdminPendingLoans(
   };
 }
 
-// Distribución mensual de utilidades del accionista para un año dado.
-// El cálculo lo hace el RPC get_my_utilities_by_year (security definer):
-//   participation = aportes_mios_acumulados / aportes_totales_acumulados
-//   pool          = intereses pagados por todos en el mes (target_month)
-//   distribution  = participation * pool
+// Monthly profits of a shareholder (RN-6), as served by GET /api/utilidades.
+// They are computed in utilidades/domain:
+//   participation = the shareholder's accumulated contributions / the group's
+//   pool          = interest paid for that month by everyone (target_month)
+//   distribution  = participation × pool, rounded to the peso
 export type MonthlyUtility = {
   month_number: number; // 1..12
   participation: number; // 0..1
   utilities_pool: number;
   distribution: number;
 };
-
-export async function getMyUtilitiesByYear(
-  supabase: SB,
-  year: number,
-): Promise<MonthlyUtility[]> {
-  const { data, error } = await supabase.rpc('get_my_utilities_by_year', {
-    p_year: year,
-  });
-  if (error) throw error;
-  return (data ?? []).map((row) => ({
-    month_number: Number(row.month_number),
-    participation: Number(row.participation),
-    utilities_pool: Number(row.utilities_pool),
-    distribution: Number(row.distribution),
-  }));
-}
-
-// Variante admin: consulta la distribución mensual de utilidades de
-// cualquier accionista. RPC valida is_admin().
-export async function getUserUtilitiesByYear(
-  supabase: SB,
-  userId: string,
-  year: number,
-): Promise<MonthlyUtility[]> {
-  const { data, error } = await supabase.rpc('get_user_utilities_by_year', {
-    p_user_id: userId,
-    p_year: year,
-  });
-  if (error) throw error;
-  return (data ?? []).map((row) => ({
-    month_number: Number(row.month_number),
-    participation: Number(row.participation),
-    utilities_pool: Number(row.utilities_pool),
-    distribution: Number(row.distribution),
-  }));
-}
 
 // Préstamos del accionista en pending_disbursement con upfront=true que
 // todavía no tienen recibo (pending o approved) cubriendo las acciones
