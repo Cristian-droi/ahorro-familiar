@@ -24,7 +24,7 @@
 | **S2** | 26 oct – 1 nov | **Dominio I (TDD):** acciones, multas y cálculos de préstamos | 8 | ✅ |
 | **S3** | 2–8 nov | **Dominio II (TDD):** votación, aplicación de pagos y migración de `src/lib` al dominio | 8 | ✅ |
 | **S4** | 9–15 nov | **Seguridad:** roles nuevos, bloqueo de escrituras con RLS y `audit_log` | 8 | ✅ |
-| **S5** | 16–22 nov | **Préstamos:** desembolso atómico y flujo de pago en la UI | 8 | |
+| **S5** | 16–22 nov | **Préstamos:** desembolso atómico y flujo de pago en la UI | 8 | ✅ |
 | **S6** | 23–29 nov | **Utilidades:** cálculo en el dominio, más extracto y panel servidos desde el servidor | 8 | |
 | **S7** | 30 nov – 6 dic | **Arranque 2027:** importación validada de saldos y despliegue | 8 | |
 | **S8** | 7–13 dic | **UI/UX:** base de 16px y las 6 pantallas clave, con datos de demo | 8 | |
@@ -72,9 +72,9 @@
 - [x] Subir a **error** la regla de ESLint del cliente admin fuera de `infra`, con excepción temporal para 18 archivos viejos.
 
 ### S5 · Préstamos (16–22 nov)
-- [ ] RPC `desembolsar_prestamo` atómica, con `cash_outflows` (CE) y bloqueo de acciones por adelantado.
-- [ ] Excepción en acciones por préstamo con motivo obligatorio (RN-4.12).
-- [ ] Flujo "Comprar y pagar" con pagos a préstamos.
+- [x] RPC `desembolsar_prestamo` atómica, con `cash_outflows` (CE) y bloqueo de acciones por adelantado.
+- [x] Excepción en acciones por préstamo con motivo obligatorio (RN-4.12).
+- [x] Flujo "Comprar y pagar" con pagos a préstamos. Además: pago parcial de intereses (RN-4.25) y obligaciones desde el mes de ingreso (RN-3.6).
 
 ### S6 · Utilidades (23–29 nov)
 - [ ] `utilidades/domain` (RN-6). Reemplaza los cálculos que hoy se hacen en el cliente.
@@ -133,3 +133,4 @@ Se sacaron del plan hasta la demo por falta de capacidad. Ninguna es necesaria p
 | S2 | 8 | 5 | ✅ | Terminada el 26 de oct (PR #5, mergeado el mismo día), con 3 h menos de lo planeado. Además se agregó RN-4.30 (cuota para cerrar el año, redondeo hacia arriba) |
 | S3 | 8 | 10 | ✅ | Terminada el 5 de nov, antes de la fecha planeada, con 2 h más de lo planeado. Además de lo previsto: reglas nuevas de Cris (RN-2.2, RN-3.4, RN-4.3b, RN-4.5b, RN-4.21b, RN-4.22b, RN-4.29b/c, RN-4.31), una sola fuente de intereses, ajustes configurables y guardado de Ajustes desde el servidor |
 | S4 | 8 | 5 | ✅ | Terminada el 6 de nov (PR #9, mergeado el mismo día), antes de la fecha planeada, con 3 h menos de lo planeado. Además de lo previsto: carreras de dinero al aprobar, rechazar y reenviar (F18 y F24), permisos de funciones internas (F19 y F28), Ajustes colgada con dos pestañas (F25) y reinicio de la nube de pruebas desde cero, con 51 migraciones |
+| S5 | 8 | 4 | ✅ | Terminada el 10 de nov en `feat/s5-prestamos`, antes de la fecha planeada, con 4 h menos de lo planeado. Además de lo previsto: mes de ingreso (RN-3.6), pago parcial de intereses (RN-4.25) y respuestas del gerente. Pendientes en `odd/tasks/s5-prestamos.md` (G1–G6); las 3 migraciones nuevas aún no están en la nube |

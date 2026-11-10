@@ -57,6 +57,9 @@
   - Un mes pasado **sigue sumando** 500 por día hasta llegar al tope; no se cobran los 15.000 de una vez al terminar el mes. *Aclarado por Cris el 2026-10-27.*
 - **RN-3.5** Las multas **no se reparten** como utilidades. Ingresan a la caja del banco.
 - **RN-3.6** Un accionista que ingresa a mitad del periodo compra acciones, y paga multas, **desde el mes de ingreso**, que es el mes en que se aprueba su ingreso. Los meses anteriores no le generan obligación ni multa. *Validado con el gerente el 2026-11-07.*
+  - **Multa del mes de ingreso:** si el ingreso se aprueba después del día 10, la multa de ese mes corre **desde la fecha de aprobación**, no desde el día 10. Si se aprueba hasta el día 10, se aplica RN-3.4 sin cambios. *Respondido por el gerente el 2026-11-09.*
+  - **Ejemplo:** se aprueba el 20 de agosto y el accionista no compra. El 30 de agosto debe 10 días × 500 = **5.000** de multa de agosto, y no 10.000.
+  - **Sin gracia después del día 10:** si el ingreso se aprueba después del día 10, ese mes no tiene días de gracia: la acción se debe desde el día de aprobación y la multa empieza a contar ese mismo día. Si se aprueba hasta el día 10, tiene hasta el día 10 para pagar sin multa. *Cris, 2026-11-10.*
 
 **Ejemplo:** el ingreso se aprueba el 5 de agosto, no compra nada y hoy es 20 de septiembre.
 - Enero a julio: nada.
@@ -337,7 +340,7 @@ En diciembre las utilidades llegan a 10.000.000, pero el gasto **sigue siendo 20
 | # | Regla | Código actual | Acción |
 |---|---|---|---|
 | 1 | RN-4.10 acciones por préstamo | Redondeo hacia **abajo** (`src/lib/loans.ts`, `calcLoanShares`) | Cambiar a **TECHO** |
-| 2 | RN-4.12 excepción con auditoría | No existe | Implementar |
+| 2 | RN-4.12 excepción con auditoría | ✅ Resuelto en la S5: al aprobar, el tesorero cambia la cantidad con motivo obligatorio; quedan `loan_shares_suggested`, el motivo y el registro en la auditoría | — |
 | 3 | RN-4.1 mínimo de préstamo | 500.000 fijo (`schemas/loan.ts`) | Convertir en parámetro opcional |
 | 4 | RN-4.2 préstamos activos | Máximo 2 | Parámetro opcional, sin límite por defecto |
 | 5 | RN-4.3 plazo | 1 a 60 meses | Lo elige el accionista con máximo hasta diciembre, o diciembre del año siguiente si se habilita |
@@ -354,7 +357,7 @@ En diciembre las utilidades llegan a 10.000.000, pero el gasto **sigue siendo 20
 | 15 | RN-9 auditoría | `audit_log` existe desde la S4 para préstamos, recibos y ajustes | Falta el desembolso (S5), solicitudes y capitalizaciones; el aviso al gerente y la vista llegan después |
 | 16 | Seguridad | `loans_update_own_draft` permite editar la tasa; `system_settings` sin migración ni RLS | Corregir |
 | 17 | RN-4.29 abono mayor al saldo | Resuelto en la S4 para capital; el trigger ya no recorta el saldo a 0 | Falta el sobrepago de intereses, que depende de RN-4.22b |
-| 18 | RN-3.6 mes de ingreso | Los meses pendientes y las multas se cuentan desde enero del periodo, y no se guarda la fecha de ingreso | Guardar la fecha de ingreso y contar desde ese mes (F27 en `odd/tasks/s4-seguridad.md`) |
+| 18 | RN-3.6 mes de ingreso | ✅ Resuelto en la S5: `profiles.joined_on` guarda el día de aprobación y las obligaciones y multas cuentan desde ese mes. Los accionistas sin fecha (los de antes y los creados a mano) siguen desde enero | Cargar la fecha de ingreso de los accionistas actuales que entraron este año, si aplica |
 
 ---
 
@@ -364,4 +367,4 @@ En diciembre las utilidades llegan a 10.000.000, pero el gasto **sigue siendo 20
 Ninguna por ahora (validadas el 2026-11-07).
 
 ### ❓ Abiertas
-1. **RN-3.6:** si el ingreso se aprueba después del día 10, ¿la multa del mes de ingreso cuenta desde el día 10, como en RN-3.4, o desde el día de la aprobación?
+Ninguna por ahora (la de RN-3.6 se respondió el 2026-11-09).

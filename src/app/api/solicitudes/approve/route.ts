@@ -7,6 +7,7 @@ import {
   updateMembershipRequestStatus,
 } from '@/lib/data/membership-requests';
 import { upsertProfile } from '@/lib/data/profiles';
+import { hoyBogota } from '@/shared/domain/fechas';
 import { sendMail } from '@/lib/emails/transport';
 import {
   buildApprovalEmail,
@@ -78,6 +79,8 @@ export async function POST(request: Request) {
         address: req.address,
         monthly_income: req.monthly_income,
         role: 'accionista',
+        // RN-3.6: shares and fines are owed from the approval day.
+        joined_on: hoyBogota(new Date()),
       });
     } catch (err) {
       console.error('Error creando profile:', err);

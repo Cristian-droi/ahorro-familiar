@@ -71,3 +71,21 @@ describe('computeFineDetail', () => {
     });
   });
 });
+
+describe('computeFineForMonth with the joining date (RN-3.6)', () => {
+  it('RN-3.6: approved on 20 August, the August fine on 30 August is 5.000', () => {
+    expect(computeFineForMonth('2026-08-01', dia('2026-08-30'), DEFAULT_PURCHASE_RULES, '2026-08-20')).toBe(5000);
+    expect(computeFineDetail('2026-08-01', dia('2026-08-30'), DEFAULT_PURCHASE_RULES, '2026-08-20')).toMatchObject({
+      amount: 5000,
+      daysLate: 10,
+    });
+  });
+
+  it('RN-3.6: a month before joining has no fine', () => {
+    expect(computeFineForMonth('2026-07-01', dia('2026-09-20'), DEFAULT_PURCHASE_RULES, '2026-08-05')).toBe(0);
+  });
+
+  it('a null joining date keeps the previous fine', () => {
+    expect(computeFineForMonth('2026-08-01', dia('2026-08-30'), DEFAULT_PURCHASE_RULES, null)).toBe(10000);
+  });
+});

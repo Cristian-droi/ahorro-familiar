@@ -97,3 +97,50 @@ export function aplicarPago(params: {
     pagado: estaPagado({ saldoCapital: saldoRestante, interesesPendientes: interesesRestantes }),
   });
 }
+
+// RN-4.29b: one loan line of the cart, where the shareholder chooses how much
+// goes to interest and how much to capital. RN-4.25 allows partial interest;
+// RN-4.24 accepts capital only once that loan's interest is paid in full;
+// RN-4.29 caps capital at the balance.
+export function validarPagoDelCarrito(params: {
+  interesesPendientes: number;
+  saldoCapital: number;
+  aIntereses: number;
+  aCapital: number;
+}): Result<{ interesesRestantes: number; saldoRestante: number }, ErrorDeDominio> {
+  const { interesesPendientes, saldoCapital, aIntereses, aCapital } = params;
+  if (![interesesPendientes, saldoCapital, aIntereses, aCapital].every(esSaldoValido)) return err(VALOR_INVALIDO);
+  if (aIntereses === 0 && aCapital === 0) {
+    return err({ codigo: 'pago_vacio', mensaje: 'Indica cuánto pagas de intereses o de capital, o quita el préstamo del recibo.' });
+  }
+  if (aIntereses > interesesPendientes) {
+    return err({
+      codigo: 'intereses_mayores_a_lo_adeudado',
+      mensaje: `El pago de intereses no puede superar lo adeudado (${formatearPesos(interesesPendientes)}).`,
+    });
+  }
+  const interesesRestantes = interesesPendientes - aIntereses;
+  if (aCapital > 0 && interesesRestantes > 0) {
+    return err({
+      codigo: 'intereses_primero',
+      mensaje: `Para abonar a capital primero paga todos los intereses (${formatearPesos(interesesPendientes)}).`,
+    });
+  }
+  if (aCapital > saldoCapital) {
+    return err({
+      codigo: 'abono_mayor_al_saldo',
+      mensaje: `El abono a capital no puede superar el saldo pendiente del préstamo (${formatearPesos(saldoCapital)}).`,
+    });
+  }
+  return ok({ interesesRestantes, saldoRestante: saldoCapital - aCapital });
+}
+
+// RN-4.25: interest the shareholder pays on one loan of the cart. Untouched
+// (undefined) pays everything owed; a blank field (null) pays nothing.
+export function pagoDeInteresesElegido(params: {
+  interesesPendientes: number;
+  ingresado: number | null | undefined;
+}): number {
+  if (params.ingresado === undefined) return params.interesesPendientes;
+  return params.ingresado ?? 0;
+}

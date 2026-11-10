@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { calcularAccionesPorPrestamo } from '@/modules/prestamos/domain/acciones-por-prestamo';
+import { ajustarAccionesPorPrestamo, calcularAccionesPorPrestamo } from '@/modules/prestamos/domain/acciones-por-prestamo';
 
 // Default step from docs/reglas-negocio.md (RN-4.10).
 const PASO = 500000;
@@ -41,5 +41,34 @@ describe('calcularAccionesPorPrestamo (RN-4.10, RN-4.14)', () => {
       expect(r.error.codigo).toBe('monto_invalido');
       expect(r.error.mensaje).toBe('El monto del préstamo debe ser un número entero mayor que cero.');
     }
+  });
+});
+
+describe('ajustarAccionesPorPrestamo (RN-4.12)', () => {
+  it('RN-4.12: 11.000.000 suggests 22 shares; the exception to 20 at 50.000 is worth 1.000.000', () => {
+    const r = ajustarAccionesPorPrestamo({ sugerida: 22, final: 20, valorAccion: 50000, motivo: 'Excepción aprobada' });
+    expect(r).toEqual({ ok: true, value: { cantidad: 20, valor: 1000000, cambio: true } });
+  });
+
+  it('RN-4.12: a change without a reason is rejected', () => {
+    const r = ajustarAccionesPorPrestamo({ sugerida: 22, final: 20, valorAccion: 50000, motivo: '   ' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.codigo).toBe('motivo_obligatorio');
+  });
+
+  it('keeping the suggested count needs no reason', () => {
+    const r = ajustarAccionesPorPrestamo({ sugerida: 22, final: 22, valorAccion: 50000, motivo: null });
+    expect(r).toEqual({ ok: true, value: { cantidad: 22, valor: 1100000, cambio: false } });
+  });
+
+  it.each([-1, 2.5, Number.NaN])('rejects a count of %s', (final) => {
+    const r = ajustarAccionesPorPrestamo({ sugerida: 22, final, valorAccion: 50000, motivo: 'x' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.codigo).toBe('cantidad_invalida');
+  });
+
+  it('allows zero shares as an exception with a reason', () => {
+    const r = ajustarAccionesPorPrestamo({ sugerida: 2, final: 0, valorAccion: 50000, motivo: 'Exonerado' });
+    expect(r).toEqual({ ok: true, value: { cantidad: 0, valor: 0, cambio: true } });
   });
 });

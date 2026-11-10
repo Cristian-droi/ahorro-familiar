@@ -29,6 +29,9 @@ export interface EntradaDeObligaciones {
   accionesCompradas: { mes: FechaISO; acciones: number }[];
   mesesConMultaPagada: FechaISO[];
   prestamos: PrestamoActivo[];
+  // RN-3.6: day the membership was approved; null for members from before it
+  // was stored, who owe from January.
+  fechaDeIngreso?: FechaISO | null;
 }
 
 export interface MesEnMora {
@@ -55,12 +58,14 @@ export interface EstadoDeObligaciones {
   prestamos: PrestamoActivo[];
 }
 
-// Months from January to the current month; the current month is required
-// only after its grace days (RN-3.4).
-function mesesExigidos(hoy: FechaISO, diasDeGracia: number): FechaISO[] {
-  const enero = sumarMeses(hoy, -(Number(hoy.slice(5, 7)) - 1));
+// Months from January, or from the joining month (RN-3.6), to the current
+// month; the current month is required only after its grace days (RN-3.4).
+function mesesExigidos(hoy: FechaISO, diasDeGracia: number, ingreso: FechaISO | null): FechaISO[] {
+  const enero = primerDiaDelMes(sumarMeses(hoy, -(Number(hoy.slice(5, 7)) - 1)));
+  const mesDeIngreso = ingreso ? primerDiaDelMes(ingreso) : null;
+  const desde = mesDeIngreso && mesDeIngreso > enero ? mesDeIngreso : enero;
   const meses: FechaISO[] = [];
-  for (let mes = enero; mes <= primerDiaDelMes(hoy); mes = sumarMeses(mes, 1)) meses.push(mes);
+  for (let mes = desde; mes <= primerDiaDelMes(hoy); mes = sumarMeses(mes, 1)) meses.push(mes);
   if (diaDelMes(hoy) <= diasDeGracia) meses.pop();
   return meses;
 }
@@ -97,7 +102,8 @@ export function estadoDeObligaciones(entrada: EntradaDeObligaciones): EstadoDeOb
   let montoMultas = 0;
   const mesesEnMora: MesEnMora[] = [];
 
-  for (const mes of mesesExigidos(hoy, reglas.multa.diasDeGracia)) {
+  const ingreso = entrada.fechaDeIngreso ?? null;
+  for (const mes of mesesExigidos(hoy, reglas.multa.diasDeGracia, ingreso)) {
     // RN-3.1: the monthly minimum.
     const adeudadas = Math.max(0, reglas.compra.minAccionesPorMes - (compradasPorMes.get(mes) ?? 0));
     if (adeudadas === 0) continue;
@@ -108,7 +114,7 @@ export function estadoDeObligaciones(entrada: EntradaDeObligaciones): EstadoDeOb
     montoAcciones += adeudadas * valorUnitario;
 
     // RN-3.4: the fine of this month, unless it was already paid.
-    const multa = multaPagada.has(mes) ? 0 : multaDelMes({ mes, hoy, reglas: reglas.multa });
+    const multa = multaPagada.has(mes) ? 0 : multaDelMes({ mes, hoy, reglas: reglas.multa, ingreso });
     if (multa > 0) {
       razones.push(`Tenés una multa pendiente por mora en acciones de ${nombreDelMes} ${anio}.`);
       multasPendientes = true;

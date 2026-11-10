@@ -3,6 +3,7 @@ import { type SupabaseClient } from '@supabase/supabase-js';
 import { type Database } from '@/types/database';
 import { getOpenPeriodShareValue } from '@/lib/data/share-value';
 import { getLoanInterestItems } from '@/lib/data/loans';
+import { getJoinedOn } from '@/lib/data/profiles';
 import { calcAccruedInterest, type LoanInterestItem } from '@/lib/loans';
 import { DEFAULT_PURCHASE_RULES, type PurchaseRules, toReglasDeMulta } from '@/lib/fines';
 import { estadoDeObligaciones, type PrestamoActivo } from '@/modules/pagos/domain/obligaciones';
@@ -76,6 +77,8 @@ export async function checkUserObligations(
   const hoy = hoyBogota(new Date());
   const currentYear = Number(hoy.slice(0, 4));
   const shareValue = await getOpenPeriodShareValue(supabase, userId);
+  // RN-3.6: months before joining are not owed.
+  const joinedOn = await getJoinedOn(supabase, userId);
 
   // 2. Ítems de recibos aprobados (acciones y multas) del año en curso
   const startOfYear = `${currentYear}-01-01`;
@@ -171,6 +174,7 @@ export async function checkUserObligations(
     accionesCompradas,
     mesesConMultaPagada,
     prestamos,
+    fechaDeIngreso: joinedOn as FechaISO | null,
   });
 
   return {

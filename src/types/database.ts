@@ -131,6 +131,99 @@ export type Database = {
         }
         Relationships: []
       }
+      cash_outflows: {
+        Row: {
+          amount: number
+          applied_month: string | null
+          ce_number: string
+          created_at: string
+          created_by: string
+          id: string
+          kind: Database["public"]["Enums"]["outflow_kind"]
+          loan_id: string | null
+          payment_method: string
+          period_id: string | null
+          profile_id: string | null
+          proof_path: string | null
+          tax_4x1000: number
+          void_reason: string | null
+          voided_at: string | null
+          voided_by: string | null
+        }
+        Insert: {
+          amount: number
+          applied_month?: string | null
+          ce_number: string
+          created_at?: string
+          created_by: string
+          id?: string
+          kind: Database["public"]["Enums"]["outflow_kind"]
+          loan_id?: string | null
+          payment_method: string
+          period_id?: string | null
+          profile_id?: string | null
+          proof_path?: string | null
+          tax_4x1000?: number
+          void_reason?: string | null
+          voided_at?: string | null
+          voided_by?: string | null
+        }
+        Update: {
+          amount?: number
+          applied_month?: string | null
+          ce_number?: string
+          created_at?: string
+          created_by?: string
+          id?: string
+          kind?: Database["public"]["Enums"]["outflow_kind"]
+          loan_id?: string | null
+          payment_method?: string
+          period_id?: string | null
+          profile_id?: string | null
+          proof_path?: string | null
+          tax_4x1000?: number
+          void_reason?: string | null
+          voided_at?: string | null
+          voided_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cash_outflows_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cash_outflows_loan_id_fkey"
+            columns: ["loan_id"]
+            isOneToOne: false
+            referencedRelation: "loans"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cash_outflows_period_id_fkey"
+            columns: ["period_id"]
+            isOneToOne: false
+            referencedRelation: "periods"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cash_outflows_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cash_outflows_voided_by_fkey"
+            columns: ["voided_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       email_change_requests: {
         Row: {
           canceled_at: string | null
@@ -274,7 +367,9 @@ export type Database = {
           loan_number: number | null
           loan_shares_amount: number
           loan_shares_count: number
+          loan_shares_override_reason: string | null
           loan_shares_paid_upfront: boolean
+          loan_shares_suggested: number | null
           outstanding_balance: number
           payment_plan_months: number | null
           plan_rejection_reason: string | null
@@ -309,7 +404,9 @@ export type Database = {
           loan_number?: number | null
           loan_shares_amount?: number
           loan_shares_count?: number
+          loan_shares_override_reason?: string | null
           loan_shares_paid_upfront?: boolean
+          loan_shares_suggested?: number | null
           outstanding_balance?: number
           payment_plan_months?: number | null
           plan_rejection_reason?: string | null
@@ -344,7 +441,9 @@ export type Database = {
           loan_number?: number | null
           loan_shares_amount?: number
           loan_shares_count?: number
+          loan_shares_override_reason?: string | null
           loan_shares_paid_upfront?: boolean
+          loan_shares_suggested?: number | null
           outstanding_balance?: number
           payment_plan_months?: number | null
           plan_rejection_reason?: string | null
@@ -508,6 +607,7 @@ export type Database = {
           first_name: string
           id: string
           identity_document: string
+          joined_on: string | null
           last_name: string
           monthly_income: number | null
           next_year_capitalization: number | null
@@ -527,6 +627,7 @@ export type Database = {
           first_name: string
           id: string
           identity_document: string
+          joined_on?: string | null
           last_name?: string
           monthly_income?: number | null
           next_year_capitalization?: number | null
@@ -546,6 +647,7 @@ export type Database = {
           first_name?: string
           id?: string
           identity_document?: string
+          joined_on?: string | null
           last_name?: string
           monthly_income?: number | null
           next_year_capitalization?: number | null
@@ -728,6 +830,16 @@ export type Database = {
       }
       count_active_shareholders: { Args: never; Returns: number }
       count_my_pending_loan_share_purchases: { Args: never; Returns: number }
+      desembolsar_prestamo: {
+        Args: {
+          p_actor: string
+          p_disbursement: Json
+          p_loan_id: string
+          p_plan: Json
+          p_receipt_items: Json
+        }
+        Returns: string
+      }
       get_all_users_utilities_by_year: {
         Args: { p_year: number }
         Returns: {
@@ -851,6 +963,7 @@ export type Database = {
         | "rejected_by_shareholders"
         | "expired"
       loan_vote_value: "approved" | "rejected"
+      outflow_kind: "loan_disbursement" | "expense" | "devolution"
       period_status: "open" | "closing" | "closed"
       receipt_concept:
         | "acciones"
@@ -1005,6 +1118,7 @@ export const Constants = {
         "expired",
       ],
       loan_vote_value: ["approved", "rejected"],
+      outflow_kind: ["loan_disbursement", "expense", "devolution"],
       period_status: ["open", "closing", "closed"],
       receipt_concept: [
         "acciones",

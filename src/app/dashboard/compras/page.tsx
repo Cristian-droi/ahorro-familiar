@@ -61,6 +61,15 @@ import {
   type PurchaseRules,
 } from '@/lib/fines';
 import { cop, monthLabel } from '@/lib/format';
+import { pagoDeInteresesElegido, validarPagoDelCarrito } from '@/modules/prestamos/domain/pagos';
+
+// Digits typed in a money field: undefined when the field was never touched,
+// null when it is blank.
+function montoEscrito(raw: string | undefined): number | null | undefined {
+  if (raw === undefined) return undefined;
+  const digits = raw.replace(/[^\d]/g, '');
+  return digits === '' ? null : Number(digits);
+}
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const ALLOWED_MIME = ['image/jpeg', 'image/png', 'application/pdf'];
@@ -76,17 +85,27 @@ function makeUid() {
   return Math.random().toString(36).slice(2, 10);
 }
 
+// RN-3.6: first day of the joining month, or null when owed from January.
+function joinedMonthOf(joinedOn: string | null): string | null {
+  return joinedOn ? `${joinedOn.slice(0, 7)}-01` : null;
+}
+
 function buildDefaultLines(
   currentMonthStr: string,
   sharesBoughtMap: Map<string, number>,
   minSharesRule: number,
+  joinedOn: string | null,
 ): CartLine[] {
   const currentYearNum = Number(currentMonthStr.slice(0, 4));
   const currMonthNum = Number(currentMonthStr.slice(5, 7));
   const defaultLines: CartLine[] = [];
+  // RN-3.6: months before joining are not owed.
+  const joinedMonth = joinedMonthOf(joinedOn);
+  const firstMonthNum =
+    joinedMonth && Number(joinedMonth.slice(0, 4)) === currentYearNum ? Number(joinedMonth.slice(5, 7)) : 1;
 
   // 1. Pre-cargar meses en mora del año en curso
-  for (let m = 1; m < currMonthNum; m++) {
+  for (let m = firstMonthNum; m < currMonthNum; m++) {
     const mStr = `${currentYearNum}-${String(m).padStart(2, '0')}-01`;
     const bought = sharesBoughtMap.get(mStr) ?? 0;
     if (bought < minSharesRule) {
@@ -133,6 +152,8 @@ export default function ComprasPage() {
   // Datos iniciales del usuario.
   const [userId, setUserId] = useState<string | null>(null);
   const [firstName, setFirstName] = useState<string>('');
+  // RN-3.6: the joining month's fine counts from the approval day.
+  const [joinedOn, setJoinedOn] = useState<string | null>(null);
   const [shareValue, setShareValue] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -170,10 +191,14 @@ export default function ComprasPage() {
   // Pago de préstamos: lista de préstamos activos con su deuda calculada
   // por backend. El user marca cuáles pagar (Set) y opcionalmente abona
   // capital (string indexado por loan_id, formato es-CO con separadores).
-  // Los intereses son siempre `interest_owed` y NO son editables.
+  // Los intereses son editables (RN-4.25): por defecto, todo lo adeudado.
   const [loanDebts, setLoanDebts] = useState<ActiveLoanDebt[]>([]);
   const [loanPaySelected, setLoanPaySelected] = useState<Set<string>>(new Set());
   const [loanPayCapital, setLoanPayCapital] = useState<Map<string, string>>(
+    new Map(),
+  );
+  // RN-4.25: interest paid per loan; a loan without an entry pays all it owes.
+  const [loanPayInterest, setLoanPayInterest] = useState<Map<string, string>>(
     new Map(),
   );
 
@@ -224,6 +249,7 @@ export default function ComprasPage() {
       }
       if (cancelled) return;
       setUserId(user.id);
+      let loadedJoinedOn: string | null = null;
 
       try {
         const [profile, periodShareValue] = await Promise.all([
@@ -232,6 +258,8 @@ export default function ComprasPage() {
         ]);
         if (cancelled) return;
         setFirstName(profile.first_name ?? '');
+        setJoinedOn(profile.joined_on ?? null);
+        loadedJoinedOn = profile.joined_on ?? null;
 
         if (periodShareValue == null) {
           // Sin valor de acción no puede comprar.
@@ -328,6 +356,7 @@ export default function ComprasPage() {
           currentMonth,
           boughtMap,
           loadedMinShares,
+          loadedJoinedOn,
         );
         setLines(defaultLines);
       }
@@ -465,9 +494,14 @@ export default function ComprasPage() {
       // 3) Pagos a préstamo (intereses + capital).
       const paySet = new Set<string>();
       const capitalMap = new Map<string, string>();
+      const interestMap = new Map<string, string>();
       for (const it of items) {
         if (it.concept === 'pago_intereses' && it.loan_id) {
           paySet.add(it.loan_id);
+          interestMap.set(
+            it.loan_id,
+            new Intl.NumberFormat('es-CO').format(Number(it.amount)),
+          );
         }
         if (it.concept === 'pago_capital' && it.loan_id) {
           paySet.add(it.loan_id);
@@ -480,6 +514,7 @@ export default function ComprasPage() {
       if (paySet.size > 0) {
         setLoanPaySelected(paySet);
         setLoanPayCapital(capitalMap);
+        setLoanPayInterest(interestMap);
       }
 
       // 4) Acciones por préstamo upfront.
@@ -522,7 +557,7 @@ export default function ComprasPage() {
     }[] = [];
     for (const m of distinctMonths) {
       if (monthsAlreadyFined.has(m)) continue;
-      const detail = computeFineDetail(m, today, rules);
+      const detail = computeFineDetail(m, today, rules, joinedOn);
       if (detail.amount > 0) {
         out.push({
           month: m,
@@ -533,7 +568,7 @@ export default function ComprasPage() {
       }
     }
     return out;
-  }, [lines, rules, monthsAlreadyFined]);
+  }, [lines, rules, monthsAlreadyFined, joinedOn]);
 
   // Mapa mes → multa (para mostrar la info inline en cada línea).
   const fineByMonth = useMemo(() => {
@@ -563,7 +598,8 @@ export default function ComprasPage() {
   }, [capEnabled, capAmountInput]);
 
   // Subtotales de pagos de préstamo. Para cada loan seleccionado:
-  //   - intereses = interest_owed (obligatorio, no editable).
+  //   - intereses = lo que escribe el accionista, o todo lo adeudado si no lo
+  //     cambió (RN-4.25 permite pagos parciales).
   //   - capital   = parseado del input (puede ser 0 → solo intereses).
   // Total de pagos de préstamo = suma de ambos por todos los seleccionados.
   const loanPaymentBreakdown = useMemo(() => {
@@ -573,14 +609,18 @@ export default function ComprasPage() {
       const raw = loanPayCapital.get(debt.loan_id) ?? '';
       const digits = raw.replace(/[^\d]/g, '');
       const capital = digits === '' ? 0 : Number(digits);
+      const interests = pagoDeInteresesElegido({
+        interesesPendientes: debt.interest_owed,
+        ingresado: montoEscrito(loanPayInterest.get(debt.loan_id)),
+      });
       out.push({
         loan: debt,
-        interests: debt.interest_owed,
+        interests: Number.isFinite(interests) ? interests : 0,
         capital: Number.isFinite(capital) ? capital : 0,
       });
     }
     return out;
-  }, [loanDebts, loanPaySelected, loanPayCapital]);
+  }, [loanDebts, loanPaySelected, loanPayCapital, loanPayInterest]);
 
   const loanPaymentsSubtotal = useMemo(
     () =>
@@ -686,15 +726,17 @@ export default function ComprasPage() {
         return `El monto excede tu cupo (${cop(capState.remaining)} disponibles).`;
       }
     }
-    // Pagos de préstamo: validar capital ≤ saldo.
+    // Pagos de préstamo: intereses primero, parciales permitidos y capital
+    // hasta el saldo (RN-4.24, RN-4.25, RN-4.29).
     for (const p of loanPaymentBreakdown) {
       const pName = `Préstamo #${p.loan.loan_number ?? '—'}${p.loan.disbursement_number ? ` (${p.loan.disbursement_number})` : ''}`;
-      if (p.capital > p.loan.outstanding_capital) {
-        return `El abono a capital del ${pName} excede el saldo (${cop(p.loan.outstanding_capital)}).`;
-      }
-      if (p.interests <= 0 && p.capital <= 0) {
-        return `El ${pName} no tiene intereses adeudados ni abono — quítalo del recibo.`;
-      }
+      const pago = validarPagoDelCarrito({
+        interesesPendientes: p.loan.interest_owed,
+        saldoCapital: p.loan.outstanding_capital,
+        aIntereses: p.interests,
+        aCapital: p.capital,
+      });
+      if (!pago.ok) return `${pName}: ${pago.error.mensaje}`;
     }
     return null;
   }, [
@@ -1023,7 +1065,9 @@ export default function ComprasPage() {
 
             <div className="flex flex-col gap-2.5">
               {lines.map((l) => {
-                const isPast = l.target_month < currentMonth;
+                // RN-3.6: a month before joining is past but not overdue.
+                const joinedMonth = joinedMonthOf(joinedOn);
+                const isPast = l.target_month < currentMonth && (!joinedMonth || l.target_month >= joinedMonth);
                 const isFuture = l.target_month > currentMonth;
                 const alreadyFined = monthsAlreadyFined.has(l.target_month);
                 const alreadyBought =
@@ -1268,6 +1312,8 @@ export default function ComprasPage() {
               setSelected={setLoanPaySelected}
               capitalInputs={loanPayCapital}
               setCapitalInputs={setLoanPayCapital}
+              interestInputs={loanPayInterest}
+              setInterestInputs={setLoanPayInterest}
             />
           )}
 
@@ -1845,13 +1891,29 @@ function LoanPaymentsSection({
   setSelected,
   capitalInputs,
   setCapitalInputs,
+  interestInputs,
+  setInterestInputs,
 }: {
   debts: ActiveLoanDebt[];
   selected: Set<string>;
   setSelected: React.Dispatch<React.SetStateAction<Set<string>>>;
   capitalInputs: Map<string, string>;
   setCapitalInputs: React.Dispatch<React.SetStateAction<Map<string, string>>>;
+  interestInputs: Map<string, string>;
+  setInterestInputs: React.Dispatch<React.SetStateAction<Map<string, string>>>;
 }) {
+  const formatDigits = (raw: string) => {
+    const digits = raw.replace(/[^\d]/g, '');
+    return digits === '' ? '' : new Intl.NumberFormat('es-CO').format(Number(digits));
+  };
+  // RN-4.25: partial interest payments.
+  const setInterest = (loanId: string, raw: string) => {
+    setInterestInputs((prev) => {
+      const next = new Map(prev);
+      next.set(loanId, formatDigits(raw));
+      return next;
+    });
+  };
   const toggle = (loanId: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -1885,8 +1947,9 @@ function LoanPaymentsSection({
             Pago de préstamos
           </h2>
           <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
-            Selecciona los préstamos a pagar en este recibo. Los intereses
-            adeudados son obligatorios; el abono a capital es opcional.
+            Selecciona los préstamos a pagar en este recibo. Puedes pagar todos
+            los intereses o una parte; el abono a capital se acepta cuando los
+            intereses quedan en cero.
           </p>
         </div>
       </div>
@@ -1898,8 +1961,27 @@ function LoanPaymentsSection({
           const capitalDigits = capitalRaw.replace(/[^\d]/g, '');
           const capitalNum = capitalDigits === '' ? 0 : Number(capitalDigits);
           const exceeds = capitalNum > debt.outstanding_capital;
+          const interestRaw = interestInputs.get(debt.loan_id);
+          const interestNum = pagoDeInteresesElegido({
+            interesesPendientes: debt.interest_owed,
+            ingresado: montoEscrito(interestRaw),
+          });
+          // RN-4.24, RN-4.25: the domain says what is left and what is wrong.
+          const interestCheck = validarPagoDelCarrito({
+            interesesPendientes: debt.interest_owed,
+            saldoCapital: debt.outstanding_capital,
+            aIntereses: Number.isFinite(interestNum) ? interestNum : 0,
+            aCapital: Number.isFinite(capitalNum) ? capitalNum : 0,
+          });
+          const interestError =
+            !interestCheck.ok &&
+            (interestCheck.error.codigo === 'intereses_mayores_a_lo_adeudado' ||
+              interestCheck.error.codigo === 'intereses_primero')
+              ? interestCheck.error.mensaje
+              : null;
+          const interestLeft = interestCheck.ok ? interestCheck.value.interesesRestantes : 0;
           const subtotal =
-            (isSelected ? debt.interest_owed : 0) +
+            (isSelected ? interestNum : 0) +
             (isSelected ? capitalNum : 0);
 
           return (
@@ -1966,6 +2048,38 @@ function LoanPaymentsSection({
                   </div>
                 )}
               </div>
+
+              {isSelected && debt.interest_owed > 0 && (
+                <div className="mt-3 flex flex-col gap-2 pl-7">
+                  <label className="text-[10px] font-semibold text-[var(--color-text-subtle)] tracking-wider uppercase">
+                    Pago de intereses
+                  </label>
+                  <div className="flex items-center h-10 rounded-[9px] bg-[var(--color-surface)] border border-[var(--color-border)] px-3 max-w-[280px]">
+                    <span className="text-[13px] text-[var(--color-text-subtle)] mr-1.5">
+                      $
+                    </span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="0"
+                      aria-label="Pago de intereses"
+                      value={interestRaw ?? formatDigits(String(debt.interest_owed))}
+                      onChange={(e) => setInterest(debt.loan_id, e.target.value)}
+                      className="flex-1 bg-transparent text-[13.5px] font-semibold text-[var(--color-text)] focus:outline-none tabular"
+                    />
+                  </div>
+                  {interestError ? (
+                    <div className="flex items-start gap-1.5 text-[11px] text-[var(--color-danger)]">
+                      <AlertTriangle size={12} strokeWidth={2} className="mt-px shrink-0" />
+                      {interestError}
+                    </div>
+                  ) : interestLeft > 0 ? (
+                    <div className="text-[11px] text-[var(--color-text-muted)]">
+                      Quedan {cop(interestLeft)} de intereses pendientes.
+                    </div>
+                  ) : null}
+                </div>
+              )}
 
               {isSelected && (
                 <div className="mt-3 flex flex-col gap-2 pl-7">

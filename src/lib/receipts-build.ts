@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from '@/types/database';
 import type { ReceiptItemInsert } from '@/lib/data/types';
 import type { PurchaseItemInput } from '@/lib/schemas/receipt';
+import { getJoinedOn } from '@/lib/data/profiles';
 import {
   computeFineForMonth,
   DEFAULT_PURCHASE_RULES,
@@ -207,10 +208,12 @@ export async function buildReceiptItems(
   );
 
   const todayBogota = getBogotaToday();
+  // RN-3.6: the joining month's fine counts from the approval day.
+  const joinedOn = distinctMonths.length > 0 ? await getJoinedOn(admin, userId) : null;
   const fineItems: Omit<ReceiptItemInsert, 'receipt_id'>[] = [];
   for (const month of distinctMonths) {
     if (monthsAlreadyFined.has(month)) continue;
-    const fine = computeFineForMonth(month, todayBogota, rules);
+    const fine = computeFineForMonth(month, todayBogota, rules, joinedOn);
     if (fine > 0) {
       fineItems.push({
         concept: 'multa_acciones',
