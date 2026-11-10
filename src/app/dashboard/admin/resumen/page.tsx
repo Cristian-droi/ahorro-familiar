@@ -135,39 +135,15 @@ export default function AdminResumenPage() {
 
       if (loansErr) throw loansErr;
 
-      // 5. Cargar todos los plan items de los préstamos activos para calcular deuda de intereses total
-      const activeLoanIds = allLoans?.filter(l => l.status === 'active').map(l => l.id) || [];
-      
-      let planItems: { loan_id: string; estimated_interest: number }[] = [];
-      let paidInterests: { loan_id: string; amount: number }[] = [];
-
-      if (activeLoanIds.length > 0) {
-        const [planRes, paidIntRes] = await Promise.all([
-          supabase
-            .from('loan_payment_plan_items')
-            .select('loan_id, estimated_interest')
-            .in('loan_id', activeLoanIds),
-          supabase
-            .from('receipt_items')
-            .select('loan_id, amount, receipts!inner(status)')
-            .eq('receipts.status', 'approved')
-            .eq('concept', 'pago_intereses')
-            .in('loan_id', activeLoanIds)
-        ]);
-
-        if (planRes.error) throw planRes.error;
-        if (paidIntRes.error) throw paidIntRes.error;
-
-        planItems = (planRes.data || []).map(p => ({
-          loan_id: p.loan_id,
-          estimated_interest: Number(p.estimated_interest || 0)
-        }));
-
-        paidInterests = (paidIntRes.data || []).map(pi => ({
-          loan_id: pi.loan_id || '',
-          amount: Number(pi.amount || 0)
-        }));
-      }
+      // 5. Interest owed by each shareholder, computed on the server by the
+      //    domain (RN-4.22). It replaces plan estimate minus paid, which ignored
+      //    the actual days and the capital already paid.
+      const debtRes = await fetch('/api/prestamos/deuda', { cache: 'no-store' });
+      const debtJson = await debtRes.json().catch(() => ({}));
+      if (!debtRes.ok) throw new Error(debtJson?.error ?? 'No se pudo cargar la deuda de intereses');
+      const interestOwedByUser = new Map<string, number>(
+        ((debtJson.debts ?? []) as { user_id: string; interest_owed: number }[]).map((d) => [d.user_id, d.interest_owed]),
+      );
 
       // 6. Cargar utilidades distribuidas en el año para TODOS los usuarios en una sola consulta
       // RN-6: profits are computed on the server (utilidades/domain). A failure
@@ -238,20 +214,8 @@ export default function AdminResumenPage() {
           .filter(l => l.status === 'active')
           .reduce((sum, l) => sum + Number(l.outstanding_balance || 0), 0);
 
-        // 10. Deuda intereses
-        // Total estimado en plan de préstamos activos - total intereses pagados en plan de préstamos activos
-        const activeUserLoans = userLoans.filter(l => l.status === 'active');
-        let interestDebt = 0;
-        for (const l of activeUserLoans) {
-          const estimated = planItems
-            .filter(pi => pi.loan_id === l.id)
-            .reduce((sum, pi) => sum + pi.estimated_interest, 0);
-          const paid = paidInterests
-            .filter(pi => pi.loan_id === l.id)
-            .reduce((sum, pi) => sum + pi.amount, 0);
-          const owed = estimated - paid;
-          interestDebt += owed > 0 ? owed : 0;
-        }
+        // 10. Deuda intereses (RN-4.22, from the domain on the server)
+        const interestDebt = interestOwedByUser.get(userId) ?? 0;
 
         // 11. Distribución de utilidades (acumulada anual del RPC consolidado)
         const utilitiesDistribution = utilitiesMap.get(userId) || 0;

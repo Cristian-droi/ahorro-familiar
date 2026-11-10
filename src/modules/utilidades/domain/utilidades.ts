@@ -88,3 +88,30 @@ export function utilidadesDelAnio(params: {
   }
   return resultado;
 }
+
+// Admin indicator: interest paid for the period (RN-6.1) and how the last
+// closed month compares with the one before. The current month is left out of
+// the comparison because its interest is paid after it ends (RN-4.22b).
+export function resumenDelPeriodo(params: {
+  // Twelve values, January first: interest paid for each month.
+  interesesPorMes: number[];
+  // 1..12, the current month in Bogota.
+  mesActual: number;
+}): { total: number; ultimoMesCerrado: number; mesAnterior: number; variacion: number | null } {
+  const { interesesPorMes, mesActual } = params;
+  const total = interesesPorMes.reduce((suma, monto) => suma + monto, 0);
+  const ultimoMesCerrado = mesActual >= 2 ? interesesPorMes[mesActual - 2] : 0;
+  const mesAnterior = mesActual >= 3 ? interesesPorMes[mesActual - 3] : 0;
+  const variacion = mesAnterior > 0 ? ((ultimoMesCerrado - mesAnterior) / mesAnterior) * 100 : null;
+  return { total, ultimoMesCerrado, mesAnterior, variacion };
+}
+
+// RN-6.1: interest paid for each month of the year, January first.
+export function interesesPorMesDelAnio(params: { anio: number; interesesPagados: InteresesDelMes[] }): number[] {
+  const porMes = Array.from({ length: 12 }, () => 0);
+  for (const i of params.interesesPagados) {
+    if (Number(i.mes.slice(0, 4)) !== params.anio) continue;
+    porMes[Number(i.mes.slice(5, 7)) - 1] += i.monto;
+  }
+  return porMes;
+}

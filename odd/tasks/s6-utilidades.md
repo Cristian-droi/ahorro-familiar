@@ -22,8 +22,18 @@ Cut order (roadmap): T4 first.
 |---|---|---|---|---|
 | T1 | S1–S5 | inline | done | RED: module missing → GREEN 9/9 (`utilidades.test.ts`), `tsc` clean |
 | T2 | S1, S6 | inline | done | Use case + API + 3 screens; differential on local data identical to the SQL (L4); suite 717/717, probes 150/150, `tsc` clean, lint 0 errors (24 warnings, as before) |
-| T3 | S6 | inline | pending | |
+| T3 | S6 | inline | done | Scope cut by Cris (L7). RED → GREEN: `deudaPorAccionista` 2, `getAllActiveLoansDebt` 1, `resumenDelPeriodo`/`interesesPorMesDelAnio` 4, `resumirUtilidades` 1; browser on local data (L8) |
 | T4 | S7 | inline | pending | |
+
+## Follow-ups
+
+| ID | Finding | Done when |
+|---|---|---|
+| H1 | Verifier: exact .5 cases round 1 peso higher than the old SQL (Postgres truncated 5/6 before multiplying); per-shareholder rounding can add up to more or less than the pool, as before | Accepted (half up is the rule) or a distribution rule decided with Cris |
+| H2 | `utilidades-repo.ts` rejects the whole year when one row fails Zod (e.g. a non-RFC uuid like the probe fixtures) | Looser id check, or bad rows reported without failing everyone |
+| H3 | Mi capital still shows 0 when profits fail (`.catch(() => [])`, as at baseline) | The failure is shown |
+| H5 | Pending by Cris's decision (L7): the full liquidation (RN-8.2) in the domain, replacing the rest of the resumen math (expenses 10%, retention 30%, total to return), before the 20 Dec demo | Liquidation computed in the domain and served from the server |
+| H4 | Review `review-c2ea4b2e1769fef7`: no route tests for `/api/utilidades` (401/403/400, checked by hand); the drop migration must reach the cloud after the new app is deployed; the client helper does not check the response shape | Route tests; deploy order noted for S7 |
 
 ## Log
 
@@ -32,3 +42,6 @@ Cut order (roadmap): T4 first.
 - **L3** T1: `src/modules/utilidades/domain/utilidades.ts` with `utilidadDelMes` (BigInt, half-up to the peso, like SQL `round`) and `utilidadesDelAnio` (12 months, accumulation from January of the period, interest by its own month). Rule clarification added to RN-6.1. Equivalence with the SQL to be checked in T2 with a differential against local data.
 - **L4** T2: port `UtilidadesRepo` and use case `consultarUtilidades` (`application/`, tests written together with the code, not RED first), infra `utilidades-repo.ts` (service role, paginated by 1000), `GET /api/utilidades` (own; `userId` or `all=1` need gerente or tesorero: 403 otherwise; 400 on a bad year), client helper `src/lib/data/utilities-client.ts`. Mi capital (server) calls the use case; extracto and resumen use the API. Migration `20261110010000_drop_sql_utilities.sql` drops the three SQL functions (closes S4 F12); wrappers removed from `loans.ts` and `LoanRepository`. Differential on local data (Gere 3+3+3 shares in Mar/Jun/Sep, Ana 1 in Jun + Nov, interest 33.333 Sep and 640.000 Oct): SQL and API give the same participation, pool and distribution for every shareholder and month (Sep 30.000/3.333, Oct 576.000/64.000, Nov participation 0.2813/0.7188). Browser: Mi capital and extracto show Ana 67.333; resumen shows Gere 606.000 and Ana 67.333. Only difference by design: contributions of earlier years no longer count (period floor), not exercised by local data.
 - **L5** GGA rejected the first T2 commit: unchecked cast of DB rows in the repo, and resumen/extracto swallowing a profits failure as 0. Fixed: Zod schema in `utilidades-repo.ts`; resumen and extracto now let the error reach their existing toast. Browser after the fix: API 200, resumen still Gere 606.000 / Ana 67.333.
+- **L6** T1–T2 verified: independent verifier S1–S6 met, no blockers; equivalence with the old SQL on 60 rows except the period floor (intended) and one 1-peso half-up case (H1). Native review `review-c2ea4b2e1769fef7` (consent granted by Cris, lens reliability) approved, acknowledged; advisories H2–H4.
+- **L7 (Cris, 2026-11-10)** "Solo corregir deuda, pero queda pendiente la liquidación completa" — T3 narrowed to the resumen interest debt and the admin indicator; the full liquidation is H5.
+- **L8** T3: `getAllActiveLoansDebt` (shared `debtOfLoans` with `getMyActiveLoansDebt`), domain `deudaPorAccionista`, `GET /api/prestamos/deuda` (gerente or tesorero); resumen interest debt now comes from it instead of plan estimate minus paid. Indicator: domain `interesesPorMesDelAnio` + `resumenDelPeriodo`, use case `resumirUtilidades`, `GET /api/utilidades?summary=1`; it shows the period's interest (Bogotá year) and the last closed month against the one before. Browser: API debt for Ana 206.667 (= 240.000 − 33.333 Sep payment) and the same in resumen; indicator 673.333, +1820,0 %. Extracto still computes loan books in the browser (not in the narrowed scope).

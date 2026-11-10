@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { consultarUtilidades, type UtilidadesRepo } from '@/modules/utilidades/application/consultar-utilidades';
+import { consultarUtilidades, resumirUtilidades, type UtilidadesRepo } from '@/modules/utilidades/application/consultar-utilidades';
 import type { FechaISO } from '@/shared/domain/fechas';
 
 const f = (texto: string) => texto as FechaISO;
@@ -38,5 +38,18 @@ describe('consultarUtilidades (RN-6)', () => {
     const meses = await consultarUtilidades(repo(), { anio: 2026 });
     expect([...meses.keys()]).toEqual(['ana', 'luis']);
     expect(meses.get('luis')?.[3].distribution).toBe(35_000);
+  });
+});
+
+describe('resumirUtilidades (admin indicator)', () => {
+  it('reads the year once and returns the period total and the last closed month', async () => {
+    const r = repo();
+    expect(await resumirUtilidades(r, { anio: 2026, mesActual: 5 })).toEqual({
+      total: 100_000,
+      ultimoMesCerrado: 100_000,
+      mesAnterior: 0,
+      variacion: null,
+    });
+    expect(r.leerDatosDelAnio).toHaveBeenCalledWith(2026);
   });
 });

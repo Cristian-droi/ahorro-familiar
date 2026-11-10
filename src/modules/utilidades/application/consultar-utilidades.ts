@@ -2,6 +2,8 @@
 // stored contributions and paid interest.
 
 import {
+  interesesPorMesDelAnio,
+  resumenDelPeriodo,
   utilidadesDelAnio,
   type AporteDelMes,
   type InteresesDelMes,
@@ -53,4 +55,17 @@ export async function consultarUtilidades(
     );
   }
   return vista;
+}
+
+// Admin indicator: interest paid in the period and the last closed month
+// against the one before.
+export async function resumirUtilidades(
+  repo: UtilidadesRepo,
+  params: { anio: number; mesActual: number },
+): Promise<ReturnType<typeof resumenDelPeriodo>> {
+  const datos = await repo.leerDatosDelAnio(params.anio);
+  return resumenDelPeriodo({
+    interesesPorMes: interesesPorMesDelAnio({ anio: params.anio, interesesPagados: datos.interesesPagados }),
+    mesActual: params.mesActual,
+  });
 }

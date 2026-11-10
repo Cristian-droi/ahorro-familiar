@@ -73,7 +73,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   // Utilidades (intereses cobrados)
   const [totalInterest, setTotalInterest] = useState<number>(0);
-  const [interestGrowth, setInterestGrowth] = useState<number>(0);
+  // null: no previous closed month to compare.
+  const [interestGrowth, setInterestGrowth] = useState<number | null>(null);
 
   // Sidebar abrible/cerrable. En desktop arranca abierto; en mobile cerrado.
   // Usamos un state único: sidebarOpen. El layout aplica clases distintas
@@ -124,70 +125,16 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       }
     };
 
+    // RN-6.1: interest paid in the current period, from the server (utilidades
+    // domain). The variation compares the last closed month with the one before.
     const fetchInterestStats = async () => {
       try {
-        const { data, error } = await supabase
-          .from('receipt_items')
-          .select('amount, receipts!inner(submitted_at, status)')
-          .eq('concept', 'pago_intereses')
-          .eq('receipts.status', 'approved');
-
-        if (error) throw error;
+        const res = await fetch('/api/utilidades?summary=1', { cache: 'no-store' });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json?.error ?? 'No se pudieron cargar las utilidades');
         if (cancelled) return;
-
-        const now = new Date();
-        const currentYear = now.getFullYear();
-        const currentMonth = now.getMonth();
-
-        const prevYear = currentMonth === 0 ? currentYear - 1 : currentYear;
-        const prevMonth = currentMonth === 0 ? 11 : currentMonth - 1;
-
-        let total = 0;
-        let thisMonthTotal = 0;
-        let prevMonthTotal = 0;
-
-        interface ReceiptItemWithReceipt {
-          amount: number | string;
-          receipts: {
-            submitted_at: string;
-            status: string;
-          } | {
-            submitted_at: string;
-            status: string;
-          }[] | null;
-        }
-
-        const typedData = (data as unknown) as ReceiptItemWithReceipt[];
-
-        for (const item of typedData ?? []) {
-          const amountVal = parseFloat(item.amount as string) || 0;
-          total += amountVal;
-
-          const receipt = Array.isArray(item.receipts) ? item.receipts[0] : item.receipts;
-          const dateStr = receipt?.submitted_at;
-          if (dateStr) {
-            const d = new Date(dateStr);
-            const itemYear = d.getFullYear();
-            const itemMonth = d.getMonth();
-
-            if (itemYear === currentYear && itemMonth === currentMonth) {
-              thisMonthTotal += amountVal;
-            } else if (itemYear === prevYear && itemMonth === prevMonth) {
-              prevMonthTotal += amountVal;
-            }
-          }
-        }
-
-        setTotalInterest(total);
-
-        if (prevMonthTotal > 0) {
-          const growth = ((thisMonthTotal - prevMonthTotal) / prevMonthTotal) * 100;
-          setInterestGrowth(growth);
-        } else if (thisMonthTotal > 0) {
-          setInterestGrowth(100);
-        } else {
-          setInterestGrowth(0);
-        }
+        setTotalInterest(Number(json.total ?? 0));
+        setInterestGrowth(typeof json.variacion === 'number' ? json.variacion : null);
       } catch (err) {
         console.error('Error calculando utilidades:', err);
       }
@@ -615,17 +562,21 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <div className="text-[20px] font-semibold tracking-[-0.02em] tabular text-[var(--color-text)]">
               {cop(totalInterest)}
             </div>
-            <div className="text-xs text-[var(--color-text-muted)] mt-1 flex items-center gap-1.5 flex-wrap">
-              <TrendingUp
-                size={12}
-                strokeWidth={1.75}
-                className={interestGrowth >= 0 ? "text-[var(--color-success)]" : "text-[var(--color-danger)]"}
-              />
-              <span className={interestGrowth >= 0 ? "text-[var(--color-success)] font-semibold" : "text-[var(--color-danger)] font-semibold"}>
-                {interestGrowth >= 0 ? '+' : ''}{interestGrowth.toFixed(1)}%
-              </span>{' '}
-              vs mes ant.
-            </div>
+            {interestGrowth === null ? (
+              <div className="text-xs text-[var(--color-text-muted)] mt-1">Intereses del año</div>
+            ) : (
+              <div className="text-xs text-[var(--color-text-muted)] mt-1 flex items-center gap-1.5 flex-wrap">
+                <TrendingUp
+                  size={12}
+                  strokeWidth={1.75}
+                  className={interestGrowth >= 0 ? "text-[var(--color-success)]" : "text-[var(--color-danger)]"}
+                />
+                <span className={interestGrowth >= 0 ? "text-[var(--color-success)] font-semibold" : "text-[var(--color-danger)] font-semibold"}>
+                  {interestGrowth >= 0 ? '+' : ''}{interestGrowth.toFixed(1)}%
+                </span>{' '}
+                último mes vs anterior
+              </div>
+            )}
           </div>
         )}
 

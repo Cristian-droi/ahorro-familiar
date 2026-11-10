@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { utilidadDelMes, utilidadesDelAnio } from '@/modules/utilidades/domain/utilidades';
+import { interesesPorMesDelAnio, resumenDelPeriodo, utilidadDelMes, utilidadesDelAnio } from '@/modules/utilidades/domain/utilidades';
 import type { FechaISO } from '@/shared/domain/fechas';
 
 const f = (texto: string) => texto as FechaISO;
@@ -87,5 +87,39 @@ describe('utilidadesDelAnio (RN-6.1 to RN-6.4)', () => {
       interesesPagados: [{ mes: f('2026-04-01'), monto: 100_000 }],
     });
     expect(r.get('ana')?.[3].utilidad).toBe(30_000);
+  });
+});
+
+describe('resumenDelPeriodo (admin indicator)', () => {
+  const porMes = [0, 0, 0, 0, 0, 0, 0, 0, 33_333, 640_000, 0, 0];
+
+  it('RN-6.1: the period total is the interest paid for every month of the year', () => {
+    expect(resumenDelPeriodo({ interesesPorMes: porMes, mesActual: 11 }).total).toBe(673_333);
+  });
+
+  it('RN-4.22b: compares the last closed month with the one before, since the current month is paid later', () => {
+    const r = resumenDelPeriodo({ interesesPorMes: porMes, mesActual: 11 });
+    expect(r).toMatchObject({ ultimoMesCerrado: 640_000, mesAnterior: 33_333 });
+    expect(r.variacion).toBeCloseTo(1820.0, 0);
+  });
+
+  it('without a previous month to compare there is no variation', () => {
+    expect(resumenDelPeriodo({ interesesPorMes: porMes, mesActual: 9 }).variacion).toBeNull();
+    expect(resumenDelPeriodo({ interesesPorMes: porMes, mesActual: 1 }).variacion).toBeNull();
+  });
+});
+
+describe('interesesPorMesDelAnio (RN-6.1)', () => {
+  it('adds the interest paid for each month of the year, January first, and ignores other years', () => {
+    const r = interesesPorMesDelAnio({
+      anio: 2026,
+      interesesPagados: [
+        { mes: f('2026-10-01'), monto: 440_000 },
+        { mes: f('2026-10-01'), monto: 200_000 },
+        { mes: f('2026-09-01'), monto: 33_333 },
+        { mes: f('2025-12-01'), monto: 99_999 },
+      ],
+    });
+    expect(r).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 33_333, 640_000, 0, 0]);
   });
 });
