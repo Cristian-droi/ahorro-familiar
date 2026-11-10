@@ -77,9 +77,9 @@
 - [x] Flujo "Comprar y pagar" con pagos a préstamos. Además: pago parcial de intereses (RN-4.25) y obligaciones desde el mes de ingreso (RN-3.6).
 
 ### S6 · Utilidades (23–29 nov)
-- [ ] `utilidades/domain` (RN-6). Reemplaza los cálculos que hoy se hacen en el cliente.
-- [ ] Mi capital y extracto alimentados por casos de uso de lectura.
-- [ ] Vista del tesorero: saldo, cuota pactada y cuota para cerrar el año.
+- [x] `utilidades/domain` (RN-6). Reemplaza los cálculos que hoy se hacían en SQL.
+- [x] Mi capital y extracto alimentados por casos de uso de lectura. El resumen toma del dominio la deuda de intereses; la liquidación completa (RN-8.2) queda pendiente, por decisión de Cris.
+- [x] Vista del tesorero: saldo, cuota pactada y cuota para cerrar el año.
 
 ### S7 · Arranque 2027 (30 nov – 6 dic)
 - [ ] Importación de saldos iniciales: capitalización de enero, capitalizaciones voluntarias y Deuda año anterior.
